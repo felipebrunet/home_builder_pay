@@ -1,5 +1,34 @@
+# Build
 /target
 **/*.rs.bk
+*.swp
+*~
+
+# Toy wallets and MuSig2 nonce material (plaintext secrets)
 .hbp/
+.m/
+.c/
+**/identity.json
+**/nonces.json
+**/*.secnonce
+
+# Local contract working copies (not fixtures)
+**/00-offer.json
+**/01-accepted.json
+**/01-accepted.pending.json
+**/02-quote.json
+**/state.json
+**/CURRENT
+
+# Env / keys that must never be committed
+.env
+.env.*
+*.pem
+*.p12
+*.key
+
+# Editors / OS
 .idea/
-*.secnonce
+.vscode/
+.DS_Store
+Thumbs.db
