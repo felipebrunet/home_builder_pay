@@ -12,11 +12,15 @@
 **/nonces.json
 **/*.secnonce
 
-# Local contract working copies (not fixtures)
+# Local contract working copies (not fixtures). Secrets live in identity.json;
+# these still carry pubkeys, amounts and signatures from a live run.
+**/draft.json
 **/00-offer.json
 **/01-accepted.json
 **/01-accepted.pending.json
+**/*.pending.json
 **/02-quote.json
+**/03-arbiter.json
 **/state.json
 **/CURRENT
 
