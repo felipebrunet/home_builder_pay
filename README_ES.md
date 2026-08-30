@@ -4,11 +4,11 @@
 
 Custodia Bitcoin entre pares para **partidas de obra** más una **boleta de garantía**. Dos partes — el mandante y el contratista — bloquean fondos en un 2-de-2 Taproot (MuSig2). No hay servidor.
 
-Esto es un MVP: CLI de escritorio, **regtest/signet**, archivos pasados a mano. Todavía no hay Tor, DHT ni árbitro.
+Esto es un MVP: CLI de escritorio, **regtest/signet**, archivos pasados a mano. Todavía no hay Tor ni DHT. El árbitro es opcional: una hoja Taproot que **ambos** nombran antes de fondear, no un amigo que el mandante pone en el aviso.
 
 Protocolo, arquitectura, hoja de ruta y **en qué quedó la última sesión**: [docs/PROJECT.md](docs/PROJECT.md) (empezar por la sección 0).
 
-Hito actual: **MVP-0** más escenarios minados. La disputa (default unwind; MAD / árbitro opcionales) la propone el oferente: [docs/DISPUTE.md](docs/DISPUTE.md). Índice: [docs/REGTEST_SCENARIOS.md](docs/REGTEST_SCENARIOS.md).
+Hito actual: **MVP-0** más escenarios minados. La **política** de disputa (default unwind; MAD / slot de árbitro) la propone el oferente; a la *persona* la nombran después los dos: [docs/DISPUTE.md](docs/DISPUTE.md). Índice: [docs/REGTEST_SCENARIOS.md](docs/REGTEST_SCENARIOS.md).
 
 ## Protocolo (resumen)
 
@@ -63,6 +63,11 @@ hbp --dir .m quote --btc-price 80000 --fx-note "manual"
 hbp --dir .c accept-quote .m/contracts/<id>/02-quote.json
 hbp --dir .m accept-quote .c/contracts/<id>/02-quote.json   # el mandante importa la cotización ya contrafirmada
 
+# opcional, solo si --dispute arbiter: ambos nombran el mismo pubkey antes de las addresses
+# hbp --dir .m propose-arbiter --pubkey 02...
+# hbp --dir .c accept-arbiter .m/contracts/<id>/03-arbiter.json
+# hbp --dir .m accept-arbiter .c/contracts/<id>/03-arbiter.json
+
 hbp --dir .m addresses
 hbp --dir .c status
 ```
@@ -85,4 +90,4 @@ Las claves están en **texto plano** en `.hbp/identity.json`. Solo para pruebas.
 
 ## Fuera de este MVP
 
-Tor, DHT, Android, árbitro tardío, boleta que rueda al siguiente 2-de-2 sin devolverse, watchtowers, mainnet.
+Tor, DHT, Android, E2E on-chain de MAD y de gasto A+M, boleta que rueda al siguiente 2-de-2 sin devolverse, watchtowers, mainnet.

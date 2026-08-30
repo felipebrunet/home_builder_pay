@@ -4,11 +4,11 @@
 
 Peer-to-peer Bitcoin escrow for **work packages** plus a **performance bond**. Two parties — the principal (`mandante`) and the contractor (`contratista`) — lock funds in a Taproot 2-of-2 (MuSig2). There is no server.
 
-This is an MVP: desktop CLI, **regtest/signet**, files passed by hand. No Tor, no DHT, no arbiter yet.
+This is an MVP: desktop CLI, **regtest/signet**, files passed by hand. No Tor, no DHT. An optional arbiter exists as a Taproot leaf, jointly named by both parties before funding — not picked by the offeror in the listing.
 
 Full protocol, architecture, roadmap, and **where the last session left off**: [docs/PROJECT.md](docs/PROJECT.md) (start at section 0). That document is currently in Spanish.
 
-Current milestone: **MVP-0** plus mined regtest scenarios. Dispute policy (unwind default; optional MAD / late arbiter) is set by the offeror: [docs/DISPUTE.md](docs/DISPUTE.md). Scenario index: [docs/REGTEST_SCENARIOS.md](docs/REGTEST_SCENARIOS.md) (Spanish).
+Current milestone: **MVP-0** plus mined regtest scenarios. Dispute **policy** (unwind default; optional MAD / arbiter slot) is set by the offeror; the arbiter *person* is named later by both: [docs/DISPUTE.md](docs/DISPUTE.md). Scenario index: [docs/REGTEST_SCENARIOS.md](docs/REGTEST_SCENARIOS.md) (Spanish).
 
 ## Protocol (short)
 
@@ -65,6 +65,11 @@ hbp --dir .m quote --btc-price 80000 --fx-note "manual"
 hbp --dir .c accept-quote .m/contracts/<id>/02-quote.json
 hbp --dir .m accept-quote .c/contracts/<id>/02-quote.json   # principal imports the fully signed quote
 
+# optional, only if --dispute arbiter: both name the same pubkey before addresses exist
+# hbp --dir .m propose-arbiter --pubkey 02...
+# hbp --dir .c accept-arbiter .m/contracts/<id>/03-arbiter.json
+# hbp --dir .m accept-arbiter .c/contracts/<id>/03-arbiter.json
+
 hbp --dir .m addresses
 hbp --dir .c status
 ```
@@ -87,4 +92,4 @@ Keys are **plaintext** in `.hbp/identity.json`. Toy only. Do not use on mainnet.
 
 ## Not in this MVP
 
-Tor, DHT, Android, late arbiter, rolling the bond into the next 2-of-2 without returning it, watchtowers, mainnet.
+Tor, DHT, Android, on-chain MAD / A+M spend E2E, rolling the bond into the next 2-of-2 without returning it, watchtowers, mainnet.

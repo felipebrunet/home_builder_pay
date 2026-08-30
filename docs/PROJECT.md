@@ -6,7 +6,7 @@ Este archivo es la fuente de verdad de producto, protocolo, arquitectura, roadma
 
 **Si retomas en una sesión nueva: lee la sección 0 y el checklist de “listo / no listo”. El código en `crates/` es la implementación de MVP-0.**
 
-Última actualización: 2026-08-30 (cierre de la sesión que dejó MVP-0 commiteado).
+Última actualización: 2026-08-30 (árbitro nombrado por ambos *después* del accept; MAD y arbiter en código, sin E2E minado).
 
 ---
 
@@ -18,44 +18,70 @@ Checkpoint de sesión. Actualizar **esta sección** cada vez que se cierre un hi
 |---|---|
 | Fecha | 2026-08-30 |
 | Rama | `master` |
-| Hito | **MVP-0 + camino feliz on-chain en regtest** |
-| Siguiente ítem | Plan §11: CLI MuSig2 **por archivos** (sin `--peer-dir`); PSBT de fondeo dentro de `hbp` |
-| Verificar al abrir | `cargo test --workspace` (debe quedar verde) |
-| Nodo Bitcoin local | `/home/felipe/projects/btc_clients` — Core 31.1 regtest, RPC `:18443`. El demo habla RPC con `bitcoin-cli`; `hbp` no embebe el cliente. |
+| Hito | **MVP-0 + E2E unwind 1–8 minados + políticas MAD/árbitro en código** |
+| Verificar al abrir | `cargo test --workspace` (24 unitarios: `hbp-core` 15, `hbp-bitcoin` 9) |
+| Nodo Bitcoin local | `/home/felipe/projects/btc_clients` — Core 31.1 regtest, RPC `:18443`. Los scripts usan `bitcoin-cli`; `hbp` no embebe el cliente. |
+| Origin | `git@github.com-hbp:felipebrunet/home_builder_pay.git` (MIT, público) |
 
-### Listo (hecho en esta sesión)
+### Historial reciente (changelog)
 
-- Decisiones de producto (disputa unwind, boleta global, fiat→sats al quote, red = archivos, Rust 100%).
-- Workspace: `hbp-core`, `hbp-bitcoin`, `hbp-cli` (binario `hbp`).
-- Contrato off-chain: offer / accept / commit / import, JSON canónico, firmas BIP340 tagged `hbp-contract`.
-- Quote de sats (ambos firman; `accept-quote` también importa el quote ya contrafirmado).
-- Descriptores Taproot: boleta `tr(musig(M,C), pk(C)&&after(T_proyecto))`, partida `tr(musig(M,C), pk(M)&&after(T_partida))`.
-- MuSig2 key-path y unwind script-path (librería + tests; output key coincide con rust-bitcoin).
-- Máquina de estados proyecto/partida (una partida viva; no fondear N+1 si N no está terminal).
+| Cuándo | Qué | Dónde |
+|---|---|---|
+| 2026-08-30 | MVP-0: Taproot 2-de-2, CLI por archivos | `crates/` |
+| 2026-08-30 | Camino feliz minado (60k USD, 2×30k, boleta 20k) | [REGTEST_HAPPY_PATH.md](REGTEST_HAPPY_PATH.md) |
+| 2026-08-30 | Unhappy paths: abandono, no-firma, cancel coop, stops-after-P1, split 80/20, sin boleta, cancel acordado tras P1 | [REGTEST_SCENARIOS.md](REGTEST_SCENARIOS.md) #1–8 |
+| 2026-08-30 | Políticas opcionales `mad` (hoja NUMS) y `arbiter` (hojas A+M / A+C). **No** a wallet del autor. | [DISPUTE.md](DISPUTE.md), `d8f35b3` |
+| 2026-08-30 | El **quién** del árbitro no va en el offer: ambos lo firman antes de fondear (`propose-arbiter` / `accept-arbiter`) | este checkpoint |
+
+Default on-chain sigue siendo **`unwind`**. MAD y árbitro tienen descriptores y CLI; **no** hay script minado todavía.
+
+### Listo
+
+**Producto**
+
+- Disputa default = unwind (cada uno recupera lo suyo al timeout). No es boleta bancaria. Bitcoin no ve el muro.
+- Boleta **global** (`bond_bps`, default 10%; el demo usa 20k/60k). Una partida viva a la vez. Bond **antes** de cualquier partida.
+- Montos en fiat/UF; sats al quote/fondeo.
+- Red = archivos ahora; Tor p2p después; DHT solo si hay marketplace. Sin servidor.
+- MAD, si se usa: stake chico y simétrico, quema NUMS. Nunca a una wallet del autor.
+- Árbitro, si se usa: alguien que ambas partes aceptan como imparcial *de esa obra* y que sepa firmar un PSBT. El mandante **no** lo pone en el aviso.
+
+**Código**
+
+- Workspace `hbp-core` / `hbp-bitcoin` / `hbp-cli` (binario `hbp`).
+- Offer / accept / commit / import; JSON canónico; firmas BIP340 tagged `hbp-contract`.
+- Quote de sats (ambos firman).
+- Descriptores: boleta `tr(musig(M,C), pk(C)&&after(T_proyecto))`, partida `tr(musig(M,C), pk(M)&&after(T_partida))`. KeyAgg `[mandante, contratista]`.
+- MuSig2 key-path (64 B) y unwind script-path (CLTV unix, witness 3 ítems).
 - `NonceJournal`: reutilizar seed aborta.
-- CLI: `init`, `new` (`--dispute unwind\|mad\|arbiter`), `add-partida`, `offer`, `accept`, `commit`, `import`, `quote`, `accept-quote`, `addresses`, `status`, `verify-funding`, `unwind`, `coop-close --peer-dir`.
-- `validate_funding_tx` rechaza monto de partida distinto al quote.
-- Tests: 13 unitarios verdes (`hbp-core` 8, `hbp-bitcoin` 5).
-- **Camino feliz minado en regtest** (60k USD, 2×30k, boleta 20k, 5 s/partida): ver [REGTEST_HAPPY_PATH.md](REGTEST_HAPPY_PATH.md). `hbp coop-close --peer-dir` (misma máquina) + PSBT 2 wallets.
-- **Contratista abandona antes de la partida 2**: unwind de la partida al mandante; boleta no es ejecutable por el mandante; [REGTEST_CONTRACTOR_ABANDONS.md](REGTEST_CONTRACTOR_ABANDONS.md).
-- Matriz E2E (feliz, abandono, split 80 %, sin boleta, cancelar tras P1, MAD no implementado): [REGTEST_SCENARIOS.md](REGTEST_SCENARIOS.md).
+- CLI: `init`, `new --dispute unwind\|mad\|arbiter`, `propose-arbiter`, `accept-arbiter`, `add-partida`, `offer`, `accept`, `commit`, `import`, `quote`, `accept-quote`, `addresses`, `status`, `verify-funding`, `unwind`, `coop-close --peer-dir`.
+- `DisputePolicy::Arbiter { window_secs }` en el body; pubkey en `ArbiterNomination` (`03-arbiter.json`). Sin las dos firmas `hbp-arbiter` no hay addresses.
+- MAD: tercera salida `2 * mad_sats`; key path coop split; tras T solo `pk(NUMS)&&after(T)`.
+- `validate_funding_tx` rechaza monto de partida distinto al quote. `--partida-only` exige boleta ya fondeada.
 
-### No listo (no está en el código)
+**E2E minado (todos `unwind`)** — índice [REGTEST_SCENARIOS.md](REGTEST_SCENARIOS.md)
 
-- CLI de recepción cooperativa **por archivos** (sin `--peer-dir`). Hoy el cierre feliz en una sola máquina usa `coop-close --peer-dir`.
-- PSBT de fondeo **dentro de** `hbp` (el script de demo lo arma con `bitcoin-cli`).
-- Broadcast / mine / spend real contra `btc_clients`.
+1. Feliz. 2. Abandono / ambos enojados. 4. Cancel coop. 5. Para tras P1 (timeout boleta). 6. Split 80/20. 7. Sin boleta (rechaza fondeo P1). 8. Cancel acordado tras P1.
+
+### No listo
+
+- CLI MuSig2 **por archivos** (sin `--peer-dir`). Hoy el demo en una máquina usa `coop-close --peer-dir`.
+- PSBT de fondeo **dentro de** `hbp` (los scripts lo arman con `bitcoin-cli`).
+- E2E minado de **MAD** (fondeo 3 salidas + split / quema).
+- E2E minado de **árbitro** (CLI de script-path A+M o A+C; dos firmas, no MuSig2).
 - `hbp listen` / `connect`, Tor, DHT.
-- Seed BIP39, árbitro, boleta que rueda, GUI, Android, mainnet.
+- Seed BIP39, boleta que rueda al siguiente 2-de-2, GUI, Android, mainnet.
 
 ### Cómo seguir en la próxima sesión
 
-1. Leer esta sección 0 y las decisiones §2.
+1. Leer esta sección 0, las decisiones §2 y [DISPUTE.md](DISPUTE.md).
 2. `cargo test --workspace`.
-3. Implementar ítem 1 del plan: comandos de recepción MuSig2 que escriben/leen JSON en `--dir`, sin nodo.
-4. No abrir Tor/DHT ni GUI.
+3. Elegir **uno** (no los dos a la vez):
+   - Plan §11 ítem 1: recepción MuSig2 por JSON en `--dir` (el protocolo de archivos, sin bitcoind).
+   - Cerrar el loop de disputa: script regtest MAD (3 outputs) **o** gasto A+M del script path.
+4. No abrir Tor, DHT ni GUI.
 
-El usuario acordó explícitamente: canal = archivos ahora; Tor p2p después; DHT solo si hay marketplace.
+El usuario acordó: canal = archivos ahora; Tor p2p después; DHT solo si hay marketplace. MAD nunca a wallet del autor. Árbitro solo si ambos nombran a la misma persona antes de los UTXO.
 
 ---
 
@@ -78,7 +104,7 @@ Copiar Bisq 2-de-2 con quema simétrica no sirve: los montos son asimétricos (2
 
 | # | Tema | Decisión |
 |---|---|---|
-| 1 | Disputa | Default **unwind**. Opcionales **MAD chico** (quema NUMS) y **árbitro tardío** (hojas A+M / A+C). Las propone el **oferente**; `accept` las cierra. No se añaden después de fondear. Ver [DISPUTE.md](DISPUTE.md). |
+| 1 | Disputa | Default **unwind**. Opcionales **MAD chico** (quema NUMS) y **árbitro** (hojas A+M / A+C). El oferente propone la *política*; el *quién* del árbitro lo firman **ambos** antes de fondear, no va en el aviso. Ver [DISPUTE.md](DISPUTE.md). |
 | 2 | Boleta | **Una, global**, `bond_bps` configurable (default 1000 = 10% del total). Se fondea una vez. **Una partida viva a la vez.** |
 | 3 | Moneda | Contrato en USD / UF / CLP. Los sats se fijan **al quotear/fondear**. |
 | 4 | Red | **Sin servidor propio, siempre.** El canal no es parte del contrato. MVP: **archivos** (USB, Signal, mail, carpeta). Después: socket LAN opcional, luego **Tor punto a punto** (onion ya conocido, va en el contrato). **DHT / offer book al final**, solo si el producto es marketplace. |
@@ -99,7 +125,7 @@ Consecuencias:
 
 - **Mandante**: pone el pago de la partida activa.
 - **Contratista**: pone la boleta una vez y ejecuta la obra.
-- **Árbitro** (no en MVP): solo existiría *después* de un plazo, y solo si se declaró al crear el contrato. No se puede agregar a un UTXO ya fondeado.
+- **Árbitro** (opcional, difícil en la práctica): un tercero que ambas partes conocen, imparcial respecto de la obra y capaz de firmar un PSBT. La oferta solo abre el *slot*; el pubkey se nombra después (`propose-arbiter` / `accept-arbiter`) y entra en el árbol **antes** de fondear. No se puede agregar a un UTXO ya fondeado. No es un administrador remoto de Bitcoin que no vio el muro.
 
 ### 3.2 Unidades de trabajo
 
@@ -180,9 +206,11 @@ La tx lleva `nLockTime = T` y `nSequence` que habilita locktime (`ENABLE_LOCKTIM
 
 No hay tx pre-firmada. Quien unwind arma y paga el fee al momento.
 
-### 4.6 Árbitro (plantilla, no código)
+### 4.6 Árbitro (hoja Taproot; persona fuera del offer)
 
-Si `arbiter_pubkey` está presente al crear el contrato, el árbol sería distinto (p.ej. `A+M` / `A+C` después de T, y unwind unilateral en T2 ≫ T). Cambiar el árbol **después** de fondear es imposible: cambia la address. El MVP deja el campo en el JSON y construye solo el árbol unwind-only.
+`DisputePolicy::Arbiter { window_secs }` va en el body (lo acepta el contratista con el resto). El pubkey **no**. Después de `commit`, cualquiera propone `03-arbiter.json`; el otro contrafirma el mismo comprimido. Hasta que hay dos firmas tagged `hbp-arbiter`, `hbp addresses` no imprime boleta/partida.
+
+Árbol (partida; boleta simétrico): key path MuSig2(M,C); hojas `A&&M` y `A&&C` después de T; unwind unilateral en T2 = T+ventana. Cambiar A **después** de fondear es imposible: cambia la address. Si no hay persona de confianza que sepa de la obra *y* de firmar un PSBT, no usen esta política.
 
 ### 4.7 Timelocks
 
@@ -209,6 +237,7 @@ Sin red en el MVP. Cada parte tiene un directorio (`--dir`, default `.hbp`). Se 
   contracts/<id>/
     01-accepted.json
     02-quote.json
+    03-arbiter.json      # nomination conjunta (solo policy=arbiter)
     state.json
 ```
 
@@ -220,6 +249,7 @@ Secuencia:
 4. Mandante `commit` — comprueba que los *terms* coinciden con la oferta, contrafirma el body completo.
 5. Contratista `import` el `01-accepted.json`.
 6. `quote` / `accept-quote` — ambos firman `bond_sats` y `partida_sats`. El archivo contrafirmado hay que devolvérselo a la otra punta (`accept-quote` importa si ya está firmado por mí).
+6b. Si `dispute=arbiter`: `propose-arbiter` / `accept-arbiter` (cualquiera propone; el otro firma el mismo pubkey). Sin eso no hay addresses.
 7. Fondeo on-chain (hoy: el usuario arma la tx; `verify-funding` valida hex crudo y actualiza estado).
 8. Obra off-chain.
 9. Recepción: MuSig2 (librería lista; CLI de rondas aún no).
@@ -306,7 +336,7 @@ No hay bitcoind embebido. En esta máquina ya existe un stack en:
 - arranque: `./start-regtest.sh` (también levanta LND; para HBP basta `./start-bitcoind.sh`)
 - CLI: `source ./env.sh` luego `bitcoin-cli getblockchaininfo`
 
-HBP aún no habla RPC. El siguiente trabajo on-chain es: fondear las addresses `bcrt1p…` que imprime `hbp addresses` con esos wallets y pasar el hex a `hbp verify-funding`.
+`hbp` no habla RPC. Los scripts `scripts/regtest_*.sh` usan `bitcoin-cli` de este stack: fondean las `bcrt1p…` de `hbp addresses` y pasan el hex a `hbp verify-funding`. Wallets de demo: `miner`, `hbp_mandante`, `hbp_contratista` (cormorant es watch-only).
 
 **No** usar el LND mainnet Neutrino de ese folder para este proyecto.
 
@@ -321,17 +351,20 @@ hbp --dir <carpeta> <comando>
 | Comando | Quién | Efecto |
 |---|---|---|
 | `init --network --role` | ambos | identidad |
-| `new --unit --bond-bps --t-project` | mandante | draft |
+| `new --unit --bond-bps --t-project [--dispute]` | mandante | draft (política, no la persona del árbitro) |
 | `add-partida --desc --amount --plazo` | mandante | hito |
 | `offer` | mandante | `00-offer.json` |
 | `accept FILE` | contratista | pending |
 | `commit FILE` | mandante | contrato firmado |
 | `import FILE` | contratista | carga el contrafirmado |
+| `propose-arbiter --pubkey` | cualquiera | `03-arbiter.json` (una firma) |
+| `accept-arbiter FILE` | la otra punta / reimport | A locked; sin esto no hay addresses |
 | `quote --btc-price/--bond-sats` | cualquiera | sats |
 | `accept-quote FILE` | la otra punta / reimport | quote locked |
 | `addresses` | ambos | boleta + partidas `bcrt1p`/`tb1p` |
 | `status` | ambos | JSON de estado |
 | `verify-funding --tx-hex --partida` | ambos | valida y marca funded |
+| `coop-close --kind --peer-dir …` | demo misma máquina | MuSig2 key-path |
 | `unwind --kind --outpoint --sats --dest --fee` | dueño del unwind | tx hex |
 
 Claves en claro. Toy. No mainnet.
@@ -342,25 +375,26 @@ Claves en claro. Toy. No mainnet.
 
 `cargo test --workspace`
 
-**hbp-core**
+**hbp-core** (15)
 
-- parseo de montos y conversión fiat→sats
-- boleta = % del total
-- JSON canónico estable
+- parseo de montos y conversión fiat→sats; boleta = % del total
+- JSON canónico estable; `DisputePolicy::Arbiter` **sin** pubkey
+- nomination fuera del `contract_id`; A ≠ M y A ≠ C
+- A se nombra solo con dos firmas y **antes** de fondear
 - nonce reuse aborta
-- no se fondea partida 2 si la 1 está abierta
-- happy path dos partidas + release de boleta
-- rechazo de bond con monto distinto al quote
+- no se fondea partida sin boleta, ni la 2 si la 1 está abierta
+- happy path dos partidas + release de boleta; boleta se suelta si P2 nunca se fondeó
 
-**hbp-bitcoin**
+**hbp-bitcoin** (9)
 
 - output key MuSig2+tweak = rust-bitcoin Taproot
-- unwind script-path: schnorr del mandante verifica contra la hoja
-- cierre cooperativo MuSig2: `verify_single` + schnorr contra la output key
+- unwind script-path; cierre cooperativo y split 80/20
 - funding con partida a 1 sat se rechaza
-- firmas de contrato round-trip
+- firmas de contrato y de nomination `hbp-arbiter` round-trip
+- árbol con A cambia la address; sin A nombrado, error
+- hoja MAD = NUMS
 
-No hay todavía un test que hable con `bitcoind` (broadcast + mine + spend real). Eso es el siguiente hito de verificación.
+Los E2E que hablan con `bitcoind` son scripts en `scripts/`, no tests de Cargo. Ver [REGTEST_SCENARIOS.md](REGTEST_SCENARIOS.md).
 
 ---
 
@@ -408,7 +442,7 @@ Android **después** de desktop estable (wallet + Tor + verificación de cadena 
 
 ### Fase 4 — producto más rico
 
-- Árbitro tardío: ya es hoja Taproot opcional ([DISPUTE.md](DISPUTE.md)); falta E2E A+M firmando.
+- Árbitro: política + nomination conjunta ya están ([DISPUTE.md](DISPUTE.md)); falta E2E A+M firmando el script path.
 - Boleta que **rueda** al 2-de-2 de la siguiente partida (splice) en vez de quedarse en un UTXO estático.
 - MAD sobre un *dispute stake* chico y simétrico (no quemar 20k).
 - Fotos/hashes de evidencia en `reception-proposed` (humanos, no el script).
@@ -433,10 +467,10 @@ Orden realista, cada ítem deja algo demoable.
 | 0 | Este documento + MVP-0 compilando | `docs/PROJECT.md`, crates | `cargo test --workspace` verde |
 | 1 | CLI MuSig2 de recepción en archivos | `hbp-cli`, `hbp-bitcoin` | dos dirs cierran una partida sin bitcoind (tx hex firmada) |
 | 2 | PSBT de fondeo boleta+partida 1 | `hbp-bitcoin` | `hbp fund` imprime PSBT; `verify-funding` lo acepta |
-| 3 | Integración regtest con `btc_clients` | tests + scripts | script que mina unwind y coop close de punta a punta |
+| 3 | Integración regtest con `btc_clients` | tests + scripts | **hecho** (escenarios 1–8, default unwind) |
 | 4 | Seed/backup y red signet | `hbp-cli` | dos máquinas, una partida de prueba |
 | 5 | `hbp listen` / `connect`, luego Tor p2p | crate network nuevo | mismos JSON, primero TCP, después onion conocido |
-| 6 | Árbitro opcional | `hbp-bitcoin` taproot tree | descriptor distinto si hay pubkey |
+| 6 | Árbitro / MAD opcionales | `hbp-bitcoin` taproot tree | **código listo** (política + nomination conjunta + NUMS); falta E2E minado A+M y MAD 3-outputs |
 | 7 | Desktop GUI / Android | TBD | no empezar hasta 4 |
 
 Criterio para no saltarse pasos: no hay DHT si el cooperative close no se minó en regtest. No hay GUI si el CLI de dos humanos en signet no cerró una partida.
@@ -444,10 +478,10 @@ Criterio para no saltarse pasos: no hay DHT si el cooperative close no se minó 
 Estimación grosera (una persona, no calendario de promesa):
 
 - Ítem 1–2: días
-- Ítem 3: días (el nodo ya está)
+- Ítem 3: **hecho** (unwind)
 - Ítem 4: 1–2 semanas (UX de keys y fees)
 - Ítem 5: semanas
-- Ítem 6: días de script + más de producto (“quién es el árbitro”)
+- Ítem 6: código listo; faltan scripts de fondeo/gasto (días)
 - Ítem 7: proyecto aparte
 
 ---

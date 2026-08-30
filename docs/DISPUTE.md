@@ -1,6 +1,8 @@
 # Política de disputa (opcional)
 
-La define el **oferente** en `hbp new`. El contratista la **acepta o no** con el resto del contrato. No se puede cambiar después del fondeo: el árbol Taproot (y por tanto la address) depende de ella.
+La **política** la propone el oferente en `hbp new`. El contratista la acepta o no con el resto del contrato. No se puede cambiar después del fondeo: el árbol Taproot (y por tanto la address) depende de ella.
+
+Quién es el árbitro **no** va en esa oferta. Eso lo nombran **los dos** más tarde, cuando ya se aceptaron y van a generar los UTXO.
 
 Default: **`unwind`** — lo que ya está minado en los E2E.
 
@@ -10,11 +12,11 @@ Default: **`unwind`** — lo que ya está minado en los E2E.
 |---|---|---|
 | `unwind` | Tras T, M recupera la partida; C recupera la boleta | El reloj |
 | `mad` | Igual, más un UTXO chico simétrico. Si nadie coopera tras T, ese UTXO queda **improductivo** (hoja NUMS) | El reloj + quema del stake |
-| `arbiter` | Tras T, `árbitro+M` o `árbitro+C` pueden gastar. Tras T+ventana, unwind de último recurso | Un humano nombrado **en el offer** |
+| `arbiter` | Tras T, `árbitro+M` o `árbitro+C` pueden gastar. Tras T+ventana, unwind de último recurso | Un humano que **ambos** nombran **antes de fondear** |
 
 No se mezclan MAD y árbitro en el MVP. No hay tercer firmante en el **key path**: el 2-de-2 sigue siendo MuSig2(M,C). El árbitro es una **hoja** del árbol, ciega hasta que se usa.
 
-## CLI (oferente)
+## CLI
 
 ```bash
 hbp --dir .m new --unit USD --bond-bps 1000 --t-project <unix> --dispute unwind
@@ -22,11 +24,19 @@ hbp --dir .m new --unit USD --bond-bps 1000 --t-project <unix> --dispute unwind
 hbp --dir .m new ... --dispute mad --mad-bps 100
 # 1% de los sats de la partida 1, cada uno. Output on-chain = 2 × eso.
 
-hbp --dir .m new ... --dispute arbiter --arbiter 02abc... --arbiter-window 15
+# Solo el *slot*. Nadie elige todavía a la persona.
+hbp --dir .m new ... --dispute arbiter --arbiter-window 15
 # window en segundos (default 7 días). T2 = plazo + window.
+
+# Después de accept/commit, cualquiera propone; el otro contrafirma el mismo pubkey.
+hbp --dir .m propose-arbiter --pubkey 02abc...
+hbp --dir .c accept-arbiter .m/contracts/<id>/03-arbiter.json
+hbp --dir .m accept-arbiter .c/contracts/<id>/03-arbiter.json   # el primero importa
 ```
 
 `accept` no puede cambiar `dispute`. Si el JSON no coincide con el offer, `commit` rechaza (mismo `terms()`).
+
+`hbp addresses` no imprime boleta/partida hasta que A está nombrado por ambos. Sin eso no hay UTXO que fondear.
 
 ## MAD
 
@@ -40,7 +50,12 @@ No va a ninguna wallet de autor.
 
 ## Árbitro
 
-El pubkey va en el contrato. No es el mandante ni el contratista.
+Difícil en la práctica, no imposible. Un muro en un pueblo remoto no se lo va a juzgar un administrador de una comunidad Bitcoin en California: aunque sepa firmar un PSBT, no vio la obra. El protocolo no inventa un juez; solo deja el hueco si **las dos partes** conocen a alguien:
+
+- imparcial respecto de esa obra (idealmente que sepa de construcción, o al menos que ambas acepten su criterio),
+- y capaz de firmar un PSBT Taproot.
+
+Por eso el mandante **no** pone un amigo en el aviso. En la publicación solo dice “esta obra admite árbitro”. El *quién* se acuerda al mismo tiempo que los UTXO, con dos firmas Schnorr tagged `hbp-arbiter` sobre `{contract_id, pubkey}`. Si no se ponen de acuerdo en la persona, no fondean (o no debieron haber aceptado la política).
 
 Árbol de la partida (la boleta es simétrico):
 
@@ -56,6 +71,8 @@ Hasta T, A no puede nada. A solo no puede vaciar. Si A no aparece, al cabo de la
 
 `hbp unwind` con política arbiter usa la hoja de **último recurso** (T2), no la de A+M.
 
+A no es M ni C. Cambiar A después de fondear es imposible: cambia la address. El `contract_id` **no** incluye a A (la nomination vive en `03-arbiter.json` / `state.json`).
+
 ## Qué falta para E2E on-chain de MAD/árbitro
 
-Los descriptores y el contrato ya existen (tests de address distinta y hoja NUMS verdes). Falta un script de fondeo con 3 outputs (MAD) y un flujo A+M firmando juntos. No bloquea el default `unwind`.
+Los descriptores, la nomination conjunta y el contrato ya existen (tests: address distinta si hay A, error si A no está nombrado, hoja NUMS, firmas `hbp-arbiter`). Falta un script de fondeo con 3 outputs (MAD) y un flujo A+M firmando juntos el script path. No bloquea el default `unwind`.

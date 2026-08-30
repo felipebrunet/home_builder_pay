@@ -31,9 +31,9 @@ Hoy, si el pozo está locked y ambos se niegan a cooperar:
 
 Eso **no** presiona a negociar un 80 %: el mandante puede esperar y llevarse el 100 % de la partida (y el muro, si ya está en su terreno). Por eso el contratista no debería adelantar obra grande sin recepción.
 
-**MAD** (que una fracción se destruya o se vaya a un tercero si no hay acuerdo) es otra cláusula, opcional, y **no está implementada**. Si alguna vez se hace:
+**MAD** es otra cláusula, opcional (`hbp new --dispute mad`). El **código** está (tercera salida, hoja NUMS). **No hay E2E minado todavía.** Reglas ya cerradas:
 
 - **No** a una wallet del autor del software. Eso convierte el programa en un negocio de escrow, un imán legal y un punto de confianza que el 2-de-2 quería evitar.
-- Opciones serias: (1) quema a una address improductiva / `OP_RETURN`; (2) un sink que ambos eligen al firmar el contrato (p.ej. un fondo de desarrollo con varias claves, tipo Bisq donation); (3) solo un *dispute stake* chico y **simétrico**, no los 20k de boleta.
+- Stake chico y **simétrico** (bps de la partida 1, cada parte). Tras T, si nadie coopera, quema NUMS. No se queman los 20k de boleta.
 
 El 80 % de la pintura sigue siendo mejor que MAD: las dos firmas, split, listo. MAD es el palo para cuando **no** hay split.
