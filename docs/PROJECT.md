@@ -18,7 +18,7 @@ Checkpoint de sesión. Actualizar **esta sección** cada vez que se cierre un hi
 |---|---|
 | Fecha | 2026-08-30 |
 | Rama | `master` |
-| Hito | **MVP-0 + catálogo 142 (123 PASS) + MAD/árbitro minados** |
+| Hito | **MVP-0 + catálogo 142 (136 PASS, 6 humano)** |
 | Verificar al abrir | `cargo test --workspace` (25 unitarios: `hbp-core` 15, `hbp-bitcoin` 10) |
 | Nodo Bitcoin local | `/home/felipe/projects/btc_clients` — Core 31.1 regtest, RPC `:18443`. Los scripts usan `bitcoin-cli`; `hbp` no embebe el cliente. |
 | Origin | `git@github.com-hbp:felipebrunet/home_builder_pay.git` (MIT, público) |
@@ -70,12 +70,12 @@ Default on-chain sigue siendo **`unwind`**. MAD y árbitro tienen descriptores y
 - PSBT `hbp fund` (el fondeo exacto aún se arma con `bitcoin-cli` / scripts).
 - `hbp listen` / `connect`, Tor, DHT.
 - Seed BIP39, boleta que rueda al siguiente 2-de-2, GUI, Android, mainnet.
-- 19 ítems del catálogo sin script (reorg, RBF, keys perdidas, humano): [SCENARIOS.md](SCENARIOS.md).
+- 6 ítems del catálogo sin test (humano/off-chain: obra adelantada, coima, herederos, fotos, tribunal): [SCENARIOS.md](SCENARIOS.md).
 
 ### Cómo seguir en la próxima sesión
 
 1. Leer esta sección 0, [DISPUTE.md](DISPUTE.md) y [SCENARIOS.md](SCENARIOS.md).
-2. `scripts/run_catalog.sh` (unit + CLI + MAD/árbitro minados).
+2. `scripts/run_catalog.sh` (unit + CLI + MAD/árbitro + remainders).
 3. Siguiente código: `hbp fund` (PSBT montos exactos) **o** MuSig2 por archivos (ítem 1).
 4. No abrir Tor, DHT ni GUI.
 

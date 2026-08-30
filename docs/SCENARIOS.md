@@ -28,11 +28,11 @@ Leyenda: **PASS** = corrido con éxito (o on-chain idéntico a un PASS). **NO TE
 
 | | Cuántos |
 |---|---|
-| PASS | 123 |
-| NO TEST | 19 |
+| PASS | 136 |
+| NO TEST | 6 |
 | Total | 142 |
 
-Corredores: `cargo test --workspace`, `scripts/cli_catalog.sh`, `scripts/regtest_catalog.sh` (o `scripts/run_catalog.sh`). E2E unwind 1–8 previos en [REGTEST_SCENARIOS.md](REGTEST_SCENARIOS.md).
+Corredores: `cargo test --workspace`, `scripts/cli_catalog.sh`, `scripts/regtest_catalog.sh`, `scripts/regtest_remainders.sh` (o `scripts/run_catalog.sh`). E2E unwind 1–8 previos en [REGTEST_SCENARIOS.md](REGTEST_SCENARIOS.md).
 
 
 ---
@@ -91,10 +91,10 @@ Corredores: `cargo test --workspace`, `scripts/cli_catalog.sh`, `scripts/regtest
 35. Política MAD sin tercera salida `2*mad_sats`, o monto MAD mal. **código** ✅ **PASS** (verify-funding exige 2*mad_sats; cubierto al fondear MAD en 43)
 36. Solo fondean MAD, o solo boleta, o solo P1. ✅ **PASS** (= 33)
 37. Fondean P2 antes de que P1 esté terminal → rechazo. ✅ **PASS** (unit cannot_fund_segunda_before_primera)
-38. Fondean a la address **equivocada** (árbol unwind vs árbol con A) → la otra punta no verifica; los sats pueden quedar irrecuperables. ❌ **NO TEST** (fondeo a address equivocada: no script dedicado)
-39. Reorg de la tx de fondeo. ❌ **NO TEST** (reorg no automatizado)
+38. Fondean a la address **equivocada** (árbol unwind vs árbol con A) → la otra punta no verifica; los sats pueden quedar irrecuperables. ✅ **PASS** (regtest_remainders p1_paid_to_p2_script)
+39. Reorg de la tx de fondeo. ✅ **PASS** (regtest_remainders reorg_funding_unconfirmed)
 40. C empieza a trabajar **antes** de confirmaciones / antes de P1 locked. ❌ **NO TEST** (humano: C trabaja antes de confs)
-41. Política arbiter pero fondean como si fuera unwind (A no está en el árbol). ❌ **NO TEST** (fondeo unwind-tree vs arbiter-tree: no script dedicado)
+41. Política arbiter pero fondean como si fuera unwind (A no está en el árbol). ✅ **PASS** (regtest_remainders fund_wallet_not_arbiter_tree)
 
 ---
 
@@ -203,7 +203,7 @@ Hasta T, A no puede nada. A **solo** no puede vaciar. Tras T: `A&&M` o `A&&C` (e
 106. A es amigo de C y siempre firma `A&&C`. ✅ **PASS** (= 94; A sesgado a C = siempre A+C)
 107. A pide fee on-chain (salida para A en el tx `A&&C` o `A&&M`). ✅ **PASS** (= 96; fee a A = extra output; split cubre 2 dest)
 108. A pide plata off-chain para firmar. ❌ **NO TEST** (coima off-chain)
-109. A firma **las dos** versiones (P1 a M y P1 a C) → carrera en mempool; A deshonesto. ❌ **NO TEST** (A firma las dos txs: carrera mempool no automatizada)
+109. A firma **las dos** versiones (P1 a M y P1 a C) → carrera en mempool; A deshonesto. ✅ **PASS** (regtest_remainders a_double_sign_one_wins)
 110. A+M mandan P1 a un tercero (ambos pueden). ✅ **PASS** (= 95; A+M eligen dest)
 
 ---
@@ -231,24 +231,24 @@ Sin A, M **nunca** se lleva la boleta. Con A, tras `T_proyecto`, `A&&M` **sí pu
 122. Obra hecha y M quiere la boleta igual; A honesto se niega; C la recupera. ✅ **PASS** (= 99)
 123. Obra hecha; A capturado por M; boleta se va a M. ✅ **PASS** (= 120)
 124. A desaparece en la boleta → C unwind en T2. ✅ **PASS** (= 99)
-125. Tras T2, carrera: C unwind boleta vs `A&&M` hacia M. ❌ **NO TEST** (carrera T2 C-unwind vs A+M no minada aparte)
-126. Tras T2, carrera en P2: M unwind P2 vs `A&&C` hacia C. ❌ **NO TEST** (carrera T2 M-unwind vs A+C no minada aparte)
+125. Tras T2, carrera: C unwind boleta vs `A&&M` hacia M. ✅ **PASS** (regtest_remainders t2_race_bond_one_wins)
+126. Tras T2, carrera en P2: M unwind P2 vs `A&&C` hacia C. ✅ **PASS** (regtest_remainders t2_race_p2_one_wins)
 
 ---
 
 ## 13. Keys, archivos, fees, cadena
 
-127. M pierde la key **antes** de T_p1: ni coop ni unwind de P1 (el unwind de partida es de M). P1 puede morir. ❌ **NO TEST** (pérdida de key M no script)
-128. C pierde la key: boleta no se coop-libera ni se unwind (el unwind de boleta es de C). Boleta puede morir. ❌ **NO TEST** (pérdida de key C no script)
-129. Ambos pierden keys → ambos UTXO muertos. ❌ **NO TEST** (ambas keys)
+127. M pierde la key **antes** de T_p1: ni coop ni unwind de P1 (el unwind de partida es de M). P1 puede morir. ✅ **PASS** (regtest_remainders lost_m_identity)
+128. C pierde la key: boleta no se coop-libera ni se unwind (el unwind de boleta es de C). Boleta puede morir. ✅ **PASS** (regtest_remainders lost_c_identity)
+129. Ambos pierden keys → ambos UTXO muertos. ✅ **PASS** (regtest_remainders lost_both_identities)
 130. Herederos tienen las keys / no las tienen (muerte de M o C). ❌ **NO TEST** (herederos)
 131. Reuso de nonce MuSig2 → abort (protege la key). ✅ **PASS** (unit nonce reuse)
-132. Se pierde `nonces.json` o `identity.json` o `state.json` con UTXO vivos. ❌ **NO TEST** (archivos perdidos con UTXO vivos)
+132. Se pierde `nonces.json` o `identity.json` o `state.json` con UTXO vivos. ✅ **PASS** (regtest_remainders lost_state_utxo_remains)
 133. Fee de mercado a 6 meses: el unwind se firma al vencer (no hay tx prefirmada podrida). ✅ **PASS** (= 51; unwind se firma al vencer)
-134. Coop/unwind stuck; hay que RBF. ❌ **NO TEST** (RBF no automatizado)
+134. Coop/unwind stuck; hay que RBF. ✅ **PASS** (regtest_remainders rbf_replaced)
 135. Unwind emitido con wall-clock pero MTP de BIP-113 aún no → mempool la rechaza. ✅ **PASS** (regtest_catalog unwind_before_T / MTP)
-136. Reorg de una recepción o de un unwind. ❌ **NO TEST** (reorg recepción)
-137. Cobra P2 a una address personal de C, no al Taproot (fuera de protocolo). ❌ **NO TEST** (pago a address personal fuera de protocolo)
+136. Reorg de una recepción o de un unwind. ✅ **PASS** (regtest_remainders reorg_reception_unconfirmed)
+137. Cobra P2 a una address personal de C, no al Taproot (fuera de protocolo). ✅ **PASS** (regtest_remainders p2_to_personal_rejected)
 
 ---
 
