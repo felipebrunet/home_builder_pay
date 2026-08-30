@@ -37,3 +37,35 @@ pub fn verify_body(pubkey_hex: &str, sig_hex: &str, body: &ContractBody) -> Resu
     secp.verify_schnorr(&sig, &message(body)?, &xonly)?;
     Ok(())
 }
+
+fn arbiter_message(contract_id: &str, arbiter_pubkey: &str) -> Message {
+    let payload = format!("{contract_id}:{arbiter_pubkey}");
+    Message::from_digest(tagged_hash(b"hbp-arbiter", payload.as_bytes()))
+}
+
+pub fn sign_arbiter(
+    secret: &SecretKey,
+    contract_id: &str,
+    arbiter_pubkey: &str,
+) -> Result<String, Error> {
+    let secp = Secp256k1::new();
+    let keypair = Keypair::from_secret_key(&secp, secret);
+    let sig =
+        secp.sign_schnorr_no_aux_rand(&arbiter_message(contract_id, arbiter_pubkey), &keypair);
+    Ok(hex::encode(sig.as_ref()))
+}
+
+pub fn verify_arbiter(
+    party_pubkey_hex: &str,
+    sig_hex: &str,
+    contract_id: &str,
+    arbiter_pubkey: &str,
+) -> Result<(), Error> {
+    let secp = Secp256k1::verification_only();
+    let pk = parse_btc_pk(party_pubkey_hex)?;
+    let (xonly, _) = pk.x_only_public_key();
+    let bytes = hex::decode(sig_hex.trim())?;
+    let sig = bitcoin::secp256k1::schnorr::Signature::from_slice(&bytes)?;
+    secp.verify_schnorr(&sig, &arbiter_message(contract_id, arbiter_pubkey), &xonly)?;
+    Ok(())
+}

@@ -11,7 +11,7 @@ use crate::spend::{
 };
 use crate::taproot::{assert_output_key_matches, bond_descriptor, partida_descriptor};
 use crate::validate::{validate_funding_tx, ExpectedFunding};
-use crate::{sign_body, verify_body};
+use crate::{sign_arbiter, sign_body, verify_arbiter, verify_body};
 
 fn pair() -> (SecretKey, PublicKey, SecretKey, PublicKey) {
     let secp = Secp256k1::new();
@@ -235,6 +235,7 @@ fn arbiter_tree_changes_address() {
     let ask = SecretKey::new(&mut OsRng);
     let ap = PublicKey::from_secret_key(&secp, &ask);
     let plain = partida_descriptor(&mp, &cp, 1_700_000_000).unwrap();
+    let ahex = hex::encode(ap.serialize());
     let with_a = crate::taproot::partida_escrow_from_body(
         &hbp_core::ContractBody {
             network: hbp_core::Network::Regtest,
@@ -249,12 +250,10 @@ fn arbiter_tree_changes_address() {
             }],
             mandante_pubkey: hex::encode(mp.serialize()),
             contratista_pubkey: Some(hex::encode(cp.serialize())),
-            dispute: hbp_core::DisputePolicy::Arbiter {
-                pubkey: hex::encode(ap.serialize()),
-                window_secs: 15,
-            },
+            dispute: hbp_core::DisputePolicy::Arbiter { window_secs: 15 },
         },
         1,
+        Some(ahex.as_str()),
     )
     .unwrap();
     assert_ne!(
@@ -262,6 +261,41 @@ fn arbiter_tree_changes_address() {
         with_a.output_key().to_x_only_public_key()
     );
     assert_output_key_matches(&with_a, &mp, &cp).unwrap();
+    let unnamed = crate::taproot::partida_escrow_from_body(
+        &hbp_core::ContractBody {
+            network: hbp_core::Network::Regtest,
+            unit: Unit::Usd,
+            bond_bps: 1000,
+            t_project: 1_800_000_000,
+            partidas: vec![hbp_core::PartidaSpec {
+                id: 1,
+                description: "x".into(),
+                amount_minor: 100,
+                plazo_unix: 1_700_000_000,
+            }],
+            mandante_pubkey: hex::encode(mp.serialize()),
+            contratista_pubkey: Some(hex::encode(cp.serialize())),
+            dispute: hbp_core::DisputePolicy::Arbiter { window_secs: 15 },
+        },
+        1,
+        None,
+    );
+    assert!(unnamed.is_err());
+}
+
+#[test]
+fn arbiter_nomination_signatures_roundtrip() {
+    let (m_sk, m_pk, c_sk, c_pk) = pair();
+    let cid = "ab".repeat(32);
+    let a = hex::encode({
+        let secp = Secp256k1::new();
+        PublicKey::from_secret_key(&secp, &SecretKey::new(&mut OsRng)).serialize()
+    });
+    let ms = sign_arbiter(&m_sk, &cid, &a).unwrap();
+    let cs = sign_arbiter(&c_sk, &cid, &a).unwrap();
+    verify_arbiter(&hex::encode(m_pk.serialize()), &ms, &cid, &a).unwrap();
+    verify_arbiter(&hex::encode(c_pk.serialize()), &cs, &cid, &a).unwrap();
+    assert!(verify_arbiter(&hex::encode(m_pk.serialize()), &cs, &cid, &a).is_err());
 }
 
 #[test]

@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use crate::contract::{Quote, SignedContract};
+use crate::contract::{ArbiterNomination, Quote, SignedContract};
 use crate::error::Error;
 use crate::Result;
 
@@ -97,6 +97,8 @@ impl PartidaRuntime {
 pub struct Project {
     pub contract: SignedContract,
     pub quote: Option<Quote>,
+    #[serde(default)]
+    pub arbiter: Option<ArbiterNomination>,
     pub status: ProjectStatus,
     pub bond: BondStatus,
     pub partidas: Vec<PartidaRuntime>,
@@ -118,6 +120,7 @@ impl Project {
         Ok(Self {
             contract,
             quote: None,
+            arbiter: None,
             status: ProjectStatus::Accepted,
             bond: BondStatus::Unfunded,
             partidas,
@@ -162,6 +165,52 @@ impl Project {
         }
         self.quote = Some(quote);
         Ok(())
+    }
+
+    pub fn funding_started(&self) -> bool {
+        !matches!(self.bond, BondStatus::Unfunded)
+            || self.partidas.iter().any(|p| {
+                !matches!(
+                    p.state,
+                    PartidaStatus::Scheduled | PartidaStatus::AmountAgreed { .. }
+                )
+            })
+    }
+
+    pub fn set_arbiter(&mut self, nom: ArbiterNomination) -> Result<()> {
+        if nom.contract_id != self.contract.id()? {
+            return Err(Error::protocol("arbiter nomination contract_id mismatch"));
+        }
+        nom.validate_against(&self.contract.body)?;
+        if !nom.fully_signed() {
+            return Err(Error::protocol("arbiter nomination needs both signatures"));
+        }
+        if let Some(existing) = self.named_arbiter_pubkey()? {
+            if existing != nom.pubkey {
+                return Err(Error::protocol(
+                    "arbiter already locked; cannot change after both signed",
+                ));
+            }
+            return Ok(());
+        }
+        if self.funding_started() {
+            return Err(Error::protocol(
+                "too late to name an arbiter: UTXOs already funded (address would change)",
+            ));
+        }
+        self.arbiter = Some(nom);
+        Ok(())
+    }
+
+    pub fn named_arbiter_pubkey(&self) -> Result<Option<&str>> {
+        match &self.contract.body.dispute {
+            crate::DisputePolicy::Arbiter { .. } => Ok(self
+                .arbiter
+                .as_ref()
+                .filter(|a| a.fully_signed())
+                .map(|a| a.pubkey.as_str())),
+            _ => Ok(None),
+        }
     }
 
     pub fn note_bond_funding(
@@ -486,6 +535,64 @@ mod tests {
             p.partida(2).unwrap().state,
             PartidaStatus::AmountAgreed { .. }
         ));
+    }
+
+    #[test]
+    fn arbiter_named_only_after_both_sign_and_before_funding() {
+        let mut p = project();
+        p.contract.body.dispute = crate::DisputePolicy::Arbiter { window_secs: 15 };
+        assert!(p.named_arbiter_pubkey().unwrap().is_none());
+        let cid = p.contract.id().unwrap();
+        let unsigned = crate::ArbiterNomination {
+            contract_id: cid.clone(),
+            pubkey: pk(9),
+            mandante_sig: Some("aa".into()),
+            contratista_sig: None,
+        };
+        assert!(p
+            .set_arbiter(unsigned)
+            .unwrap_err()
+            .to_string()
+            .contains("both signatures"));
+        let signed = crate::ArbiterNomination {
+            contract_id: cid.clone(),
+            pubkey: pk(9),
+            mandante_sig: Some("aa".into()),
+            contratista_sig: Some("bb".into()),
+        };
+        p.set_arbiter(signed.clone()).unwrap();
+        assert_eq!(p.named_arbiter_pubkey().unwrap(), Some(pk(9).as_str()));
+        p.set_arbiter(signed).unwrap();
+        let other = crate::ArbiterNomination {
+            contract_id: cid,
+            pubkey: pk(8),
+            mandante_sig: Some("aa".into()),
+            contratista_sig: Some("bb".into()),
+        };
+        assert!(p
+            .set_arbiter(other)
+            .unwrap_err()
+            .to_string()
+            .contains("already locked"));
+    }
+
+    #[test]
+    fn cannot_name_arbiter_after_funding() {
+        let mut p = project();
+        p.contract.body.dispute = crate::DisputePolicy::Arbiter { window_secs: 15 };
+        p.set_quote(signed_quote(&p)).unwrap();
+        p.note_bond_funding("bond".into(), 0, 50_000, 1).unwrap();
+        let nom = crate::ArbiterNomination {
+            contract_id: p.contract.id().unwrap(),
+            pubkey: pk(9),
+            mandante_sig: Some("aa".into()),
+            contratista_sig: Some("bb".into()),
+        };
+        assert!(p
+            .set_arbiter(nom)
+            .unwrap_err()
+            .to_string()
+            .contains("too late"));
     }
 
     #[test]

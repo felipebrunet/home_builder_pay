@@ -15,7 +15,7 @@ pub use musig::{
     agg_nonce, consume_nonce_seed, encode_pubnonce, finish_coop_signature, new_nonce_seed,
     parse_pubnonce, signer_index, verify_aggregated, CoopSession,
 };
-pub use sign_contract::{sign_body, verify_body};
+pub use sign_contract::{sign_arbiter, sign_body, verify_arbiter, verify_body};
 pub use spend::{
     apply_key_spend_sig, build_key_spend_tx, build_split_key_spend_tx, build_unwind_tx,
     key_spend_sighash, sign_unwind, verify_key_spend_sig, verify_unwind_control_block, UnwindRole,

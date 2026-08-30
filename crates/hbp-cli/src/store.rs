@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use hbp_bitcoin::Identity;
-use hbp_core::{NonceJournal, Offer, Project, Quote, SignedContract};
+use hbp_core::{ArbiterNomination, NonceJournal, Offer, Project, Quote, SignedContract};
 
 #[derive(Clone)]
 pub struct Store {
@@ -123,6 +123,18 @@ impl Store {
             return Ok(None);
         }
         Ok(Some(read_json(&path)?))
+    }
+
+    pub fn arbiter_path(&self, contract_id: &str) -> PathBuf {
+        self.contract_dir(contract_id).join("03-arbiter.json")
+    }
+
+    pub fn save_arbiter(&self, nom: &ArbiterNomination) -> Result<PathBuf> {
+        let dir = self.contract_dir(&nom.contract_id);
+        fs::create_dir_all(&dir)?;
+        let path = self.arbiter_path(&nom.contract_id);
+        write_json(&path, nom)?;
+        Ok(path)
     }
 
     pub fn save_quote(&self, quote: &Quote) -> Result<PathBuf> {

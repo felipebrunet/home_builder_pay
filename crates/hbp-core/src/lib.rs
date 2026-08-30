@@ -14,9 +14,9 @@ pub use amount::{
     bond_minor, bond_warnings, fiat_minor_to_sats, minor_from_major, Unit, MINOR_PER_MAJOR,
 };
 pub use contract::{
-    canonical_json, contract_id, decode_compressed_pubkey, sha256_bytes, ContractBody, ContractId,
-    DisputePolicy, Network, Offer, PartidaQuote, PartidaSpec, Quote, Role, SignedContract, Terms,
-    DEFAULT_ARBITER_WINDOW_SECS,
+    canonical_json, contract_id, decode_compressed_pubkey, sha256_bytes, ArbiterNomination,
+    ContractBody, ContractId, DisputePolicy, Network, Offer, PartidaQuote, PartidaSpec, Quote,
+    Role, SignedContract, Terms, DEFAULT_ARBITER_WINDOW_SECS,
 };
 pub use error::Error;
 pub use nonce::NonceJournal;

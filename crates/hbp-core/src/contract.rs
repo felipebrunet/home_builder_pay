@@ -74,8 +74,9 @@ pub enum DisputePolicy {
         /// Basis points of partida 1 sats, **each** party (100 = 1%).
         mad_bps: u16,
     },
-    /// After plazo, arbiter+one party can spend; after plazo+window, last-resort unwind.
-    Arbiter { pubkey: String, window_secs: u32 },
+    /// Slot for a late arbiter. Who it is is **not** in the offer: both name
+    /// the same pubkey later ([`ArbiterNomination`]) before funding.
+    Arbiter { window_secs: u32 },
 }
 
 impl Default for DisputePolicy {
@@ -85,7 +86,7 @@ impl Default for DisputePolicy {
 }
 
 impl DisputePolicy {
-    pub fn validate(&self, mandante: &str) -> Result<()> {
+    pub fn validate(&self) -> Result<()> {
         match self {
             Self::Unwind => Ok(()),
             Self::Mad { mad_bps } => {
@@ -94,14 +95,7 @@ impl DisputePolicy {
                 }
                 Ok(())
             }
-            Self::Arbiter {
-                pubkey,
-                window_secs,
-            } => {
-                decode_compressed_pubkey(pubkey)?;
-                if pubkey == mandante {
-                    return Err(Error::protocol("arbiter must not be the mandante"));
-                }
+            Self::Arbiter { window_secs } => {
                 if *window_secs == 0 {
                     return Err(Error::protocol("arbiter window_secs must be > 0"));
                 }
@@ -192,12 +186,7 @@ impl ContractBody {
                 return Err(Error::protocol("mandante and contratista keys must differ"));
             }
         }
-        self.dispute.validate(&self.mandante_pubkey)?;
-        if let DisputePolicy::Arbiter { pubkey, .. } = &self.dispute {
-            if self.contratista_pubkey.as_ref() == Some(pubkey) {
-                return Err(Error::protocol("arbiter must not be the contratista"));
-            }
-        }
+        self.dispute.validate()?;
         Ok(())
     }
 
@@ -267,6 +256,38 @@ pub struct Quote {
     /// Per-party MAD stake (sats). Output on-chain is `2 * mad_sats` if present.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mad_sats: Option<u64>,
+}
+
+/// Joint naming of an arbiter. Not part of the offer hash; both must sign
+/// the same pubkey before addresses/funding. Either party can propose.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ArbiterNomination {
+    pub contract_id: ContractId,
+    pub pubkey: String,
+    pub mandante_sig: Option<String>,
+    pub contratista_sig: Option<String>,
+}
+
+impl ArbiterNomination {
+    pub fn fully_signed(&self) -> bool {
+        self.mandante_sig.is_some() && self.contratista_sig.is_some()
+    }
+
+    pub fn validate_against(&self, body: &ContractBody) -> Result<()> {
+        if !matches!(body.dispute, DisputePolicy::Arbiter { .. }) {
+            return Err(Error::protocol(
+                "arbiter nomination only valid if dispute policy is arbiter",
+            ));
+        }
+        decode_compressed_pubkey(&self.pubkey)?;
+        if self.pubkey == body.mandante_pubkey {
+            return Err(Error::protocol("arbiter must not be the mandante"));
+        }
+        if body.contratista_pubkey.as_ref() == Some(&self.pubkey) {
+            return Err(Error::protocol("arbiter must not be the contratista"));
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -424,5 +445,100 @@ mod tests {
         let b = canonical_json(&body).unwrap();
         assert_eq!(a, b);
         assert_eq!(contract_id(&body).unwrap().len(), 64);
+    }
+
+    #[test]
+    fn arbiter_policy_has_no_pubkey() {
+        let policy = DisputePolicy::Arbiter {
+            window_secs: DEFAULT_ARBITER_WINDOW_SECS,
+        };
+        policy.validate().unwrap();
+        let json = serde_json::to_value(&policy).unwrap();
+        assert_eq!(json["policy"], "arbiter");
+        assert!(json.get("pubkey").is_none());
+        assert_eq!(json["window_secs"], DEFAULT_ARBITER_WINDOW_SECS);
+    }
+
+    #[test]
+    fn nomination_is_outside_contract_id() {
+        let body = ContractBody {
+            network: Network::Regtest,
+            unit: Unit::Usd,
+            bond_bps: 1000,
+            t_project: 1_800_000_000,
+            partidas: vec![PartidaSpec {
+                id: 1,
+                description: "Muro".into(),
+                amount_minor: 150_000,
+                plazo_unix: 1_700_000_000,
+            }],
+            mandante_pubkey: pk(1),
+            contratista_pubkey: Some(pk(2)),
+            dispute: DisputePolicy::Arbiter { window_secs: 15 },
+        };
+        let id = contract_id(&body).unwrap();
+        let nom = ArbiterNomination {
+            contract_id: id.clone(),
+            pubkey: pk(9),
+            mandante_sig: None,
+            contratista_sig: None,
+        };
+        nom.validate_against(&body).unwrap();
+        assert_eq!(contract_id(&body).unwrap(), id);
+        assert!(!nom.fully_signed());
+    }
+
+    #[test]
+    fn nomination_rejects_parties_and_unwind() {
+        let mut body = ContractBody {
+            network: Network::Regtest,
+            unit: Unit::Usd,
+            bond_bps: 1000,
+            t_project: 1_800_000_000,
+            partidas: vec![PartidaSpec {
+                id: 1,
+                description: "Muro".into(),
+                amount_minor: 150_000,
+                plazo_unix: 1_700_000_000,
+            }],
+            mandante_pubkey: pk(1),
+            contratista_pubkey: Some(pk(2)),
+            dispute: DisputePolicy::Arbiter { window_secs: 15 },
+        };
+        let id = contract_id(&body).unwrap();
+        let as_m = ArbiterNomination {
+            contract_id: id.clone(),
+            pubkey: pk(1),
+            mandante_sig: None,
+            contratista_sig: None,
+        };
+        assert!(as_m
+            .validate_against(&body)
+            .unwrap_err()
+            .to_string()
+            .contains("mandante"));
+        let as_c = ArbiterNomination {
+            contract_id: id.clone(),
+            pubkey: pk(2),
+            mandante_sig: None,
+            contratista_sig: None,
+        };
+        assert!(as_c
+            .validate_against(&body)
+            .unwrap_err()
+            .to_string()
+            .contains("contratista"));
+        body.dispute = DisputePolicy::Unwind;
+        let ok_pk = ArbiterNomination {
+            contract_id: id,
+            pubkey: pk(9),
+            mandante_sig: None,
+            contratista_sig: None,
+        };
+        assert!(ok_pk
+            .validate_against(&body)
+            .unwrap_err()
+            .to_string()
+            .contains("only valid if dispute policy is arbiter"));
     }
 }

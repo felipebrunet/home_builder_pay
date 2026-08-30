@@ -226,39 +226,50 @@ pub fn bond_descriptor(
     build_escrow(mandante, contratista, &unwind, t_project, EscrowKind::Bond)
 }
 
-pub fn partida_escrow_from_body(body: &ContractBody, partida_id: u32) -> Result<Escrow, Error> {
-    let (m, c) = keys_from_body(body)?;
-    let spec = body.partida(partida_id)?;
+fn require_named_arbiter<'a>(
+    body: &ContractBody,
+    named: Option<&'a str>,
+) -> Result<(&'a str, u32), Error> {
     match &body.dispute {
-        DisputePolicy::Arbiter {
-            pubkey,
-            window_secs,
-        } => {
-            let a = crate::convert::parse_btc_pk(pubkey)?;
-            arbiter_escrow(
-                &m,
-                &c,
-                &a,
-                spec.plazo_unix,
-                *window_secs,
-                EscrowKind::Partida,
-            )
+        DisputePolicy::Arbiter { window_secs } => {
+            let pk = named.ok_or_else(|| {
+                Error::msg(
+                    "arbiter not named yet: both parties must sign the same pubkey before funding",
+                )
+            })?;
+            Ok((pk, *window_secs))
         }
-        _ => partida_descriptor(&m, &c, spec.plazo_unix),
+        _ => Err(Error::msg("internal: not an arbiter policy")),
     }
 }
 
-pub fn bond_escrow_from_body(body: &ContractBody) -> Result<Escrow, Error> {
+pub fn partida_escrow_from_body(
+    body: &ContractBody,
+    partida_id: u32,
+    named_arbiter: Option<&str>,
+) -> Result<Escrow, Error> {
     let (m, c) = keys_from_body(body)?;
-    match &body.dispute {
-        DisputePolicy::Arbiter {
-            pubkey,
-            window_secs,
-        } => {
-            let a = crate::convert::parse_btc_pk(pubkey)?;
-            arbiter_escrow(&m, &c, &a, body.t_project, *window_secs, EscrowKind::Bond)
-        }
-        _ => bond_descriptor(&m, &c, body.t_project),
+    let spec = body.partida(partida_id)?;
+    if matches!(body.dispute, DisputePolicy::Arbiter { .. }) {
+        let (pk, window) = require_named_arbiter(body, named_arbiter)?;
+        let a = crate::convert::parse_btc_pk(pk)?;
+        arbiter_escrow(&m, &c, &a, spec.plazo_unix, window, EscrowKind::Partida)
+    } else {
+        partida_descriptor(&m, &c, spec.plazo_unix)
+    }
+}
+
+pub fn bond_escrow_from_body(
+    body: &ContractBody,
+    named_arbiter: Option<&str>,
+) -> Result<Escrow, Error> {
+    let (m, c) = keys_from_body(body)?;
+    if matches!(body.dispute, DisputePolicy::Arbiter { .. }) {
+        let (pk, window) = require_named_arbiter(body, named_arbiter)?;
+        let a = crate::convert::parse_btc_pk(pk)?;
+        arbiter_escrow(&m, &c, &a, body.t_project, window, EscrowKind::Bond)
+    } else {
+        bond_descriptor(&m, &c, body.t_project)
     }
 }
 
@@ -277,12 +288,16 @@ pub fn mad_escrow_from_body(body: &ContractBody) -> Result<Escrow, Error> {
     mad_escrow(&m, &c, body.t_project)
 }
 
-pub fn partida_address(body: &ContractBody, partida_id: u32) -> Result<Address, Error> {
-    partida_escrow_from_body(body, partida_id)?.address(body.network)
+pub fn partida_address(
+    body: &ContractBody,
+    partida_id: u32,
+    named_arbiter: Option<&str>,
+) -> Result<Address, Error> {
+    partida_escrow_from_body(body, partida_id, named_arbiter)?.address(body.network)
 }
 
-pub fn bond_address(body: &ContractBody) -> Result<Address, Error> {
-    bond_escrow_from_body(body)?.address(body.network)
+pub fn bond_address(body: &ContractBody, named_arbiter: Option<&str>) -> Result<Address, Error> {
+    bond_escrow_from_body(body, named_arbiter)?.address(body.network)
 }
 
 pub fn mad_address(body: &ContractBody) -> Result<Address, Error> {

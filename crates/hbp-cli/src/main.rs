@@ -9,13 +9,13 @@ use hbp_bitcoin::{
     apply_key_spend_sig, bond_address, bond_escrow_from_body, build_key_spend_tx,
     build_split_key_spend_tx, build_unwind_tx, finish_coop_signature, generate_identity,
     key_spend_sighash, keys_from_body, mad_address, mad_escrow_from_body, new_nonce_seed,
-    partida_address, partida_escrow_from_body, sign_body, sign_unwind, validate_funding_tx,
-    verify_body, ExpectedFunding, Identity,
+    partida_address, partida_escrow_from_body, sign_arbiter, sign_body, sign_unwind,
+    validate_funding_tx, verify_arbiter, verify_body, ExpectedFunding, Identity,
 };
 use hbp_core::{
-    bond_minor, bond_warnings, fiat_minor_to_sats, minor_from_major, ContractBody, DisputePolicy,
-    Network, Offer, PartidaQuote, PartidaSpec, Quote, Role, SignedContract, Unit,
-    DEFAULT_ARBITER_WINDOW_SECS,
+    bond_minor, bond_warnings, fiat_minor_to_sats, minor_from_major, ArbiterNomination,
+    ContractBody, DisputePolicy, Network, Offer, PartidaQuote, PartidaSpec, Quote, Role,
+    SignedContract, Unit, DEFAULT_ARBITER_WINDOW_SECS,
 };
 
 mod store;
@@ -51,18 +51,25 @@ enum Cmd {
         /// Unix time (CLTV) for boleta unwind. Must be >= last partida plazo.
         #[arg(long)]
         t_project: u32,
-        /// unwind (default) | mad | arbiter — offeror proposes; accept locks it.
+        /// unwind (default) | mad | arbiter — offeror proposes the *policy*;
+        /// the person (arbiter pubkey) is named later by both, not in the offer.
         #[arg(long, default_value = "unwind")]
         dispute: String,
         /// With --dispute mad: bps of partida 1, each party (100 = 1%).
         #[arg(long)]
         mad_bps: Option<u16>,
-        /// With --dispute arbiter: compressed pubkey hex.
-        #[arg(long)]
-        arbiter: Option<String>,
-        /// Seconds after plazo before last-resort unwind (default 7 days).
+        /// With --dispute arbiter: seconds after plazo before last-resort unwind (default 7 days).
         #[arg(long, default_value_t = DEFAULT_ARBITER_WINDOW_SECS)]
         arbiter_window: u32,
+    },
+    /// Either party proposes an arbiter pubkey (after accept; both must sign before funding).
+    ProposeArbiter {
+        #[arg(long)]
+        pubkey: String,
+    },
+    /// Counterparty co-signs the same arbiter pubkey (or import a fully signed nomination).
+    AcceptArbiter {
+        file: PathBuf,
     },
     AddPartida {
         #[arg(long)]
@@ -174,7 +181,6 @@ fn run() -> Result<()> {
             t_project,
             dispute,
             mad_bps,
-            arbiter,
             arbiter_window,
         } => cmd_new(
             &store,
@@ -183,9 +189,10 @@ fn run() -> Result<()> {
             t_project,
             &dispute,
             mad_bps,
-            arbiter.as_deref(),
             arbiter_window,
         ),
+        Cmd::ProposeArbiter { pubkey } => cmd_propose_arbiter(&store, &pubkey),
+        Cmd::AcceptArbiter { file } => cmd_accept_arbiter(&store, file),
         Cmd::AddPartida {
             desc,
             amount,
@@ -266,30 +273,20 @@ fn cmd_init(store: &Store, network: &str, role: Option<&str>) -> Result<()> {
     Ok(())
 }
 
-fn parse_dispute(
-    kind: &str,
-    mad_bps: Option<u16>,
-    arbiter: Option<&str>,
-    window: u32,
-    mandante_pk: &str,
-) -> Result<DisputePolicy> {
+fn parse_dispute(kind: &str, mad_bps: Option<u16>, window: u32) -> Result<DisputePolicy> {
     match kind.to_ascii_lowercase().as_str() {
         "unwind" => Ok(DisputePolicy::Unwind),
         "mad" => {
             let mad_bps = mad_bps.context("--mad-bps required with --dispute mad")?;
             let d = DisputePolicy::Mad { mad_bps };
-            d.validate(mandante_pk)?;
+            d.validate()?;
             Ok(d)
         }
         "arbiter" => {
-            let pubkey = arbiter
-                .context("--arbiter pubkey required with --dispute arbiter")?
-                .to_string();
             let d = DisputePolicy::Arbiter {
-                pubkey,
                 window_secs: window,
             };
-            d.validate(mandante_pk)?;
+            d.validate()?;
             Ok(d)
         }
         other => bail!("dispute must be unwind|mad|arbiter, got {other}"),
@@ -303,11 +300,10 @@ fn cmd_new(
     t_project: u32,
     dispute: &str,
     mad_bps: Option<u16>,
-    arbiter: Option<&str>,
     arbiter_window: u32,
 ) -> Result<()> {
     let id = store.load_identity()?;
-    let dispute = parse_dispute(dispute, mad_bps, arbiter, arbiter_window, &id.public_key)?;
+    let dispute = parse_dispute(dispute, mad_bps, arbiter_window)?;
     let body = ContractBody {
         network: id.network,
         unit: Unit::from_str(unit)?,
@@ -414,6 +410,97 @@ fn cmd_commit(store: &Store, file: PathBuf) -> Result<()> {
     let path = store.save_signed(&pending)?;
     println!("contract {}", pending.id()?);
     println!("{}", path.display());
+    Ok(())
+}
+
+fn cmd_propose_arbiter(store: &Store, pubkey: &str) -> Result<()> {
+    let id = store.load_identity()?;
+    let project = store.load_project()?;
+    let pubkey = pubkey.trim().to_string();
+    if let Some(existing) = project.named_arbiter_pubkey()? {
+        if existing == pubkey {
+            println!("arbiter already locked {existing}");
+            return Ok(());
+        }
+        bail!("arbiter already locked to {existing}");
+    }
+    if project.funding_started() {
+        bail!("too late to name an arbiter: UTXOs already funded");
+    }
+    let cid = project.contract.id()?;
+    let mut nom = ArbiterNomination {
+        contract_id: cid.clone(),
+        pubkey,
+        mandante_sig: None,
+        contratista_sig: None,
+    };
+    nom.validate_against(&project.contract.body)?;
+    let sig = sign_arbiter(&id.secret()?, &cid, &nom.pubkey)?;
+    match party_role(&id, &project.contract.body)? {
+        Role::Mandante => nom.mandante_sig = Some(sig),
+        Role::Contratista => nom.contratista_sig = Some(sig),
+    }
+    let path = store.save_arbiter(&nom)?;
+    println!("{}", path.display());
+    println!(
+        "pass to the other party: hbp accept-arbiter {}",
+        path.display()
+    );
+    Ok(())
+}
+
+fn cmd_accept_arbiter(store: &Store, file: PathBuf) -> Result<()> {
+    let id = store.load_identity()?;
+    let mut project = store.load_project()?;
+    let mut nom: ArbiterNomination = read_json(&file)?;
+    if nom.contract_id != project.contract.id()? {
+        bail!("arbiter nomination is for a different contract");
+    }
+    nom.validate_against(&project.contract.body)?;
+    if let Some(existing) = project.named_arbiter_pubkey()? {
+        if existing != nom.pubkey {
+            bail!("arbiter already locked to {existing}");
+        }
+    } else if project.funding_started() {
+        bail!("too late to name an arbiter: UTXOs already funded");
+    }
+    let cid = project.contract.id()?;
+    let role = party_role(&id, &project.contract.body)?;
+    let already = match role {
+        Role::Mandante => nom.mandante_sig.is_some(),
+        Role::Contratista => nom.contratista_sig.is_some(),
+    };
+    if !already {
+        let sig = sign_arbiter(&id.secret()?, &cid, &nom.pubkey)?;
+        match role {
+            Role::Mandante => nom.mandante_sig = Some(sig),
+            Role::Contratista => nom.contratista_sig = Some(sig),
+        }
+    }
+    if let Some(s) = &nom.mandante_sig {
+        verify_arbiter(&project.contract.body.mandante_pubkey, s, &cid, &nom.pubkey)?;
+    }
+    if let (Some(s), Some(cpk)) = (
+        &nom.contratista_sig,
+        &project.contract.body.contratista_pubkey,
+    ) {
+        verify_arbiter(cpk, s, &cid, &nom.pubkey)?;
+    }
+    if nom.fully_signed() {
+        project.set_arbiter(nom.clone())?;
+        store.save_project(&project)?;
+    }
+    let path = store.save_arbiter(&nom)?;
+    if nom.fully_signed() {
+        println!("arbiter locked {}", nom.pubkey);
+        println!("{}", path.display());
+        println!(
+            "other party: hbp accept-arbiter {}  (import)",
+            path.display()
+        );
+    } else {
+        println!("partial nomination {}", path.display());
+    }
     Ok(())
 }
 
@@ -544,10 +631,20 @@ fn cmd_addresses(store: &Store) -> Result<()> {
     let quote = load_project_quote(store, &mut project)?;
     let body = &project.contract.body;
     println!("dispute {}", serde_json::to_string(&body.dispute)?);
-    let bond = bond_address(body)?;
+    let named = project.named_arbiter_pubkey()?;
+    if matches!(body.dispute, DisputePolicy::Arbiter { .. }) && named.is_none() {
+        println!(
+            "arbiter (unnamed — both must hbp propose-arbiter / accept-arbiter before funding)"
+        );
+        return Ok(());
+    }
+    if let Some(a) = named {
+        println!("arbiter {a}");
+    }
+    let bond = bond_address(body, named)?;
     println!("bond {}", bond);
     for p in &body.partidas {
-        let a = partida_address(body, p.id)?;
+        let a = partida_address(body, p.id, named)?;
         println!("partida {} {}", p.id, a);
     }
     if matches!(body.dispute, DisputePolicy::Mad { .. }) {
@@ -583,9 +680,10 @@ fn cmd_verify_funding(store: &Store, tx_hex: &str, partida: u32, partida_only: b
         bail!("quote needs both signatures");
     }
     let body = &project.contract.body;
+    let named = project.named_arbiter_pubkey()?;
     let _ = keys_from_body(body)?;
-    let bond = bond_escrow_from_body(body)?;
-    let part = partida_escrow_from_body(body, partida)?;
+    let bond = bond_escrow_from_body(body, named)?;
+    let part = partida_escrow_from_body(body, partida, named)?;
     let raw = hex::decode(tx_hex.trim())?;
     let tx: bitcoin::Transaction = deserialize(&raw).context("tx hex")?;
     let txid = tx.compute_txid().to_string();
@@ -658,9 +756,9 @@ fn cmd_coop_close(
     let escrow = match kind {
         "partida" => {
             let pid = partida.context("--partida required")?;
-            partida_escrow_from_body(body, pid)?
+            partida_escrow_from_body(body, pid, project.named_arbiter_pubkey()?)?
         }
-        "bond" => bond_escrow_from_body(body)?,
+        "bond" => bond_escrow_from_body(body, project.named_arbiter_pubkey()?)?,
         "mad" => mad_escrow_from_body(body)?,
         other => bail!("kind must be partida|bond|mad, got {other}"),
     };
@@ -770,13 +868,13 @@ fn cmd_unwind(
                 bail!("only the mandante can unwind a partida");
             }
             let pid = partida.context("--partida required")?;
-            partida_escrow_from_body(body, pid)?
+            partida_escrow_from_body(body, pid, project.named_arbiter_pubkey()?)?
         }
         "bond" => {
             if role != Role::Contratista {
                 bail!("only the contratista can unwind the bond; timeout is not a bank boleta");
             }
-            bond_escrow_from_body(body)?
+            bond_escrow_from_body(body, project.named_arbiter_pubkey()?)?
         }
         other => bail!("kind must be partida|bond, got {other}"),
     };
