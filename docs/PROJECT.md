@@ -408,7 +408,7 @@ Android **después** de desktop estable (wallet + Tor + verificación de cadena 
 
 ### Fase 4 — producto más rico
 
-- Árbitro tardío opcional (descriptor con tercera clave).
+- Árbitro tardío: ya es hoja Taproot opcional ([DISPUTE.md](DISPUTE.md)); falta E2E A+M firmando.
 - Boleta que **rueda** al 2-de-2 de la siguiente partida (splice) en vez de quedarse en un UTXO estático.
 - MAD sobre un *dispute stake* chico y simétrico (no quemar 20k).
 - Fotos/hashes de evidencia en `reception-proposed` (humanos, no el script).
