@@ -6,10 +6,10 @@ use bitcoin::consensus::encode::{deserialize, serialize_hex};
 use bitcoin::{Address, Amount, OutPoint, TxOut};
 use clap::{Parser, Subcommand};
 use hbp_bitcoin::{
-    apply_key_spend_sig, bond_address, bond_descriptor, build_key_spend_tx, build_unwind_tx,
-    finish_coop_signature, generate_identity, key_spend_sighash, keys_from_body, new_nonce_seed,
-    partida_address, partida_descriptor, sign_body, sign_unwind, validate_funding_tx, verify_body,
-    ExpectedFunding, Identity,
+    apply_key_spend_sig, bond_address, bond_descriptor, build_key_spend_tx,
+    build_split_key_spend_tx, build_unwind_tx, finish_coop_signature, generate_identity,
+    key_spend_sighash, keys_from_body, new_nonce_seed, partida_address, partida_descriptor,
+    sign_body, sign_unwind, validate_funding_tx, verify_body, ExpectedFunding, Identity,
 };
 use hbp_core::{
     bond_minor, bond_warnings, fiat_minor_to_sats, minor_from_major, ContractBody, Network, Offer,
@@ -116,6 +116,11 @@ enum Cmd {
         /// Cooperative refund (partida → mandante) instead of payment to contratista.
         #[arg(long, default_value_t = false)]
         refund: bool,
+        /// Pay this many sats to `--dest` (e.g. 80% of the partida). Remainder minus fee goes to `--refund-dest`.
+        #[arg(long)]
+        pay_sats: Option<u64>,
+        #[arg(long)]
+        refund_dest: Option<String>,
     },
     /// Build+sign a script-path unwind (after T). Mandante: partida. Contratista: boleta.
     Unwind {
@@ -185,8 +190,20 @@ fn run() -> Result<()> {
             partida,
             peer_dir,
             refund,
+            pay_sats,
+            refund_dest,
         } => cmd_coop_close(
-            &store, &kind, &outpoint, sats, &dest, fee, partida, peer_dir, refund,
+            &store,
+            &kind,
+            &outpoint,
+            sats,
+            &dest,
+            fee,
+            partida,
+            peer_dir,
+            refund,
+            pay_sats,
+            refund_dest.as_deref(),
         ),
         Cmd::Unwind {
             kind,
@@ -521,6 +538,8 @@ fn cmd_coop_close(
     partida: Option<u32>,
     peer_dir: PathBuf,
     refund: bool,
+    pay_sats: Option<u64>,
+    refund_dest: Option<&str>,
 ) -> Result<()> {
     let us = store.load_identity()?;
     let peer_store = Store::new(peer_dir);
@@ -541,16 +560,40 @@ fn cmd_coop_close(
         "bond" => bond_descriptor(&m_pk, &c_pk, body.t_project)?,
         other => bail!("kind must be partida|bond, got {other}"),
     };
+    let net = hbp_bitcoin::to_btc_network(body.network);
     let dest = Address::from_str(dest)
         .map_err(|e| anyhow::anyhow!("{e}"))?
-        .require_network(hbp_bitcoin::to_btc_network(body.network))?;
+        .require_network(net)?;
     let outpoint = OutPoint::from_str(outpoint).map_err(|e| anyhow::anyhow!("{e}"))?;
-    let unsigned = build_key_spend_tx(
-        outpoint,
-        Amount::from_sat(sats),
-        &dest,
-        Amount::from_sat(fee),
-    )?;
+    if refund && pay_sats.is_some() {
+        bail!("use either --refund or --pay-sats, not both");
+    }
+    let unsigned = if let Some(pay) = pay_sats {
+        let refund_addr = refund_dest.context("--refund-dest required with --pay-sats")?;
+        let refund_addr = Address::from_str(refund_addr)
+            .map_err(|e| anyhow::anyhow!("{e}"))?
+            .require_network(net)?;
+        let tx = build_split_key_spend_tx(
+            outpoint,
+            Amount::from_sat(sats),
+            &dest,
+            Amount::from_sat(pay),
+            &refund_addr,
+            Amount::from_sat(fee),
+        )?;
+        eprintln!(
+            "split pay {pay} sats to {dest}; refund {} sats to {refund_addr}",
+            sats - pay - fee
+        );
+        tx
+    } else {
+        build_key_spend_tx(
+            outpoint,
+            Amount::from_sat(sats),
+            &dest,
+            Amount::from_sat(fee),
+        )?
+    };
     let prev = TxOut {
         value: Amount::from_sat(sats),
         script_pubkey: escrow.script_pubkey(),
@@ -582,6 +625,9 @@ fn cmd_coop_close(
             let pid = partida.unwrap();
             let _ = project.propose_reception(pid);
             project.mark_paid(pid, txid.clone())?;
+            if let Some(pay) = pay_sats {
+                eprintln!("partida {pid} closed at {pay}/{sats} sats (agreed split)");
+            }
         }
         ("partida", true) => {
             let pid = partida.unwrap();

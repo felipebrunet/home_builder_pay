@@ -17,8 +17,8 @@ pub use musig::{
 };
 pub use sign_contract::{sign_body, verify_body};
 pub use spend::{
-    apply_key_spend_sig, build_key_spend_tx, build_unwind_tx, key_spend_sighash, sign_unwind,
-    verify_key_spend_sig, verify_unwind_control_block, UnwindRole,
+    apply_key_spend_sig, build_key_spend_tx, build_split_key_spend_tx, build_unwind_tx,
+    key_spend_sighash, sign_unwind, verify_key_spend_sig, verify_unwind_control_block, UnwindRole,
 };
 pub use taproot::{
     assert_output_key_matches, bond_address, bond_descriptor, keys_from_body, partida_address,

@@ -38,7 +38,7 @@ Checkpoint de sesión. Actualizar **esta sección** cada vez que se cierre un hi
 - Tests: 13 unitarios verdes (`hbp-core` 8, `hbp-bitcoin` 5).
 - **Camino feliz minado en regtest** (60k USD, 2×30k, boleta 20k, 5 s/partida): ver [REGTEST_HAPPY_PATH.md](REGTEST_HAPPY_PATH.md). `hbp coop-close --peer-dir` (misma máquina) + PSBT 2 wallets.
 - **Contratista abandona antes de la partida 2**: unwind de la partida al mandante; boleta no es ejecutable por el mandante; [REGTEST_CONTRACTOR_ABANDONS.md](REGTEST_CONTRACTOR_ABANDONS.md).
-- **Cancelación cooperativa** y **parada tras partida 1 cobrada**: [REGTEST_SCENARIOS.md](REGTEST_SCENARIOS.md).
+- **Cancelación cooperativa**, **parada tras partida 1 cobrada** y **split 80 %** en una partida: [REGTEST_SCENARIOS.md](REGTEST_SCENARIOS.md).
 
 ### No listo (no está en el código)
 

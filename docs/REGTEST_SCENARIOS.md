@@ -9,6 +9,7 @@ Todos usan la misma obra de demo: **60 000 USD**, 2 partidas de **30 000**, 
 | 3 | Obra hecha y el mandante **no firma** la recepción | **Igual que #2 en la cadena.** Bitcoin no ve el muro. Off-chain el contratista pierde el trabajo hundido. | esta tabla | el de #2 |
 | 4 | Cancelación **cooperativa** (antes de T) | MuSig2 reembolsa P1 al mandante + boleta al contratista; witness 64 B; locktime 0 | [REGTEST_COOP_CANCEL.md](REGTEST_COOP_CANCEL.md) | `scripts/regtest_coop_cancel.sh` |
 | 5 | Partida 1 **cobrada**, el mandante no sigue | MuSig2 P1 → contratista; P2 no se fondea; unwind boleta → contratista | [REGTEST_STOPS_AFTER_PARTIDA1.md](REGTEST_STOPS_AFTER_PARTIDA1.md) | `scripts/regtest_stops_after_partida1.sh` |
+| 6 | P1 ok, P2 aceptada al **80 %** (p.ej. pintura) | MuSig2 split 0,24 / 0,06; boleta se libera | [REGTEST_SPLIT_80.md](REGTEST_SPLIT_80.md) | `scripts/regtest_split_80.sh` |
 
 Robos que el CLI rechaza (minados como chequeo en #2 y #4):
 

@@ -43,6 +43,48 @@ pub fn build_key_spend_tx(
     })
 }
 
+/// Cooperative split: `pay` to the contractor, remainder minus fee back to the principal.
+pub fn build_split_key_spend_tx(
+    outpoint: OutPoint,
+    prevout_value: Amount,
+    pay_dest: &Address,
+    pay: Amount,
+    refund_dest: &Address,
+    fee: Amount,
+) -> Result<Transaction, Error> {
+    let dust = Amount::from_sat(546);
+    if pay < dust {
+        return Err(Error::msg("pay amount is dust"));
+    }
+    let refund = prevout_value
+        .checked_sub(pay)
+        .and_then(|v| v.checked_sub(fee))
+        .ok_or_else(|| Error::msg("pay + fee exceeds input"))?;
+    if refund < dust {
+        return Err(Error::msg("refund amount is dust"));
+    }
+    Ok(Transaction {
+        version: bitcoin::transaction::Version::TWO,
+        lock_time: LockTime::ZERO,
+        input: vec![TxIn {
+            previous_output: outpoint,
+            script_sig: ScriptBuf::new(),
+            sequence: Sequence::ENABLE_RBF_NO_LOCKTIME,
+            witness: Witness::new(),
+        }],
+        output: vec![
+            TxOut {
+                value: pay,
+                script_pubkey: pay_dest.script_pubkey(),
+            },
+            TxOut {
+                value: refund,
+                script_pubkey: refund_dest.script_pubkey(),
+            },
+        ],
+    })
+}
+
 pub fn build_unwind_tx(
     escrow: &Escrow,
     outpoint: OutPoint,

@@ -6,8 +6,8 @@ use hbp_core::{NonceJournal, Unit};
 
 use crate::musig::{consume_nonce_seed, finish_coop_signature, verify_aggregated};
 use crate::spend::{
-    apply_key_spend_sig, build_key_spend_tx, build_unwind_tx, key_spend_sighash, sign_unwind,
-    verify_key_spend_sig, verify_unwind_control_block,
+    apply_key_spend_sig, build_key_spend_tx, build_split_key_spend_tx, build_unwind_tx,
+    key_spend_sighash, sign_unwind, verify_key_spend_sig, verify_unwind_control_block,
 };
 use crate::taproot::{assert_output_key_matches, bond_descriptor, partida_descriptor};
 use crate::validate::{validate_funding_tx, ExpectedFunding};
@@ -124,6 +124,47 @@ fn cooperative_musig_key_path() {
     verify_key_spend_sig(escrow.output_key().to_x_only_public_key(), &sighash, &sig).unwrap();
     let signed = apply_key_spend_sig(tx, &sig);
     assert_eq!(signed.input[0].witness.len(), 1);
+}
+
+#[test]
+fn cooperative_split_80_20() {
+    let (m_sk, m_pk, c_sk, c_pk) = pair();
+    let escrow = partida_descriptor(&m_pk, &c_pk, 1_700_000_000).unwrap();
+    let pay_dest = bitcoin::Address::p2tr_tweaked(escrow.output_key(), Network::Regtest);
+    let refund_dest = bitcoin::Address::p2tr_tweaked(escrow.output_key(), Network::Regtest);
+    let prev = TxOut {
+        value: Amount::from_sat(30_000_000),
+        script_pubkey: escrow.script_pubkey(),
+    };
+    let tx = build_split_key_spend_tx(
+        dummy_outpoint(),
+        prev.value,
+        &pay_dest,
+        Amount::from_sat(24_000_000),
+        &refund_dest,
+        Amount::from_sat(200),
+    )
+    .unwrap();
+    assert_eq!(tx.output[0].value.to_sat(), 24_000_000);
+    assert_eq!(tx.output[1].value.to_sat(), 5_999_800);
+    let sighash = key_spend_sighash(&tx, &prev).unwrap();
+    let mut journal = NonceJournal::default();
+    let s0 = [3u8; 32];
+    let s1 = [4u8; 32];
+    consume_nonce_seed(&mut journal, s0).unwrap();
+    consume_nonce_seed(&mut journal, s1).unwrap();
+    let sig = finish_coop_signature(
+        &m_pk,
+        &c_pk,
+        &escrow,
+        Some(&m_sk),
+        Some(&c_sk),
+        s0,
+        s1,
+        &sighash,
+    )
+    .unwrap();
+    verify_key_spend_sig(escrow.output_key().to_x_only_public_key(), &sighash, &sig).unwrap();
 }
 
 #[test]
