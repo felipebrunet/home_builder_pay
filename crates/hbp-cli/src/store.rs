@@ -36,12 +36,10 @@ impl Store {
         write_json(&self.identity_path(), id)
     }
 
-    #[allow(dead_code)]
     pub fn nonce_path(&self) -> PathBuf {
         self.root.join("nonces.json")
     }
 
-    #[allow(dead_code)]
     pub fn load_nonces(&self) -> Result<NonceJournal> {
         let p = self.nonce_path();
         if !p.exists() {
@@ -50,7 +48,6 @@ impl Store {
         Ok(serde_json::from_str(&fs::read_to_string(p)?)?)
     }
 
-    #[allow(dead_code)]
     pub fn save_nonces(&self, j: &NonceJournal) -> Result<()> {
         write_json(&self.nonce_path(), j)
     }

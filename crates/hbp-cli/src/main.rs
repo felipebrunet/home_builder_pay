@@ -3,10 +3,11 @@ use std::str::FromStr;
 
 use anyhow::{bail, Context, Result};
 use bitcoin::consensus::encode::{deserialize, serialize_hex};
-use bitcoin::{Address, Amount, OutPoint};
+use bitcoin::{Address, Amount, OutPoint, TxOut};
 use clap::{Parser, Subcommand};
 use hbp_bitcoin::{
-    bond_address, bond_descriptor, build_unwind_tx, generate_identity, keys_from_body,
+    apply_key_spend_sig, bond_address, bond_descriptor, build_key_spend_tx, build_unwind_tx,
+    finish_coop_signature, generate_identity, key_spend_sighash, keys_from_body, new_nonce_seed,
     partida_address, partida_descriptor, sign_body, sign_unwind, validate_funding_tx, verify_body,
     ExpectedFunding, Identity,
 };
@@ -91,6 +92,27 @@ enum Cmd {
         tx_hex: String,
         #[arg(long, default_value_t = 1)]
         partida: u32,
+        /// Partida 2+: only the payment output (boleta already locked).
+        #[arg(long, default_value_t = false)]
+        partida_only: bool,
+    },
+    /// Same-machine MuSig2 close (loads both identities). Demo / local only.
+    CoopClose {
+        #[arg(long)]
+        kind: String,
+        #[arg(long)]
+        outpoint: String,
+        #[arg(long)]
+        sats: u64,
+        #[arg(long)]
+        dest: String,
+        #[arg(long, default_value_t = 200)]
+        fee: u64,
+        #[arg(long)]
+        partida: Option<u32>,
+        /// Directory of the other party (`identity.json` + nonce journal).
+        #[arg(long)]
+        peer_dir: PathBuf,
     },
     /// Build+sign a script-path unwind (after T). Mandante: partida. Contratista: boleta.
     Unwind {
@@ -143,7 +165,22 @@ fn run() -> Result<()> {
         Cmd::AcceptQuote { file } => cmd_accept_quote(&store, file),
         Cmd::Addresses => cmd_addresses(&store),
         Cmd::Status => cmd_status(&store),
-        Cmd::VerifyFunding { tx_hex, partida } => cmd_verify_funding(&store, &tx_hex, partida),
+        Cmd::VerifyFunding {
+            tx_hex,
+            partida,
+            partida_only,
+        } => cmd_verify_funding(&store, &tx_hex, partida, partida_only),
+        Cmd::CoopClose {
+            kind,
+            outpoint,
+            sats,
+            dest,
+            fee,
+            partida,
+            peer_dir,
+        } => cmd_coop_close(
+            &store, &kind, &outpoint, sats, &dest, fee, partida, peer_dir,
+        ),
         Cmd::Unwind {
             kind,
             outpoint,
@@ -414,7 +451,7 @@ fn cmd_status(store: &Store) -> Result<()> {
     Ok(())
 }
 
-fn cmd_verify_funding(store: &Store, tx_hex: &str, partida: u32) -> Result<()> {
+fn cmd_verify_funding(store: &Store, tx_hex: &str, partida: u32, partida_only: bool) -> Result<()> {
     let mut project = store.load_project()?;
     let quote = load_project_quote(store, &mut project)?
         .ok_or_else(|| anyhow::anyhow!("need a signed quote first"))?;
@@ -428,14 +465,28 @@ fn cmd_verify_funding(store: &Store, tx_hex: &str, partida: u32) -> Result<()> {
     let part = partida_descriptor(&m, &c, spec.plazo_unix)?;
     let raw = hex::decode(tx_hex.trim())?;
     let tx: bitcoin::Transaction = deserialize(&raw).context("tx hex")?;
+    let txid = tx.compute_txid().to_string();
+    let part_sats = quote.partida_sats(partida)?;
+    let part_vout = tx
+        .output
+        .iter()
+        .position(|o| o.script_pubkey == part.script_pubkey() && o.value.to_sat() == part_sats)
+        .context("missing partida output with quoted amount")?;
+    if partida_only {
+        project.note_partida_funding(partida, txid.clone(), part_vout as u32, part_sats, 1, 1)?;
+        store.save_project(&project)?;
+        println!("partida {partida} funding ok; txid {txid} vout {part_vout}");
+        return Ok(());
+    }
     validate_funding_tx(
         &tx,
         &ExpectedFunding {
             bond_script: bond.script_pubkey(),
             bond_sats: quote.bond_sats,
             partida_script: part.script_pubkey(),
-            partida_sats: quote.partida_sats(partida)?,
+            partida_sats: part_sats,
             change: vec![],
+            allow_other_outputs: true,
         },
     )?;
     let bond_vout = tx
@@ -443,23 +494,93 @@ fn cmd_verify_funding(store: &Store, tx_hex: &str, partida: u32) -> Result<()> {
         .iter()
         .position(|o| o.script_pubkey == bond.script_pubkey())
         .unwrap();
-    let part_vout = tx
-        .output
-        .iter()
-        .position(|o| o.script_pubkey == part.script_pubkey())
-        .unwrap();
-    let txid = tx.compute_txid().to_string();
     project.note_bond_funding(txid.clone(), bond_vout as u32, quote.bond_sats, 1)?;
-    project.note_partida_funding(
-        partida,
-        txid,
-        part_vout as u32,
-        quote.partida_sats(partida)?,
-        1,
-        1,
-    )?;
+    project.note_partida_funding(partida, txid.clone(), part_vout as u32, part_sats, 1, 1)?;
     store.save_project(&project)?;
-    println!("funding ok; project {:?}", project.status);
+    println!("funding ok; txid {txid} bond_vout {bond_vout} partida_vout {part_vout}");
+    Ok(())
+}
+
+fn cmd_coop_close(
+    store: &Store,
+    kind: &str,
+    outpoint: &str,
+    sats: u64,
+    dest: &str,
+    fee: u64,
+    partida: Option<u32>,
+    peer_dir: PathBuf,
+) -> Result<()> {
+    let us = store.load_identity()?;
+    let peer_store = Store::new(peer_dir);
+    let peer = peer_store.load_identity()?;
+    let mut project = store.load_project()?;
+    let body = &project.contract.body;
+    let (m_pk, c_pk) = keys_from_body(body)?;
+    let (m_sk, c_sk) = match party_role(&us, body)? {
+        Role::Mandante => (us.secret()?, peer.secret()?),
+        Role::Contratista => (peer.secret()?, us.secret()?),
+    };
+    let escrow = match kind {
+        "partida" => {
+            let pid = partida.context("--partida required")?;
+            let spec = body.partida(pid)?;
+            partida_descriptor(&m_pk, &c_pk, spec.plazo_unix)?
+        }
+        "bond" => bond_descriptor(&m_pk, &c_pk, body.t_project)?,
+        other => bail!("kind must be partida|bond, got {other}"),
+    };
+    let dest = Address::from_str(dest)
+        .map_err(|e| anyhow::anyhow!("{e}"))?
+        .require_network(hbp_bitcoin::to_btc_network(body.network))?;
+    let outpoint = OutPoint::from_str(outpoint).map_err(|e| anyhow::anyhow!("{e}"))?;
+    let unsigned = build_key_spend_tx(
+        outpoint,
+        Amount::from_sat(sats),
+        &dest,
+        Amount::from_sat(fee),
+    )?;
+    let prev = TxOut {
+        value: Amount::from_sat(sats),
+        script_pubkey: escrow.script_pubkey(),
+    };
+    let sighash = key_spend_sighash(&unsigned, &prev)?;
+    let mut j_us = store.load_nonces()?;
+    let mut j_peer = peer_store.load_nonces()?;
+    let (seed_m, seed_c) = match party_role(&us, body)? {
+        Role::Mandante => (new_nonce_seed(&mut j_us)?, new_nonce_seed(&mut j_peer)?),
+        Role::Contratista => (new_nonce_seed(&mut j_peer)?, new_nonce_seed(&mut j_us)?),
+    };
+    store.save_nonces(&j_us)?;
+    peer_store.save_nonces(&j_peer)?;
+    let sig = finish_coop_signature(
+        &m_pk,
+        &c_pk,
+        &escrow,
+        Some(&m_sk),
+        Some(&c_sk),
+        seed_m,
+        seed_c,
+        &sighash,
+    )?;
+    let signed = apply_key_spend_sig(unsigned, &sig);
+    let hex = serialize_hex(&signed);
+    let txid = signed.compute_txid().to_string();
+    match kind {
+        "partida" => {
+            let pid = partida.unwrap();
+            let _ = project.propose_reception(pid);
+            project.mark_paid(pid, txid.clone())?;
+        }
+        "bond" => project.mark_bond_released(txid.clone())?,
+        _ => {}
+    }
+    store.save_project(&project)?;
+    if peer_store.root.join("CURRENT").exists() {
+        let _ = peer_store.save_project(&project);
+    }
+    println!("{hex}");
+    eprintln!("coop-close {kind} txid {txid}");
     Ok(())
 }
 

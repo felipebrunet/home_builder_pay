@@ -18,10 +18,10 @@ Checkpoint de sesión. Actualizar **esta sección** cada vez que se cierre un hi
 |---|---|
 | Fecha | 2026-08-30 |
 | Rama | `master` |
-| Hito | **MVP-0 cerrado en código y tests locales** |
-| Siguiente ítem | Plan §11 **orden 1**: CLI MuSig2 de recepción por archivos (`coop-nonce` / `coop-sign` / `coop-finish`) |
+| Hito | **MVP-0 + camino feliz on-chain en regtest** |
+| Siguiente ítem | Plan §11: CLI MuSig2 **por archivos** (sin `--peer-dir`); PSBT de fondeo dentro de `hbp` |
 | Verificar al abrir | `cargo test --workspace` (debe quedar verde) |
-| Nodo Bitcoin local | `/home/felipe/projects/btc_clients` — Core 31.1 regtest, RPC `:18443`. HBP **aún no** habla RPC. |
+| Nodo Bitcoin local | `/home/felipe/projects/btc_clients` — Core 31.1 regtest, RPC `:18443`. El demo habla RPC con `bitcoin-cli`; `hbp` no embebe el cliente. |
 
 ### Listo (hecho en esta sesión)
 
@@ -33,14 +33,15 @@ Checkpoint de sesión. Actualizar **esta sección** cada vez que se cierre un hi
 - MuSig2 key-path y unwind script-path (librería + tests; output key coincide con rust-bitcoin).
 - Máquina de estados proyecto/partida (una partida viva; no fondear N+1 si N no está terminal).
 - `NonceJournal`: reutilizar seed aborta.
-- CLI: `init`, `new`, `add-partida`, `offer`, `accept`, `commit`, `import`, `quote`, `accept-quote`, `addresses`, `status`, `verify-funding`, `unwind`.
+- CLI: `init`, `new`, `add-partida`, `offer`, `accept`, `commit`, `import`, `quote`, `accept-quote`, `addresses`, `status`, `verify-funding`, `unwind`, `coop-close --peer-dir`.
 - `validate_funding_tx` rechaza monto de partida distinto al quote.
-- Tests: 13 unitarios verdes (`hbp-core` 8, `hbp-bitcoin` 5). Sin bitcoind.
+- Tests: 13 unitarios verdes (`hbp-core` 8, `hbp-bitcoin` 5).
+- **Camino feliz minado en regtest** (60k USD, 2×30k, boleta 20k, 5 s/partida): ver [REGTEST_HAPPY_PATH.md](REGTEST_HAPPY_PATH.md). `hbp coop-close --peer-dir` (misma máquina) + PSBT 2 wallets.
 
 ### No listo (no está en el código)
 
-- CLI de **recepción cooperativa** (las dos puntas intercambiando nonces/partials por archivo). La crypto sí está: `finish_coop_signature` en tests.
-- PSBT de fondeo (`hbp fund`): hoy hay que armar la tx afuera y pasar hex a `verify-funding`.
+- CLI de recepción cooperativa **por archivos** (sin `--peer-dir`). Hoy el cierre feliz en una sola máquina usa `coop-close --peer-dir`.
+- PSBT de fondeo **dentro de** `hbp` (el script de demo lo arma con `bitcoin-cli`).
 - Broadcast / mine / spend real contra `btc_clients`.
 - `hbp listen` / `connect`, Tor, DHT.
 - Seed BIP39, árbitro, boleta que rueda, GUI, Android, mainnet.

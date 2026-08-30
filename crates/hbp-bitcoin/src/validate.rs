@@ -10,6 +10,8 @@ pub struct ExpectedFunding {
     pub partida_sats: u64,
     /// Allowed change script_pubkeys (each party's wallet).
     pub change: Vec<ScriptBuf>,
+    /// If true, extra outputs (wallet change) are accepted without listing them.
+    pub allow_other_outputs: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -57,14 +59,15 @@ pub fn validate_funding_tx(tx: &Transaction, expected: &ExpectedFunding) -> Resu
             saw_partida = true;
             continue;
         }
-        if !expected.change.iter().any(|c| c == &o.script_pubkey) {
-            return Err(Error::msg(format!(
-                "unexpected output script {}",
-                Address::from_script(&o.script_pubkey, bitcoin::Network::Regtest)
-                    .map(|a| a.to_string())
-                    .unwrap_or_else(|_| hex::encode(o.script_pubkey.as_bytes()))
-            )));
+        if expected.allow_other_outputs || expected.change.iter().any(|c| c == &o.script_pubkey) {
+            continue;
         }
+        return Err(Error::msg(format!(
+            "unexpected output script {}",
+            Address::from_script(&o.script_pubkey, bitcoin::Network::Regtest)
+                .map(|a| a.to_string())
+                .unwrap_or_else(|_| hex::encode(o.script_pubkey.as_bytes()))
+        )));
     }
     if !saw_bond {
         return Err(Error::msg("missing bond output"));

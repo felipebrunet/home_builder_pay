@@ -157,6 +157,7 @@ fn funding_rejects_wrong_partida_amount() {
         partida_script: partida.script_pubkey(),
         partida_sats: 20_000,
         change: vec![],
+        allow_other_outputs: false,
     };
     let err = validate_funding_tx(&tx, &expected).unwrap_err();
     assert!(err.to_string().contains("partida amount"));

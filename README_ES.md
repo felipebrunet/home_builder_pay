@@ -8,7 +8,7 @@ Esto es un MVP: CLI de escritorio, **regtest/signet**, archivos pasados a mano. 
 
 Protocolo, arquitectura, hoja de ruta y **en qué quedó la última sesión**: [docs/PROJECT.md](docs/PROJECT.md) (empezar por la sección 0).
 
-Hito actual: **MVP-0** (CLI + Taproot/MuSig2 + pruebas, sin bitcoind). Siguiente: CLI de recepción cooperativa (`coop-nonce` / `coop-sign` / `coop-finish`).
+Hito actual: **MVP-0** más un camino feliz **minado** en regtest. Cierre cooperativo en la misma máquina: `hbp coop-close --peer-dir`. Relato: [docs/REGTEST_HAPPY_PATH.md](docs/REGTEST_HAPPY_PATH.md).
 
 ## Protocolo (resumen)
 
