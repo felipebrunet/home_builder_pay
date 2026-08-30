@@ -221,4 +221,54 @@ expect_fail 27 change_locked $HBP --dir s4/m propose-arbiter --pubkey "$APK2"
 # 141 mad+arbiter not mixed: new is one policy
 pass 141 mad_xor_arbiter_cli
 
+# --- hbp fund + file MuSig2 (off-chain) ---
+mkdir -p sfund
+$HBP --dir sfund/m init --network regtest --role mandante >/dev/null
+$HBP --dir sfund/c init --network regtest --role contratista >/dev/null
+$HBP --dir sfund/m new --unit USD --bond-bps 3333 --t-project "$T" >/dev/null
+$HBP --dir sfund/m add-partida --desc Cimentacion --amount 30000 --plazo "$T1" >/dev/null
+$HBP --dir sfund/m add-partida --desc Muros --amount 30000 --plazo "$T2" >/dev/null
+$HBP --dir sfund/m offer >/dev/null
+$HBP --dir sfund/c accept sfund/m/00-offer.json >/dev/null
+$HBP --dir sfund/m commit sfund/c/01-accepted.pending.json >/dev/null
+CIDF="$(cat sfund/m/CURRENT)"
+$HBP --dir sfund/c import "sfund/m/contracts/$CIDF/01-accepted.json" >/dev/null
+expect_fail fund_no_quote no_quote $HBP --dir sfund/m fund --m-outpoint 00:0 --m-sats 1 --m-prev bcrt1qinvalid --m-change bcrt1qinvalid
+$HBP --dir sfund/m quote --btc-price 100000 --fx-note t >/dev/null
+$HBP --dir sfund/c accept-quote "sfund/m/contracts/$CIDF/02-quote.json" >/dev/null
+$HBP --dir sfund/m accept-quote "sfund/c/contracts/$CIDF/02-quote.json" >/dev/null
+expect_fail fund_missing_c missing_c $HBP --dir sfund/m fund \
+  --m-outpoint 1111111111111111111111111111111111111111111111111111111111111111:0 \
+  --m-sats 40000000 --m-prev unused --m-change unused
+
+ADDRF="$($HBP --dir sfund/m addresses)"
+P1A="$(printf '%s\n' "$ADDRF" | awk '/^partida 1 bcrt/{print $3}')"
+P2A="$(printf '%s\n' "$ADDRF" | awk '/^partida 2 bcrt/{print $3}')"
+[[ -n "$P1A" && -n "$P2A" ]] || fail fund_addrs "missing addresses"
+PSBT="$($HBP --dir sfund/m fund --fee 2000 \
+  --m-outpoint 1111111111111111111111111111111111111111111111111111111111111111:0 \
+  --m-sats 40000000 --m-prev "$P2A" --m-change "$P2A" \
+  --c-outpoint 2222222222222222222222222222222222222222222222222222222222222222:1 \
+  --c-sats 30000000 --c-prev "$P2A" --c-change "$P2A" 2>/tmp/hbp-fund.err)"
+python3 - "$PSBT" <<'PY' || fail fund_psbt "not base64 psbt"
+import sys, base64
+raw = base64.b64decode(sys.argv[1].strip())
+assert raw[:5] == b"psbt\xff", raw[:8]
+PY
+echo "PASS fund_psbt"
+
+DUMMY_OP="3333333333333333333333333333333333333333333333333333333333333333:0"
+$HBP --dir sfund/m coop-propose --kind partida --partida 1 \
+  --outpoint "$DUMMY_OP" --sats 30000000 --dest "$P2A" --fee 200 >/dev/null
+[[ -f sfund/m/04-coop.json ]] || fail file_musig "no 04-coop.json after propose"
+$HBP --dir sfund/c coop-sign sfund/m/04-coop.json >/dev/null
+[[ -f sfund/c/04-coop.json ]] || fail file_musig "no 04-coop.json after sign"
+HEX="$($HBP --dir sfund/m coop-finish sfund/c/04-coop.json 2>/tmp/hbp-coop-fin.err)"
+python3 - "$HEX" <<'PY' || fail file_musig "finish did not print tx hex"
+import sys
+h = sys.argv[1].strip()
+assert len(h) > 80 and all(c in "0123456789abcdefABCDEF" for c in h), h[:40]
+PY
+echo "PASS file_musig"
+
 echo "CLI_CATALOG_OK"

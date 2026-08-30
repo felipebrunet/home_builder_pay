@@ -21,6 +21,7 @@
 **/*.pending.json
 **/02-quote.json
 **/03-arbiter.json
+**/04-coop.json
 **/state.json
 **/CURRENT
 

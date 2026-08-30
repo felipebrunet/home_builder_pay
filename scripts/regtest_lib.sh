@@ -11,6 +11,7 @@ BOND_BTC="${BOND_BTC:-0.20000000}"
 PARTIDA_SATS="${PARTIDA_SATS:-30000000}"
 BOND_SATS="${BOND_SATS:-20000000}"
 FEE_SATS="${FEE_SATS:-200}"
+FUND_FEE_SATS="${FUND_FEE_SATS:-20000}"
 
 log() { printf '\n==== %s ====\n' "$*"; }
 rpc() { $BCLI "$@"; }
@@ -59,13 +60,10 @@ print(next(i for i,o in enumerate(tx['vout']) if o['scriptPubKey'].get('address'
 
 fund_bond_and_p1() {
   local bond_addr="$1" p1_addr="$2" tag="$3"
-  python3 - "$BCLI" "$bond_addr" "$p1_addr" "$BOND_BTC" "$PARTIDA_BTC" "$tag" <<'PY'
+  python3 - "$BCLI" "$HBP" "$tag" "$FUND_FEE_SATS" <<'PY'
 import json, subprocess, sys
 bcli = sys.argv[1].split()
-bond_addr, p1_addr = sys.argv[2], sys.argv[3]
-bond, part = float(sys.argv[4]), float(sys.argv[5])
-tag = sys.argv[6]
-fee = 0.00020000
+hbp, tag, fee = sys.argv[2], sys.argv[3], sys.argv[4]
 
 def rpc(args, wallet=None):
     cmd = list(bcli)
@@ -82,17 +80,33 @@ def pick(wallet):
     utxos = [u for u in rpc(["listunspent", "1"], wallet=wallet) if u["spendable"] and u["amount"] >= 1]
     if not utxos:
         raise SystemExit(f"no utxo in {wallet}")
-    return max(utxos, key=lambda u: u["amount"])
+    u = max(utxos, key=lambda x: x["amount"])
+    if "address" not in u:
+        raise SystemExit(f"utxo in {wallet} has no address")
+    return u
+
+def sats(btc):
+    return int(round(float(btc) * 100_000_000))
 
 m, c = pick("hbp_mandante"), pick("hbp_contratista")
-ins = [{"txid": m["txid"], "vout": m["vout"]}, {"txid": c["txid"], "vout": c["vout"]}]
-outs = {
-    bond_addr: bond,
-    p1_addr: part,
-    rpc(["getrawchangeaddress"], wallet="hbp_mandante"): round(m["amount"] - part - fee / 2, 8),
-    rpc(["getrawchangeaddress"], wallet="hbp_contratista"): round(c["amount"] - bond - fee / 2, 8),
-}
-psbt = rpc(["createpsbt", json.dumps(ins), json.dumps(outs)])
+m_chg = rpc(["getrawchangeaddress"], wallet="hbp_mandante")
+c_chg = rpc(["getrawchangeaddress"], wallet="hbp_contratista")
+psbt = subprocess.check_output(
+    [
+        hbp, "--dir", ".m", "fund",
+        "--partida", "1",
+        "--fee", fee,
+        "--m-outpoint", f"{m['txid']}:{m['vout']}",
+        "--m-sats", str(sats(m["amount"])),
+        "--m-prev", m["address"],
+        "--m-change", m_chg,
+        "--c-outpoint", f"{c['txid']}:{c['vout']}",
+        "--c-sats", str(sats(c["amount"])),
+        "--c-prev", c["address"],
+        "--c-change", c_chg,
+    ],
+    text=True,
+).strip().splitlines()[-1]
 p1 = rpc(["walletprocesspsbt", psbt], wallet="hbp_mandante")
 p2 = rpc(["walletprocesspsbt", p1["psbt"]], wallet="hbp_contratista")
 fin = rpc(["finalizepsbt", p2["psbt"]])
@@ -100,6 +114,7 @@ if not fin.get("complete"):
     raise SystemExit(f"psbt not complete: {fin}")
 txid = rpc(["sendrawtransaction", fin["hex"]])
 open(f"/tmp/hbp-{tag}-fund1.hex", "w").write(fin["hex"].strip() + "\n")
+open(f"/tmp/hbp-{tag}-fund.hex", "w").write(fin["hex"].strip() + "\n")
 print(txid)
 PY
 }
@@ -173,14 +188,18 @@ advance_mtp() {
 }
 
 fund_bond_p1_mad() {
-  local bond_addr="$1" p1_addr="$2" mad_addr="$3" mad_btc="$4" tag="$5"
-  python3 - "$BCLI" "$bond_addr" "$p1_addr" "$mad_addr" "$BOND_BTC" "$PARTIDA_BTC" "$mad_btc" "$tag" <<'PY'
+  # MAD outputs come from the signed quote via `hbp fund`; addrs are unused.
+  local _bond_addr="$1" _p1_addr="$2" _mad_addr="$3" _mad_btc="$4" tag="$5"
+  fund_bond_and_p1 "$_bond_addr" "$_p1_addr" "$tag"
+}
+
+# Mandante-only funding of a later partida (bond already locked).
+fund_partida_only() {
+  local tag="$1" pid="${2:-2}"
+  python3 - "$BCLI" "$HBP" "$tag" "$pid" "$FUND_FEE_SATS" <<'PY'
 import json, subprocess, sys
 bcli = sys.argv[1].split()
-bond_addr, p1_addr, mad_addr = sys.argv[2], sys.argv[3], sys.argv[4]
-bond, part, mad = float(sys.argv[5]), float(sys.argv[6]), float(sys.argv[7])
-tag = sys.argv[8]
-fee = 0.00020000
+hbp, tag, pid, fee = sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5]
 
 def rpc(args, wallet=None):
     cmd = list(bcli)
@@ -197,27 +216,51 @@ def pick(wallet):
     utxos = [u for u in rpc(["listunspent", "1"], wallet=wallet) if u["spendable"] and u["amount"] >= 1]
     if not utxos:
         raise SystemExit(f"no utxo in {wallet}")
-    return max(utxos, key=lambda u: u["amount"])
+    u = max(utxos, key=lambda x: x["amount"])
+    if "address" not in u:
+        raise SystemExit(f"utxo in {wallet} has no address")
+    return u
 
-m, c = pick("hbp_mandante"), pick("hbp_contratista")
-ins = [{"txid": m["txid"], "vout": m["vout"]}, {"txid": c["txid"], "vout": c["vout"]}]
-outs = {
-    bond_addr: bond,
-    p1_addr: part,
-    mad_addr: mad,
-    rpc(["getrawchangeaddress"], wallet="hbp_mandante"): round(m["amount"] - part - mad / 2 - fee / 2, 8),
-    rpc(["getrawchangeaddress"], wallet="hbp_contratista"): round(c["amount"] - bond - mad / 2 - fee / 2, 8),
-}
-psbt = rpc(["createpsbt", json.dumps(ins), json.dumps(outs)])
+def sats(btc):
+    return int(round(float(btc) * 100_000_000))
+
+m = pick("hbp_mandante")
+m_chg = rpc(["getrawchangeaddress"], wallet="hbp_mandante")
+psbt = subprocess.check_output(
+    [
+        hbp, "--dir", ".m", "fund",
+        "--partida", pid,
+        "--partida-only",
+        "--fee", fee,
+        "--m-outpoint", f"{m['txid']}:{m['vout']}",
+        "--m-sats", str(sats(m["amount"])),
+        "--m-prev", m["address"],
+        "--m-change", m_chg,
+    ],
+    text=True,
+).strip().splitlines()[-1]
 p1 = rpc(["walletprocesspsbt", psbt], wallet="hbp_mandante")
-p2 = rpc(["walletprocesspsbt", p1["psbt"]], wallet="hbp_contratista")
-fin = rpc(["finalizepsbt", p2["psbt"]])
+fin = rpc(["finalizepsbt", p1["psbt"]])
 if not fin.get("complete"):
     raise SystemExit(f"psbt not complete: {fin}")
 txid = rpc(["sendrawtransaction", fin["hex"]])
-open(f"/tmp/hbp-{tag}-fund.hex", "w").write(fin["hex"].strip() + "\n")
+open(f"/tmp/hbp-{tag}-p{pid}.hex", "w").write(fin["hex"].strip() + "\n")
 print(txid)
 PY
+}
+
+# File MuSig2 close (two laptops): propose → sign → finish. Prints signed tx hex.
+coop_close_files() {
+  local kind="$1" outpoint="$2" sats="$3" dest="$4" fee="$5"
+  local partida="${6:-}"
+  local extra=()
+  if [[ -n "$partida" ]]; then
+    extra+=(--partida "$partida")
+  fi
+  $HBP --dir .m coop-propose --kind "$kind" --outpoint "$outpoint" --sats "$sats" \
+    --dest "$dest" --fee "$fee" "${extra[@]}" >/dev/null
+  $HBP --dir .c coop-sign .m/04-coop.json >/dev/null
+  $HBP --dir .m coop-finish .c/04-coop.json
 }
 
 fund_wrong_p1() {

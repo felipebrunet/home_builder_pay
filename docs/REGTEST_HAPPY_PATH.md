@@ -39,7 +39,7 @@ cd /home/felipe/projects/home_builder_pay
 
 Requisitos: `bitcoind` de `btc_clients`, Python 3, `jq` no hace falta. El script crea las wallets si no existen, madura coinbases del wallet `miner` (101 bloques) y envía 10 BTC a cada hot wallet.
 
-`coop-close --peer-dir` es un atajo **misma máquina**: carga las dos `identity.json` y firma MuSig2 en un proceso. En dos laptops el mismo cierre será un intercambio de nonces/archivos (aún no cableado como comandos separados).
+`coop-close --peer-dir` es un atajo **misma máquina**: carga las dos `identity.json` y firma MuSig2 en un proceso. En dos laptops el mismo cierre es `coop-propose` → pasar `04-coop.json` → `coop-sign` → `coop-finish`. El fondeo atómico de boleta+P1 en los scripts de catálogo ya sale de `hbp fund` (PSBT, montos exactos).
 
 ---
 

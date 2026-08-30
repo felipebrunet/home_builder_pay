@@ -378,3 +378,284 @@ fn mad_leaf_is_nums() {
     assert_output_key_matches(&mad, &mp, &cp).unwrap();
     verify_unwind_control_block(&mad).unwrap();
 }
+
+#[test]
+fn funding_psbt_keeps_escrow_amounts_exact() {
+    let (_ms, mp, _cs, cp) = pair();
+    let bond = bond_descriptor(&mp, &cp, 1_800_000_000).unwrap();
+    let part = partida_descriptor(&mp, &cp, 1_700_000_000).unwrap();
+    let other = partida_descriptor(&mp, &cp, 1_710_000_000).unwrap();
+    let chg = bitcoin::Address::p2tr_tweaked(other.output_key(), Network::Regtest);
+    let req = crate::FundingRequest {
+        bond: Some((bond.script_pubkey(), 20_000)),
+        partida: (part.script_pubkey(), 30_000),
+        mad: None,
+        fee: 200,
+        mandante: crate::FundingCoin {
+            outpoint: dummy_outpoint(),
+            sats: 1_000_000,
+            script_pubkey: chg.script_pubkey(),
+        },
+        mandante_change: chg.clone(),
+        contratista: Some(crate::FundingCoin {
+            outpoint: OutPoint {
+                txid: Txid::from_byte_array([8u8; 32]),
+                vout: 1,
+            },
+            sats: 500_000,
+            script_pubkey: chg.script_pubkey(),
+        }),
+        contratista_change: Some(chg.clone()),
+    };
+    let (tx, _) = crate::funding_tx(&req).unwrap();
+    validate_funding_tx(
+        &tx,
+        &ExpectedFunding {
+            bond_script: bond.script_pubkey(),
+            bond_sats: 20_000,
+            partida_script: part.script_pubkey(),
+            partida_sats: 30_000,
+            change: vec![chg.script_pubkey()],
+            allow_other_outputs: false,
+        },
+    )
+    .unwrap();
+    let p1 = tx
+        .output
+        .iter()
+        .find(|o| o.script_pubkey == part.script_pubkey())
+        .unwrap();
+    assert_eq!(p1.value.to_sat(), 30_000);
+    let psbt = crate::build_funding_psbt(&req).unwrap();
+    assert_eq!(psbt.unsigned_tx.output.len(), tx.output.len());
+    assert!(psbt.inputs.iter().all(|i| i.witness_utxo.is_some()));
+}
+
+#[test]
+fn funding_rejects_dust_change() {
+    let (_ms, mp, _cs, cp) = pair();
+    let bond = bond_descriptor(&mp, &cp, 1_800_000_000).unwrap();
+    let part = partida_descriptor(&mp, &cp, 1_700_000_000).unwrap();
+    let other = partida_descriptor(&mp, &cp, 1_710_000_000).unwrap();
+    let chg = bitcoin::Address::p2tr_tweaked(other.output_key(), Network::Regtest);
+    // mandante needs 30_000 + 100 fee/2; +1 sat leftover is dust
+    let req = crate::FundingRequest {
+        bond: Some((bond.script_pubkey(), 20_000)),
+        partida: (part.script_pubkey(), 30_000),
+        mad: None,
+        fee: 200,
+        mandante: crate::FundingCoin {
+            outpoint: dummy_outpoint(),
+            sats: 30_101,
+            script_pubkey: chg.script_pubkey(),
+        },
+        mandante_change: chg.clone(),
+        contratista: Some(crate::FundingCoin {
+            outpoint: OutPoint {
+                txid: Txid::from_byte_array([8u8; 32]),
+                vout: 1,
+            },
+            sats: 20_100,
+            script_pubkey: chg.script_pubkey(),
+        }),
+        contratista_change: Some(chg),
+    };
+    let err = crate::funding_tx(&req).unwrap_err().to_string();
+    assert!(err.contains("dust"), "{err}");
+}
+
+#[test]
+fn funding_rejects_short_input() {
+    let (_ms, mp, _cs, cp) = pair();
+    let bond = bond_descriptor(&mp, &cp, 1_800_000_000).unwrap();
+    let part = partida_descriptor(&mp, &cp, 1_700_000_000).unwrap();
+    let other = partida_descriptor(&mp, &cp, 1_710_000_000).unwrap();
+    let chg = bitcoin::Address::p2tr_tweaked(other.output_key(), Network::Regtest);
+    let req = crate::FundingRequest {
+        bond: Some((bond.script_pubkey(), 20_000)),
+        partida: (part.script_pubkey(), 30_000),
+        mad: None,
+        fee: 200,
+        mandante: crate::FundingCoin {
+            outpoint: dummy_outpoint(),
+            sats: 1_000,
+            script_pubkey: chg.script_pubkey(),
+        },
+        mandante_change: chg.clone(),
+        contratista: Some(crate::FundingCoin {
+            outpoint: OutPoint {
+                txid: Txid::from_byte_array([8u8; 32]),
+                vout: 1,
+            },
+            sats: 500_000,
+            script_pubkey: chg.script_pubkey(),
+        }),
+        contratista_change: Some(chg),
+    };
+    let err = crate::funding_tx(&req).unwrap_err().to_string();
+    assert!(err.contains("mandante input"), "{err}");
+}
+
+#[test]
+fn funding_zero_fee_rejected() {
+    let (_ms, mp, _cs, cp) = pair();
+    let part = partida_descriptor(&mp, &cp, 1_700_000_000).unwrap();
+    let other = partida_descriptor(&mp, &cp, 1_710_000_000).unwrap();
+    let chg = bitcoin::Address::p2tr_tweaked(other.output_key(), Network::Regtest);
+    let req = crate::FundingRequest {
+        bond: None,
+        partida: (part.script_pubkey(), 30_000),
+        mad: None,
+        fee: 0,
+        mandante: crate::FundingCoin {
+            outpoint: dummy_outpoint(),
+            sats: 40_000,
+            script_pubkey: chg.script_pubkey(),
+        },
+        mandante_change: chg,
+        contratista: None,
+        contratista_change: None,
+    };
+    let err = crate::funding_tx(&req).unwrap_err().to_string();
+    assert!(err.contains("fee"), "{err}");
+}
+
+#[test]
+fn funding_partida_only_mandante_pays_fee() {
+    let (_ms, mp, _cs, cp) = pair();
+    let part = partida_descriptor(&mp, &cp, 1_700_000_000).unwrap();
+    let other = partida_descriptor(&mp, &cp, 1_710_000_000).unwrap();
+    let chg = bitcoin::Address::p2tr_tweaked(other.output_key(), Network::Regtest);
+    let req = crate::FundingRequest {
+        bond: None,
+        partida: (part.script_pubkey(), 30_000),
+        mad: None,
+        fee: 200,
+        mandante: crate::FundingCoin {
+            outpoint: dummy_outpoint(),
+            sats: 1_000_000,
+            script_pubkey: chg.script_pubkey(),
+        },
+        mandante_change: chg.clone(),
+        contratista: None,
+        contratista_change: None,
+    };
+    let (tx, _) = crate::funding_tx(&req).unwrap();
+    assert_eq!(tx.input.len(), 1);
+    let p1 = tx
+        .output
+        .iter()
+        .find(|o| o.script_pubkey == part.script_pubkey())
+        .unwrap();
+    assert_eq!(p1.value.to_sat(), 30_000);
+    let change = tx
+        .output
+        .iter()
+        .find(|o| o.script_pubkey == chg.script_pubkey())
+        .unwrap();
+    assert_eq!(change.value.to_sat(), 1_000_000 - 30_000 - 200);
+}
+
+#[test]
+fn funding_mad_amounts_exact() {
+    let (_ms, mp, _cs, cp) = pair();
+    let bond = bond_descriptor(&mp, &cp, 1_800_000_000).unwrap();
+    let part = partida_descriptor(&mp, &cp, 1_700_000_000).unwrap();
+    let mad = crate::mad_escrow(&mp, &cp, 1_800_000_000).unwrap();
+    let other = partida_descriptor(&mp, &cp, 1_710_000_000).unwrap();
+    let chg = bitcoin::Address::p2tr_tweaked(other.output_key(), Network::Regtest);
+    let req = crate::FundingRequest {
+        bond: Some((bond.script_pubkey(), 20_000)),
+        partida: (part.script_pubkey(), 30_000),
+        mad: Some((mad.script_pubkey(), 2_000)),
+        fee: 200,
+        mandante: crate::FundingCoin {
+            outpoint: dummy_outpoint(),
+            sats: 1_000_000,
+            script_pubkey: chg.script_pubkey(),
+        },
+        mandante_change: chg.clone(),
+        contratista: Some(crate::FundingCoin {
+            outpoint: OutPoint {
+                txid: Txid::from_byte_array([8u8; 32]),
+                vout: 1,
+            },
+            sats: 500_000,
+            script_pubkey: chg.script_pubkey(),
+        }),
+        contratista_change: Some(chg.clone()),
+    };
+    let (tx, _) = crate::funding_tx(&req).unwrap();
+    let mad_out = tx
+        .output
+        .iter()
+        .find(|o| o.script_pubkey == mad.script_pubkey())
+        .unwrap();
+    assert_eq!(mad_out.value.to_sat(), 2_000);
+    let p1 = tx
+        .output
+        .iter()
+        .find(|o| o.script_pubkey == part.script_pubkey())
+        .unwrap();
+    assert_eq!(p1.value.to_sat(), 30_000);
+    let b = tx
+        .output
+        .iter()
+        .find(|o| o.script_pubkey == bond.script_pubkey())
+        .unwrap();
+    assert_eq!(b.value.to_sat(), 20_000);
+    // M: 30_000 + 1_000 + 100; C: 20_000 + 1_000 + 100
+    let m_chg = tx
+        .output
+        .iter()
+        .filter(|o| o.script_pubkey == chg.script_pubkey())
+        .map(|o| o.value.to_sat())
+        .collect::<Vec<_>>();
+    assert!(m_chg.contains(&(1_000_000 - 31_100)), "{m_chg:?}");
+    assert!(m_chg.contains(&(500_000 - 21_100)), "{m_chg:?}");
+}
+
+#[test]
+fn file_musig_matches_in_process() {
+    let (m_sk, m_pk, c_sk, c_pk) = pair();
+    let escrow = partida_descriptor(&m_pk, &c_pk, 1_700_000_000).unwrap();
+    let dest = bitcoin::Address::p2tr_tweaked(escrow.output_key(), Network::Regtest);
+    let prev = TxOut {
+        value: Amount::from_sat(20_000),
+        script_pubkey: escrow.script_pubkey(),
+    };
+    let tx = build_key_spend_tx(
+        dummy_outpoint(),
+        Amount::from_sat(20_000),
+        &dest,
+        Amount::from_sat(200),
+    )
+    .unwrap();
+    let sighash = key_spend_sighash(&tx, &prev).unwrap();
+    let mut j = NonceJournal::default();
+    let seed_m = crate::new_nonce_seed(&mut j).unwrap();
+    let seed_c = crate::new_nonce_seed(&mut j).unwrap();
+    let ctx = crate::tweaked_key_agg(&escrow, &m_pk, &c_pk).unwrap();
+    let (_, n_m) = crate::start_round(ctx.clone(), &m_sk, 0, seed_m, &sighash).unwrap();
+    let (_, n_c) = crate::start_round(ctx, &c_sk, 1, seed_c, &sighash).unwrap();
+    let p_c =
+        crate::our_partial_signature(&m_pk, &c_pk, &escrow, &c_sk, 1, seed_c, 0, &n_m, &sighash)
+            .unwrap();
+    let combined = crate::combine_partials(
+        &m_pk, &c_pk, &escrow, &m_sk, 0, seed_m, 1, &n_c, p_c, &sighash,
+    )
+    .unwrap();
+    let in_proc = finish_coop_signature(
+        &m_pk,
+        &c_pk,
+        &escrow,
+        Some(&m_sk),
+        Some(&c_sk),
+        seed_m,
+        seed_c,
+        &sighash,
+    )
+    .unwrap();
+    assert_eq!(combined, in_proc);
+    verify_aggregated(&m_pk, &c_pk, &escrow, &combined, &sighash).unwrap();
+}

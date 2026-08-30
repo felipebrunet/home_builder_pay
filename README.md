@@ -72,6 +72,17 @@ hbp --dir .m accept-quote .c/contracts/<id>/02-quote.json   # principal imports 
 
 hbp --dir .m addresses
 hbp --dir .c status
+
+# unsigned funding PSBT (escrow amounts exact; fee from change). Sign with Core:
+#   bitcoin-cli -rpcwallet=hbp_mandante walletprocesspsbt <psbt>
+#   bitcoin-cli -rpcwallet=hbp_contratista walletprocesspsbt <psbt>
+hbp --dir .m fund --m-outpoint TXID:VOUT --m-sats N --m-prev ADDR --m-change ADDR \
+  --c-outpoint TXID:VOUT --c-sats N --c-prev ADDR --c-change ADDR
+
+# MuSig2 close across two laptops (files). Same-machine demo: coop-close --peer-dir
+hbp --dir .m coop-propose --kind partida --partida 1 --outpoint TXID:VOUT --sats N --dest ADDR
+hbp --dir .c coop-sign .m/04-coop.json
+hbp --dir .m coop-finish .c/04-coop.json
 ```
 
 `verify-funding` checks a raw funding transaction against the quoted amounts (rejects a malicious package amount). `unwind` builds the script-path timeout transaction after `T`.
@@ -92,4 +103,4 @@ Keys are **plaintext** in `.hbp/identity.json`. Toy only. Do not use on mainnet.
 
 ## Not in this MVP
 
-Tor, DHT, Android, on-chain MAD / A+M spend E2E, rolling the bond into the next 2-of-2 without returning it, watchtowers, mainnet.
+Tor, DHT, Android, rolling the bond into the next 2-of-2 without returning it, watchtowers, mainnet. Seed/backup for two-laptop signet is next.

@@ -6,7 +6,7 @@ Este archivo es la fuente de verdad de producto, protocolo, arquitectura, roadma
 
 **Si retomas en una sesión nueva: lee la sección 0 y el checklist de “listo / no listo”. El código en `crates/` es la implementación de MVP-0.**
 
-Última actualización: 2026-08-30 (catálogo 142: 136 PASS, 6 humano; MAD y árbitro minados).
+Última actualización: 2026-08-30 (`hbp fund` PSBT + MuSig2 por archivos; catálogo 136 PASS / 6 humano).
 
 ---
 
@@ -18,8 +18,8 @@ Checkpoint de sesión. Actualizar **esta sección** cada vez que se cierre un hi
 |---|---|
 | Fecha | 2026-08-30 |
 | Rama | `master` |
-| Hito | **MVP-0 + catálogo 142 (136 PASS, 6 humano)** |
-| Verificar al abrir | `cargo test --workspace` (26 unitarios: `hbp-core` 15, `hbp-bitcoin` 11) y `scripts/run_catalog.sh` |
+| Hito | **MVP-0 + catálogo 142 (136 PASS, 6 humano) + `hbp fund` + MuSig2 por archivos** |
+| Verificar al abrir | `cargo test --workspace` (34 unitarios: `hbp-core` 16, `hbp-bitcoin` 18) y `scripts/run_catalog.sh` |
 | Nodo Bitcoin local | `/home/felipe/projects/btc_clients` — Core 31.1 regtest, RPC `:18443`. Los scripts usan `bitcoin-cli`; `hbp` no embebe el cliente. |
 | Origin | `git@github.com-hbp:felipebrunet/home_builder_pay.git` (MIT, público) |
 
@@ -36,6 +36,7 @@ Checkpoint de sesión. Actualizar **esta sección** cada vez que se cierre un hi
 | 2026-08-30 | Quote con tag `hbp-quote` y verificación al accept | `9be02b1` |
 | 2026-08-30 | MAD 3 salidas + `hbp arbiter-close` (A+M / A+C) minados | `scripts/regtest_catalog.sh`, `6b04665` |
 | 2026-08-30 | Remainders: address mala, RBF, reorg, keys perdidas, carreras T2 | `scripts/regtest_remainders.sh`, `a81c0f9` |
+| 2026-08-30 | `hbp fund` PSBT montos exactos; `coop-propose` / `coop-sign` / `coop-finish` (sin `--peer-dir`) | `crates/hbp-bitcoin/src/fund.rs`, CLI |
 
 Default on-chain sigue siendo **`unwind`**. MAD y árbitro están minados. Catálogo: **136 PASS**, **6 NO TEST** (humano). **0 FAIL**.
 
@@ -58,7 +59,9 @@ Default on-chain sigue siendo **`unwind`**. MAD y árbitro están minados. Catá
 - Descriptores: boleta `tr(musig(M,C), pk(C)&&after(T_proyecto))`, partida `tr(musig(M,C), pk(M)&&after(T_partida))`. KeyAgg `[mandante, contratista]`.
 - MuSig2 key-path (64 B) y unwind script-path (CLTV unix, witness 3 ítems).
 - `NonceJournal`: reutilizar seed aborta.
-- CLI: `init`, `new --dispute unwind\|mad\|arbiter`, `propose-arbiter`, `accept-arbiter`, `add-partida`, `offer`, `accept`, `commit`, `import`, `quote`, `accept-quote`, `addresses`, `status`, `verify-funding`, `unwind`, `coop-close --peer-dir`, `arbiter-close --with am\|ac --arbiter-dir`.
+- CLI: `init`, `new --dispute unwind\|mad\|arbiter`, `propose-arbiter`, `accept-arbiter`, `add-partida`, `offer`, `accept`, `commit`, `import`, `quote`, `accept-quote`, `addresses`, `status`, `verify-funding`, `fund`, `coop-propose` / `coop-sign` / `coop-finish`, `unwind`, `coop-close --peer-dir` (atajo misma máquina), `arbiter-close --with am\|ac --arbiter-dir`.
+- `hbp fund`: PSBT sin firmar; salidas de escrow **exactas** (boleta + partida [+ MAD]); fee y change desde otros inputs. Dust &lt;546 se rechaza, no se pliega. stdout = PSBT en base64 para `bitcoin-cli walletprocesspsbt`. `--partida-only`: solo el mandante.
+- MuSig2 por archivos: `04-coop.json` (pubnonces + parciales, no el seed). El seed queda en `NonceJournal.pending[sighash]`. `coop-close --peer-dir` sigue para el demo en una máquina.
 - `DisputePolicy::Arbiter { window_secs }` en el body; pubkey en `ArbiterNomination` (`03-arbiter.json`). Sin las dos firmas `hbp-arbiter` no hay addresses.
 - MAD: tercera salida `2 * mad_sats`; key path coop split; tras T solo `pk(NUMS)&&after(T)`.
 - `validate_funding_tx` rechaza monto de partida distinto al quote. `--partida-only` exige boleta ya fondeada.
@@ -69,8 +72,6 @@ Default on-chain sigue siendo **`unwind`**. MAD y árbitro están minados. Catá
 
 ### No listo
 
-- CLI MuSig2 **por archivos** (sin `--peer-dir`). Hoy el demo en una máquina usa `coop-close --peer-dir`.
-- PSBT `hbp fund` (el fondeo exacto aún se arma con `bitcoin-cli` / scripts).
 - `hbp listen` / `connect`, Tor, DHT.
 - Seed BIP39, boleta que rueda al siguiente 2-de-2, GUI, Android, mainnet.
 - 6 ítems del catálogo sin test (humano/off-chain: obra adelantada, coima, herederos, fotos, tribunal): [SCENARIOS.md](SCENARIOS.md).
@@ -78,8 +79,8 @@ Default on-chain sigue siendo **`unwind`**. MAD y árbitro están minados. Catá
 ### Cómo seguir en la próxima sesión
 
 1. Leer esta sección 0, [DISPUTE.md](DISPUTE.md) y [SCENARIOS.md](SCENARIOS.md).
-2. `scripts/run_catalog.sh` (unit + CLI + MAD/árbitro + remainders).
-3. Siguiente código: `hbp fund` (PSBT montos exactos) **o** MuSig2 por archivos (ítem 1).
+2. `scripts/run_catalog.sh` (unit + CLI + MAD/árbitro + remainders; el fondeo P1 ya usa `hbp fund`).
+3. Siguiente código: seed/backup (BIP39 o descriptor), después signet en dos laptops, después `hbp listen` / `connect`. Tor más tarde.
 4. No abrir Tor, DHT ni GUI.
 
 El usuario acordó: canal = archivos ahora; Tor p2p después; DHT solo si hay marketplace. MAD nunca a wallet del autor. Árbitro solo si ambos nombran a la misma persona antes de los UTXO.
@@ -365,7 +366,9 @@ hbp --dir <carpeta> <comando>
 | `addresses` | ambos | boleta + partidas `bcrt1p`/`tb1p` |
 | `status` | ambos | JSON de estado |
 | `verify-funding --tx-hex --partida` | ambos | valida y marca funded |
-| `coop-close --kind --peer-dir …` | demo misma máquina | MuSig2 key-path |
+| `fund --m-outpoint … [--c-outpoint …]` | ambos (PSBT 2 wallets) | stdout PSBT base64; escrow exacto |
+| `coop-propose` / `coop-sign FILE` / `coop-finish FILE` | cada laptop | MuSig2 por `04-coop.json` |
+| `coop-close --kind --peer-dir …` | demo misma máquina | MuSig2 key-path (atajo) |
 | `arbiter-close --kind --with am\|ac --arbiter-dir` | A+M o A+C | script path tras T |
 | `unwind --kind --outpoint --sats --dest --fee` | dueño del unwind | tx hex |
 
@@ -377,21 +380,23 @@ Claves en claro. Toy. No mainnet.
 
 `cargo test --workspace`
 
-**hbp-core** (15)
+**hbp-core** (16)
 
 - parseo de montos y conversión fiat→sats; boleta = % del total
 - JSON canónico estable; `DisputePolicy::Arbiter` **sin** pubkey
 - nomination fuera del `contract_id`; A ≠ M y A ≠ C
 - A se nombra solo con dos firmas y **antes** de fondear
-- nonce reuse aborta
+- nonce reuse aborta; seed pendiente de un `coop-propose` se guarda y se consume
 - no se fondea partida sin boleta, ni la 2 si la 1 está abierta
 - happy path dos partidas + release de boleta; boleta se suelta si P2 nunca se fondeó
 
-**hbp-bitcoin** (11)
+**hbp-bitcoin** (18)
 
 - output key MuSig2+tweak = rust-bitcoin Taproot
 - unwind script-path; cierre cooperativo y split 80/20
 - funding con partida a 1 sat se rechaza
+- PSBT de fondeo: montos de escrow exactos; dust se rechaza; MAD 50/50; `--partida-only`
+- MuSig2 por archivos = mismo sig que el helper in-process
 - firmas de contrato, quote (`hbp-quote`) y nomination `hbp-arbiter` round-trip
 - árbol con A cambia la address; sin A nombrado, error
 - hoja MAD = NUMS
@@ -414,13 +419,13 @@ Horizonte: de “el protocolo existe en tests” a “dos personas lo usan en si
 - CLI de contrato + quote + addresses + verify-funding + unwind
 - Tests locales (sin nodo)
 
-### Fase 1 — ciclo on-chain en regtest (siguiente)
+### Fase 1 — ciclo on-chain en regtest
 
 Usar `/home/felipe/projects/btc_clients`.
 
-1. CLI de recepción MuSig2 por archivos (`coop-nonce` / `coop-sign` / `coop-finish`).
-2. Construir el PSBT de fondeo (dos inputs, dos escrows, change) en vez de “tráeme un hex”.
-3. Test de integración: `bitcoin-cli` fondea, mina, `verify-funding`, unwind real minado, cooperative close minado.
+1. ~~CLI de recepción MuSig2 por archivos (`coop-propose` / `coop-sign` / `coop-finish`).~~
+2. ~~PSBT de fondeo (`hbp fund`: escrow exacto, fee desde change).~~
+3. Test de integración: `bitcoin-cli` fondea, mina, `verify-funding`, unwind real minado, cooperative close minado. **Hecho** (catálogo + remainders; P1 usa `hbp fund`).
 4. `hbp watch` / recordatorio de T (el timeout no se broadcastea solo).
 5. Importar quote/estado sin pisar un proyecto ya avanzado.
 
@@ -445,7 +450,7 @@ Android **después** de desktop estable (wallet + Tor + verificación de cadena 
 
 ### Fase 4 — producto más rico
 
-- Árbitro y MAD: E2E minados ([SCENARIOS.md](SCENARIOS.md)). Siguiente producto: `hbp fund` PSBT.
+- Árbitro y MAD: E2E minados ([SCENARIOS.md](SCENARIOS.md)). `hbp fund` y MuSig2 por archivos: hechos.
 - Boleta que **rueda** al 2-de-2 de la siguiente partida (splice) en vez de quedarse en un UTXO estático.
 - Fotos/hashes de evidencia en `reception-proposed` (humanos, no el script).
 - Watchtower casero o calendario para no perder el unwind.

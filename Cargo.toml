@@ -13,6 +13,7 @@ hbp-core = { path = "crates/hbp-core" }
 hbp-bitcoin = { path = "crates/hbp-bitcoin" }
 
 anyhow = "1"
+base64 = "0.22"
 bitcoin = { version = "0.32.8", features = ["std", "rand-std", "serde"] }
 clap = { version = "4", features = ["derive"] }
 getrandom = "0.2"

@@ -2,6 +2,7 @@
 
 mod convert;
 mod error;
+mod fund;
 mod identity;
 mod musig;
 mod sign_contract;
@@ -10,10 +11,12 @@ mod taproot;
 mod validate;
 
 pub use error::Error;
+pub use fund::{build_funding_psbt, funding_tx, FundingCoin, FundingRequest};
 pub use identity::{generate_identity, Identity};
 pub use musig::{
-    agg_nonce, consume_nonce_seed, encode_pubnonce, finish_coop_signature, new_nonce_seed,
-    parse_pubnonce, signer_index, verify_aggregated, CoopSession,
+    agg_nonce, combine_partials, consume_nonce_seed, encode_partial, encode_pubnonce,
+    finish_coop_signature, new_nonce_seed, our_partial_signature, parse_partial, parse_pubnonce,
+    signer_index, start_round, verify_aggregated, CoopFile, CoopSession,
 };
 pub use sign_contract::{
     sign_arbiter, sign_body, sign_quote, verify_arbiter, verify_body, verify_quote,

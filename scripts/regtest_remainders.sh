@@ -391,4 +391,23 @@ PY
 pass 136 reorg_reception_unconfirmed
 rpc reconsiderblock "$TIP" >/dev/null 2>&1 || rpc generatetoaddress 1 "$MINE_ADDR" >/dev/null
 
+# File MuSig2 (no --peer-dir) + hbp fund --partida-only, mined.
+fresh filemusig
+NOW="$(chain_now)"
+hbp_offer_60k "$((NOW+120))" "$((NOW+240))" "$((NOW+360))" filemusig
+hbp_read_addrs
+F1="$(fund_bond_and_p1 "$BOND_ADDR" "$P1_ADDR" filemusig)"
+rpc generatetoaddress 1 "$MINE_ADDR" >/dev/null
+$HBP --dir .m verify-funding --tx-hex "$(hex_of "$F1")" --partida 1 >/dev/null
+$HBP --dir .c verify-funding --tx-hex "$(hex_of "$F1")" --partida 1 >/dev/null
+P1_VOUT="$(vout_of "$F1" "$P1_ADDR")"
+C_DEST="$(wrpc hbp_contratista getnewaddress)"
+P1H="$(coop_close_files partida "${F1}:${P1_VOUT}" "$PARTIDA_SATS" "$C_DEST" "$FEE_SATS" 1)"
+rpc sendrawtransaction "$P1H" >/dev/null
+rpc generatetoaddress 1 "$MINE_ADDR" >/dev/null
+P2_TXID="$(fund_partida_only filemusig 2)"
+rpc generatetoaddress 1 "$MINE_ADDR" >/dev/null
+$HBP --dir .m verify-funding --tx-hex "$(hex_of "$P2_TXID")" --partida 2 --partida-only >/dev/null
+echo "PASS file_musig_and_fund_partida_only"
+
 echo "REGTEST_REMAINDERS_OK"

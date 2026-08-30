@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use crate::contract::sha256_bytes;
 use crate::Error;
@@ -11,6 +11,9 @@ use crate::Error;
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct NonceJournal {
     used_seed_hashes: BTreeSet<String>,
+    /// sighash hex → seed hex for an in-flight file MuSig2 session.
+    #[serde(default)]
+    pending: BTreeMap<String, String>,
 }
 
 impl NonceJournal {
@@ -34,6 +37,33 @@ impl NonceJournal {
     pub fn is_empty(&self) -> bool {
         self.used_seed_hashes.is_empty()
     }
+
+    pub fn stash_pending(&mut self, sighash_hex: &str, seed: &[u8; 32]) {
+        self.pending
+            .insert(sighash_hex.to_string(), hex::encode(seed));
+    }
+
+    pub fn take_pending(&mut self, sighash_hex: &str) -> crate::Result<[u8; 32]> {
+        let s = self.pending.remove(sighash_hex).ok_or_else(|| {
+            Error::protocol("no pending MuSig2 nonce for this sighash; run coop-propose first")
+        })?;
+        let bytes = hex::decode(s.trim())?;
+        let arr: [u8; 32] = bytes
+            .try_into()
+            .map_err(|_| Error::protocol("pending nonce seed must be 32 bytes"))?;
+        Ok(arr)
+    }
+
+    pub fn peek_pending(&self, sighash_hex: &str) -> crate::Result<[u8; 32]> {
+        let s = self.pending.get(sighash_hex).ok_or_else(|| {
+            Error::protocol("no pending MuSig2 nonce for this sighash; run coop-propose first")
+        })?;
+        let bytes = hex::decode(s.trim())?;
+        let arr: [u8; 32] = bytes
+            .try_into()
+            .map_err(|_| Error::protocol("pending nonce seed must be 32 bytes"))?;
+        Ok(arr)
+    }
 }
 
 #[cfg(test)]
@@ -46,5 +76,16 @@ mod tests {
         let seed = [7u8; 32];
         j.consume_seed(&seed).unwrap();
         assert!(matches!(j.consume_seed(&seed), Err(Error::NonceReused)));
+    }
+
+    #[test]
+    fn pending_seed_roundtrip() {
+        let mut j = NonceJournal::default();
+        let seed = [9u8; 32];
+        j.consume_seed(&seed).unwrap();
+        j.stash_pending("aa", &seed);
+        assert_eq!(j.peek_pending("aa").unwrap(), seed);
+        assert_eq!(j.take_pending("aa").unwrap(), seed);
+        assert!(j.take_pending("aa").is_err());
     }
 }

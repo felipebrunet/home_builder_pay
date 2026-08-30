@@ -22,6 +22,34 @@ pub struct CoopSession {
     pub partial_sig: Option<String>,
 }
 
+/// File passed between laptops for a MuSig2 close (no `--peer-dir`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CoopFile {
+    pub contract_id: String,
+    pub kind: String,
+    pub partida_id: Option<u32>,
+    pub outpoint: String,
+    pub sats: u64,
+    pub dest: String,
+    pub fee: u64,
+    #[serde(default)]
+    pub refund: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pay_sats: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub refund_dest: Option<String>,
+    pub tx_hex: String,
+    pub sighash: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mandante_pubnonce: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub contratista_pubnonce: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mandante_partial: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub contratista_partial: Option<String>,
+}
+
 pub fn signer_index(role: Role) -> usize {
     match role {
         Role::Mandante => 0,
@@ -61,6 +89,66 @@ pub fn start_round(
     .map_err(|e| Error::Musig(e.to_string()))?;
     let pubnonce = round.our_public_nonce();
     Ok((round, pubnonce))
+}
+
+pub fn our_partial_signature(
+    mandante: &PublicKey,
+    contratista: &PublicKey,
+    escrow: &crate::taproot::Escrow,
+    secret: &SecretKey,
+    our_index: usize,
+    our_seed: [u8; 32],
+    peer_index: usize,
+    peer_pubnonce: &PubNonce,
+    message: &[u8; 32],
+) -> Result<PartialSignature, Error> {
+    let ctx = tweaked_key_agg(escrow, mandante, contratista)?;
+    let (mut round, _) = start_round(ctx, secret, our_index, our_seed, message)?;
+    round
+        .receive_nonce(peer_index, peer_pubnonce.clone())
+        .map_err(|e| Error::Musig(e.to_string()))?;
+    let second: SecondRound<[u8; 32]> = round
+        .finalize(to_musig_sk(secret)?, *message)
+        .map_err(|e| Error::Musig(e.to_string()))?;
+    Ok(second.our_signature())
+}
+
+pub fn combine_partials(
+    mandante: &PublicKey,
+    contratista: &PublicKey,
+    escrow: &crate::taproot::Escrow,
+    secret: &SecretKey,
+    our_index: usize,
+    our_seed: [u8; 32],
+    peer_index: usize,
+    peer_pubnonce: &PubNonce,
+    peer_partial: PartialSignature,
+    message: &[u8; 32],
+) -> Result<[u8; 64], Error> {
+    let ctx = tweaked_key_agg(escrow, mandante, contratista)?;
+    let (mut round, _) = start_round(ctx, secret, our_index, our_seed, message)?;
+    round
+        .receive_nonce(peer_index, peer_pubnonce.clone())
+        .map_err(|e| Error::Musig(e.to_string()))?;
+    let mut second: SecondRound<[u8; 32]> = round
+        .finalize(to_musig_sk(secret)?, *message)
+        .map_err(|e| Error::Musig(e.to_string()))?;
+    second
+        .receive_signature(peer_index, peer_partial)
+        .map_err(|e| Error::Musig(e.to_string()))?;
+    let compact: CompactSignature = second.finalize().map_err(|e| Error::Musig(e.to_string()))?;
+    Ok(compact.serialize())
+}
+
+pub fn encode_partial(p: &PartialSignature) -> String {
+    format!("{p:x}")
+}
+
+pub fn parse_partial(hex_str: &str) -> Result<PartialSignature, Error> {
+    hex_str
+        .trim()
+        .parse::<PartialSignature>()
+        .map_err(|e| Error::Musig(e.to_string()))
 }
 
 pub fn finish_coop_signature(

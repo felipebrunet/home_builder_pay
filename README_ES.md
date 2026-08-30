@@ -70,6 +70,15 @@ hbp --dir .m accept-quote .c/contracts/<id>/02-quote.json   # el mandante import
 
 hbp --dir .m addresses
 hbp --dir .c status
+
+# PSBT de fondeo sin firmar (escrow exacto; fee desde el change). Firmar con Core:
+hbp --dir .m fund --m-outpoint TXID:VOUT --m-sats N --m-prev ADDR --m-change ADDR \
+  --c-outpoint TXID:VOUT --c-sats N --c-prev ADDR --c-change ADDR
+
+# Cierre MuSig2 entre dos laptops (archivos). Demo en una máquina: coop-close --peer-dir
+hbp --dir .m coop-propose --kind partida --partida 1 --outpoint TXID:VOUT --sats N --dest ADDR
+hbp --dir .c coop-sign .m/04-coop.json
+hbp --dir .m coop-finish .c/04-coop.json
 ```
 
 `verify-funding` comprueba una transacción de fondeo en crudo contra los montos cotizados (rechaza un monto de partida malicioso). `unwind` arma la transacción de timeout por script path después de `T`.
@@ -90,4 +99,4 @@ Las claves están en **texto plano** en `.hbp/identity.json`. Solo para pruebas.
 
 ## Fuera de este MVP
 
-Tor, DHT, Android, E2E on-chain de MAD y de gasto A+M, boleta que rueda al siguiente 2-de-2 sin devolverse, watchtowers, mainnet.
+Tor, DHT, Android, boleta que rueda al siguiente 2-de-2 sin devolverse, watchtowers, mainnet. Lo siguiente es seed/backup para signet en dos laptops.
