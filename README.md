@@ -8,7 +8,7 @@ This is an MVP: desktop CLI, **regtest/signet**, files passed by hand. No Tor, n
 
 Full protocol, architecture, roadmap, and **where the last session left off**: [docs/PROJECT.md](docs/PROJECT.md) (start at section 0). That document is currently in Spanish.
 
-Current milestone: **MVP-0** plus a mined regtest happy path. Same-machine cooperative close: `hbp coop-close --peer-dir`. Walkthrough: [docs/REGTEST_HAPPY_PATH.md](docs/REGTEST_HAPPY_PATH.md) (Spanish).
+Current milestone: **MVP-0** plus mined regtest demos (happy path and contractor-abandons). Walkthroughs (Spanish): [docs/REGTEST_HAPPY_PATH.md](docs/REGTEST_HAPPY_PATH.md), [docs/REGTEST_CONTRACTOR_ABANDONS.md](docs/REGTEST_CONTRACTOR_ABANDONS.md).
 
 ## Protocol (short)
 

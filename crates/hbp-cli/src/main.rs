@@ -128,6 +128,9 @@ enum Cmd {
         fee: u64,
         #[arg(long)]
         partida: Option<u32>,
+        /// Optional other party's dir, to copy state.json after the unwind.
+        #[arg(long)]
+        peer_dir: Option<PathBuf>,
     },
 }
 
@@ -188,7 +191,10 @@ fn run() -> Result<()> {
             dest,
             fee,
             partida,
-        } => cmd_unwind(&store, &kind, &outpoint, sats, &dest, fee, partida),
+            peer_dir,
+        } => cmd_unwind(
+            &store, &kind, &outpoint, sats, &dest, fee, partida, peer_dir,
+        ),
     }
 }
 
@@ -592,18 +598,28 @@ fn cmd_unwind(
     dest: &str,
     fee: u64,
     partida: Option<u32>,
+    peer_dir: Option<PathBuf>,
 ) -> Result<()> {
     let id = store.load_identity()?;
-    let project = store.load_project()?;
+    let mut project = store.load_project()?;
     let body = &project.contract.body;
     let (m, c) = keys_from_body(body)?;
+    let role = party_role(&id, body)?;
     let escrow = match kind {
         "partida" => {
+            if role != Role::Mandante {
+                bail!("only the mandante can unwind a partida");
+            }
             let pid = partida.context("--partida required")?;
             let spec = body.partida(pid)?;
             partida_descriptor(&m, &c, spec.plazo_unix)?
         }
-        "bond" => bond_descriptor(&m, &c, body.t_project)?,
+        "bond" => {
+            if role != Role::Contratista {
+                bail!("only the contratista can unwind the bond; timeout is not a bank boleta");
+            }
+            bond_descriptor(&m, &c, body.t_project)?
+        }
         other => bail!("kind must be partida|bond, got {other}"),
     };
     let dest = Address::from_str(dest)
@@ -622,7 +638,25 @@ fn cmd_unwind(
         script_pubkey: escrow.script_pubkey(),
     };
     let signed = sign_unwind(&escrow, tx, &prev, &id.secret()?)?;
-    println!("{}", serialize_hex(&signed));
+    let hex = serialize_hex(&signed);
+    let txid = signed.compute_txid().to_string();
+    match kind {
+        "partida" => {
+            let pid = partida.unwrap();
+            project.mark_partida_unwound(pid, txid.clone())?;
+        }
+        "bond" => project.mark_bond_unwound(txid.clone())?,
+        _ => {}
+    }
+    store.save_project(&project)?;
+    if let Some(peer) = peer_dir {
+        let peer_store = Store::new(peer);
+        if peer_store.root.join("CURRENT").exists() {
+            let _ = peer_store.save_project(&project);
+        }
+    }
+    println!("{hex}");
+    eprintln!("unwind {kind} txid {txid} locktime {}", signed.lock_time);
     Ok(())
 }
 
