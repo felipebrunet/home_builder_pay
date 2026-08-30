@@ -8,7 +8,7 @@ Esto es un MVP: CLI de escritorio, **regtest/signet**, archivos pasados a mano. 
 
 Protocolo, arquitectura, hoja de ruta y **en qué quedó la última sesión**: [docs/PROJECT.md](docs/PROJECT.md) (empezar por la sección 0).
 
-Hito actual: **MVP-0** más escenarios **minados** en regtest (feliz e infelices). Índice: [docs/REGTEST_SCENARIOS.md](docs/REGTEST_SCENARIOS.md).
+Hito actual: **MVP-0** más escenarios minados. La disputa (default unwind; MAD / árbitro opcionales) la propone el oferente: [docs/DISPUTE.md](docs/DISPUTE.md). Índice: [docs/REGTEST_SCENARIOS.md](docs/REGTEST_SCENARIOS.md).
 
 ## Protocolo (resumen)
 

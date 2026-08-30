@@ -220,10 +220,54 @@ fn contract_signatures_roundtrip() {
         }],
         mandante_pubkey: hex::encode(m_pk.serialize()),
         contratista_pubkey: Some(hex::encode(c_pk.serialize())),
-        arbiter_pubkey: None,
+        dispute: hbp_core::DisputePolicy::Unwind,
     };
     let ms = sign_body(&m_sk, &body).unwrap();
     let cs = sign_body(&c_sk, &body).unwrap();
     verify_body(&body.mandante_pubkey, &ms, &body).unwrap();
     verify_body(body.contratista_pubkey.as_ref().unwrap(), &cs, &body).unwrap();
+}
+
+#[test]
+fn arbiter_tree_changes_address() {
+    let (_ms, mp, _cs, cp) = pair();
+    let secp = Secp256k1::new();
+    let ask = SecretKey::new(&mut OsRng);
+    let ap = PublicKey::from_secret_key(&secp, &ask);
+    let plain = partida_descriptor(&mp, &cp, 1_700_000_000).unwrap();
+    let with_a = crate::taproot::partida_escrow_from_body(
+        &hbp_core::ContractBody {
+            network: hbp_core::Network::Regtest,
+            unit: Unit::Usd,
+            bond_bps: 1000,
+            t_project: 1_800_000_000,
+            partidas: vec![hbp_core::PartidaSpec {
+                id: 1,
+                description: "x".into(),
+                amount_minor: 100,
+                plazo_unix: 1_700_000_000,
+            }],
+            mandante_pubkey: hex::encode(mp.serialize()),
+            contratista_pubkey: Some(hex::encode(cp.serialize())),
+            dispute: hbp_core::DisputePolicy::Arbiter {
+                pubkey: hex::encode(ap.serialize()),
+                window_secs: 15,
+            },
+        },
+        1,
+    )
+    .unwrap();
+    assert_ne!(
+        plain.output_key().to_x_only_public_key(),
+        with_a.output_key().to_x_only_public_key()
+    );
+    assert_output_key_matches(&with_a, &mp, &cp).unwrap();
+}
+
+#[test]
+fn mad_leaf_is_nums() {
+    let (_ms, mp, _cs, cp) = pair();
+    let mad = crate::mad_escrow(&mp, &cp, 1_800_000_000).unwrap();
+    assert_output_key_matches(&mad, &mp, &cp).unwrap();
+    verify_unwind_control_block(&mad).unwrap();
 }

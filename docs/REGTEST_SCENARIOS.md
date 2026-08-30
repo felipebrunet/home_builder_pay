@@ -19,7 +19,9 @@ Robos que el CLI rechaza (minados como chequeo en #2 y #4):
 - mandante `unwind --kind bond` → *timeout is not a bank boleta*
 - contratista `unwind --kind partida` → *only the mandante can unwind a partida*
 
-## Si nadie firma: unwind, no MAD
+Política de disputa (offeror): [DISPUTE.md](DISPUTE.md). Los E2E de esta tabla usan el default `unwind`.
+
+## Si nadie firma: unwind, no MAD (salvo cláusula `mad`)
 
 Hoy, si el pozo está locked y ambos se niegan a cooperar:
 

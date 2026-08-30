@@ -21,8 +21,10 @@ pub use spend::{
     key_spend_sighash, sign_unwind, verify_key_spend_sig, verify_unwind_control_block, UnwindRole,
 };
 pub use taproot::{
-    assert_output_key_matches, bond_address, bond_descriptor, keys_from_body, partida_address,
-    partida_descriptor, to_btc_network, tweaked_key_agg, Escrow, EscrowKind,
+    assert_output_key_matches, bond_address, bond_descriptor, bond_escrow_from_body,
+    keys_from_body, mad_address, mad_escrow, mad_escrow_from_body, nums_xonly, partida_address,
+    partida_descriptor, partida_escrow_from_body, to_btc_network, tweaked_key_agg, Escrow,
+    EscrowKind,
 };
 pub use validate::{validate_funding_tx, ExpectedFunding, FundingIssue};
 

@@ -60,6 +60,57 @@ pub struct PartidaSpec {
     pub plazo_unix: u32,
 }
 
+/// Default 7 days between arbiter-window start (plazo) and last-resort unwind.
+pub const DEFAULT_ARBITER_WINDOW_SECS: u32 = 7 * 24 * 60 * 60;
+
+/// Offeror proposes this; accept locks it. Cannot change after funding (address depends on it).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "policy", rename_all = "snake_case")]
+pub enum DisputePolicy {
+    /// Timeout: each recovers their own funds. Default.
+    Unwind,
+    /// Same unwind, plus a small symmetric stake that becomes unspendable if nobody cooperates after T.
+    Mad {
+        /// Basis points of partida 1 sats, **each** party (100 = 1%).
+        mad_bps: u16,
+    },
+    /// After plazo, arbiter+one party can spend; after plazo+window, last-resort unwind.
+    Arbiter { pubkey: String, window_secs: u32 },
+}
+
+impl Default for DisputePolicy {
+    fn default() -> Self {
+        Self::Unwind
+    }
+}
+
+impl DisputePolicy {
+    pub fn validate(&self, mandante: &str) -> Result<()> {
+        match self {
+            Self::Unwind => Ok(()),
+            Self::Mad { mad_bps } => {
+                if *mad_bps == 0 || *mad_bps > 500 {
+                    return Err(Error::protocol("mad_bps must be in 1..=500 (0.01%–5%)"));
+                }
+                Ok(())
+            }
+            Self::Arbiter {
+                pubkey,
+                window_secs,
+            } => {
+                decode_compressed_pubkey(pubkey)?;
+                if pubkey == mandante {
+                    return Err(Error::protocol("arbiter must not be the mandante"));
+                }
+                if *window_secs == 0 {
+                    return Err(Error::protocol("arbiter window_secs must be > 0"));
+                }
+                Ok(())
+            }
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ContractBody {
     pub network: Network,
@@ -71,8 +122,9 @@ pub struct ContractBody {
     pub mandante_pubkey: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub contratista_pubkey: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub arbiter_pubkey: Option<String>,
+    /// Offeror-defined; default unwind. Both lock it at accept.
+    #[serde(default)]
+    pub dispute: DisputePolicy,
 }
 
 impl ContractBody {
@@ -140,8 +192,11 @@ impl ContractBody {
                 return Err(Error::protocol("mandante and contratista keys must differ"));
             }
         }
-        if let Some(pk) = &self.arbiter_pubkey {
-            decode_compressed_pubkey(pk)?;
+        self.dispute.validate(&self.mandante_pubkey)?;
+        if let DisputePolicy::Arbiter { pubkey, .. } = &self.dispute {
+            if self.contratista_pubkey.as_ref() == Some(pubkey) {
+                return Err(Error::protocol("arbiter must not be the contratista"));
+            }
         }
         Ok(())
     }
@@ -154,7 +209,7 @@ impl ContractBody {
             t_project: self.t_project,
             partidas: self.partidas.clone(),
             mandante_pubkey: self.mandante_pubkey.clone(),
-            arbiter_pubkey: self.arbiter_pubkey.clone(),
+            dispute: self.dispute.clone(),
         }
     }
 }
@@ -168,7 +223,7 @@ pub struct Terms {
     pub t_project: u32,
     pub partidas: Vec<PartidaSpec>,
     pub mandante_pubkey: String,
-    pub arbiter_pubkey: Option<String>,
+    pub dispute: DisputePolicy,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -209,6 +264,9 @@ pub struct Quote {
     pub quoted_at_unix: u32,
     pub mandante_sig: Option<String>,
     pub contratista_sig: Option<String>,
+    /// Per-party MAD stake (sats). Output on-chain is `2 * mad_sats` if present.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mad_sats: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -240,6 +298,28 @@ impl Quote {
                     "partida {} sats below dust",
                     spec.id
                 )));
+            }
+        }
+        match &body.dispute {
+            DisputePolicy::Mad { mad_bps } => {
+                let Some(each) = self.mad_sats else {
+                    return Err(Error::protocol("mad policy requires quote.mad_sats"));
+                };
+                let p1 = self.partida_sats(body.partidas[0].id)?;
+                let expect = p1
+                    .checked_mul(u64::from(*mad_bps))
+                    .and_then(|v| v.checked_div(10_000))
+                    .ok_or_else(|| Error::protocol("mad_sats overflow"))?;
+                if each != expect || each < 546 {
+                    return Err(Error::protocol(format!(
+                        "mad_sats {each} != {expect} (partida1 * mad_bps / 10000)"
+                    )));
+                }
+            }
+            _ => {
+                if self.mad_sats.is_some() {
+                    return Err(Error::protocol("mad_sats set but dispute is not mad"));
+                }
             }
         }
         Ok(())
@@ -338,7 +418,7 @@ mod tests {
             }],
             mandante_pubkey: pk(1),
             contratista_pubkey: Some(pk(2)),
-            arbiter_pubkey: None,
+            dispute: DisputePolicy::Unwind,
         };
         let a = canonical_json(&body).unwrap();
         let b = canonical_json(&body).unwrap();

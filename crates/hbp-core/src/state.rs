@@ -402,7 +402,7 @@ mod tests {
             ],
             mandante_pubkey: pk(1),
             contratista_pubkey: Some(pk(2)),
-            arbiter_pubkey: None,
+            dispute: crate::DisputePolicy::Unwind,
         };
         let contract = SignedContract {
             body,
@@ -430,6 +430,7 @@ mod tests {
             quoted_at_unix: 1_700_000_000,
             mandante_sig: Some("aa".into()),
             contratista_sig: Some("bb".into()),
+            mad_sats: None,
         }
     }
 

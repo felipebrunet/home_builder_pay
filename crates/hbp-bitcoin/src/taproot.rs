@@ -5,7 +5,7 @@ use bitcoin::key::TapTweak;
 use bitcoin::secp256k1::{PublicKey, Secp256k1, XOnlyPublicKey};
 use bitcoin::taproot::{LeafVersion, TaprootBuilder, TaprootSpendInfo};
 use bitcoin::{Address, Network as BtcNetwork, ScriptBuf};
-use hbp_core::{ContractBody, Network};
+use hbp_core::{ContractBody, DisputePolicy, Network};
 use miniscript::Miniscript;
 use musig2::KeyAggContext;
 
@@ -18,6 +18,8 @@ pub enum EscrowKind {
     Partida,
     /// Global boleta. Unwind after T_project: contratista alone.
     Bond,
+    /// Symmetric dispute stake. After T, NUMS leaf = burn if no coop.
+    Mad,
 }
 
 #[derive(Clone)]
@@ -102,21 +104,102 @@ fn build_escrow(
     locktime: u32,
     kind: EscrowKind,
 ) -> Result<Escrow, Error> {
+    let script = unwind_script(unwind_key, locktime)?;
+    finalize_escrow(mandante, contratista, vec![script], 0, locktime, kind)
+}
+
+fn and_two_keys_after(
+    a: &XOnlyPublicKey,
+    b: &XOnlyPublicKey,
+    locktime: u32,
+) -> Result<ScriptBuf, Error> {
+    let s = format!("and_v(v:pk({a}),and_v(v:pk({b}),after({locktime})))");
+    let ms = Miniscript::<XOnlyPublicKey, miniscript::Tap>::from_str(&s)
+        .map_err(|e| Error::Miniscript(e.to_string()))?;
+    Ok(ms.encode())
+}
+
+fn finalize_escrow(
+    mandante: &PublicKey,
+    contratista: &PublicKey,
+    leaves: Vec<ScriptBuf>,
+    unwind_idx: usize,
+    locktime: u32,
+    kind: EscrowKind,
+) -> Result<Escrow, Error> {
     let secp = Secp256k1::new();
     let internal = musig_internal_key(mandante, contratista)?;
-    let script = unwind_script(unwind_key, locktime)?;
-    let spend_info = TaprootBuilder::new()
-        .add_leaf(0, script.clone())
-        .map_err(|e| Error::Taproot(e.to_string()))?
+    if leaves.is_empty() {
+        return Err(Error::Taproot("no leaves".into()));
+    }
+    let mut b = TaprootBuilder::new();
+    match leaves.len() {
+        1 => {
+            b = b
+                .add_leaf(0, leaves[0].clone())
+                .map_err(|e| Error::Taproot(e.to_string()))?;
+        }
+        2 => {
+            b = b
+                .add_leaf(1, leaves[0].clone())
+                .map_err(|e| Error::Taproot(e.to_string()))?
+                .add_leaf(1, leaves[1].clone())
+                .map_err(|e| Error::Taproot(e.to_string()))?;
+        }
+        3 => {
+            b = b
+                .add_leaf(1, leaves[0].clone())
+                .map_err(|e| Error::Taproot(e.to_string()))?
+                .add_leaf(2, leaves[1].clone())
+                .map_err(|e| Error::Taproot(e.to_string()))?
+                .add_leaf(2, leaves[2].clone())
+                .map_err(|e| Error::Taproot(e.to_string()))?;
+        }
+        n => return Err(Error::Taproot(format!("unsupported leaf count {n}"))),
+    }
+    let spend_info = b
         .finalize(&secp, internal)
         .map_err(|_| Error::Taproot("not finalizable".into()))?;
-    let lt = bitcoin::absolute::LockTime::from_consensus(locktime);
     Ok(Escrow {
         kind,
         spend_info,
-        unwind_script: script,
-        locktime: lt,
+        unwind_script: leaves[unwind_idx].clone(),
+        locktime: bitcoin::absolute::LockTime::from_consensus(locktime),
     })
+}
+
+/// BIP341 NUMS x-only (unspendable). Used as the MAD burn leaf.
+pub fn nums_xonly() -> Result<XOnlyPublicKey, Error> {
+    let raw = hex::decode("50929b74c1a04954b78b4b6035e97a5e078a5a0f28ec96d547bfee9ace803ac0")
+        .expect("hex");
+    XOnlyPublicKey::from_slice(&raw).map_err(|e| Error::Taproot(e.to_string()))
+}
+
+fn t2(t: u32, window: u32) -> Result<u32, Error> {
+    t.checked_add(window)
+        .ok_or_else(|| Error::msg("arbiter T2 overflow"))
+}
+
+fn arbiter_escrow(
+    mandante: &PublicKey,
+    contratista: &PublicKey,
+    arbiter: &PublicKey,
+    t_dispute: u32,
+    window_secs: u32,
+    kind: EscrowKind,
+) -> Result<Escrow, Error> {
+    let a = arbiter.x_only_public_key().0;
+    let m = mandante.x_only_public_key().0;
+    let c = contratista.x_only_public_key().0;
+    let t_end = t2(t_dispute, window_secs)?;
+    let am = and_two_keys_after(&a, &m, t_dispute)?;
+    let ac = and_two_keys_after(&a, &c, t_dispute)?;
+    let last = match kind {
+        EscrowKind::Partida => unwind_script(&m, t_end)?,
+        EscrowKind::Bond => unwind_script(&c, t_end)?,
+        EscrowKind::Mad => return Err(Error::Taproot("mad has no arbiter tree".into())),
+    };
+    finalize_escrow(mandante, contratista, vec![am, ac, last], 2, t_end, kind)
 }
 
 pub fn partida_descriptor(
@@ -143,15 +226,67 @@ pub fn bond_descriptor(
     build_escrow(mandante, contratista, &unwind, t_project, EscrowKind::Bond)
 }
 
-pub fn partida_address(body: &ContractBody, partida_id: u32) -> Result<Address, Error> {
+pub fn partida_escrow_from_body(body: &ContractBody, partida_id: u32) -> Result<Escrow, Error> {
     let (m, c) = keys_from_body(body)?;
     let spec = body.partida(partida_id)?;
-    partida_descriptor(&m, &c, spec.plazo_unix)?.address(body.network)
+    match &body.dispute {
+        DisputePolicy::Arbiter {
+            pubkey,
+            window_secs,
+        } => {
+            let a = crate::convert::parse_btc_pk(pubkey)?;
+            arbiter_escrow(
+                &m,
+                &c,
+                &a,
+                spec.plazo_unix,
+                *window_secs,
+                EscrowKind::Partida,
+            )
+        }
+        _ => partida_descriptor(&m, &c, spec.plazo_unix),
+    }
+}
+
+pub fn bond_escrow_from_body(body: &ContractBody) -> Result<Escrow, Error> {
+    let (m, c) = keys_from_body(body)?;
+    match &body.dispute {
+        DisputePolicy::Arbiter {
+            pubkey,
+            window_secs,
+        } => {
+            let a = crate::convert::parse_btc_pk(pubkey)?;
+            arbiter_escrow(&m, &c, &a, body.t_project, *window_secs, EscrowKind::Bond)
+        }
+        _ => bond_descriptor(&m, &c, body.t_project),
+    }
+}
+
+/// Combined MAD stake: key path MuSig2 (return/split); after T only NUMS (burn).
+pub fn mad_escrow(mandante: &PublicKey, contratista: &PublicKey, t: u32) -> Result<Escrow, Error> {
+    let nums = nums_xonly()?;
+    let leaf = unwind_script(&nums, t)?;
+    finalize_escrow(mandante, contratista, vec![leaf], 0, t, EscrowKind::Mad)
+}
+
+pub fn mad_escrow_from_body(body: &ContractBody) -> Result<Escrow, Error> {
+    if !matches!(body.dispute, DisputePolicy::Mad { .. }) {
+        return Err(Error::msg("contract dispute is not mad"));
+    }
+    let (m, c) = keys_from_body(body)?;
+    mad_escrow(&m, &c, body.t_project)
+}
+
+pub fn partida_address(body: &ContractBody, partida_id: u32) -> Result<Address, Error> {
+    partida_escrow_from_body(body, partida_id)?.address(body.network)
 }
 
 pub fn bond_address(body: &ContractBody) -> Result<Address, Error> {
-    let (m, c) = keys_from_body(body)?;
-    bond_descriptor(&m, &c, body.t_project)?.address(body.network)
+    bond_escrow_from_body(body)?.address(body.network)
+}
+
+pub fn mad_address(body: &ContractBody) -> Result<Address, Error> {
+    mad_escrow_from_body(body)?.address(body.network)
 }
 
 pub fn keys_from_body(body: &ContractBody) -> Result<(PublicKey, PublicKey), Error> {

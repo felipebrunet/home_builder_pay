@@ -8,7 +8,7 @@ This is an MVP: desktop CLI, **regtest/signet**, files passed by hand. No Tor, n
 
 Full protocol, architecture, roadmap, and **where the last session left off**: [docs/PROJECT.md](docs/PROJECT.md) (start at section 0). That document is currently in Spanish.
 
-Current milestone: **MVP-0** plus mined regtest scenarios (happy path and unhappy paths). Index: [docs/REGTEST_SCENARIOS.md](docs/REGTEST_SCENARIOS.md) (Spanish).
+Current milestone: **MVP-0** plus mined regtest scenarios. Dispute policy (unwind default; optional MAD / late arbiter) is set by the offeror: [docs/DISPUTE.md](docs/DISPUTE.md). Scenario index: [docs/REGTEST_SCENARIOS.md](docs/REGTEST_SCENARIOS.md) (Spanish).
 
 ## Protocol (short)
 

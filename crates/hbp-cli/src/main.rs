@@ -6,14 +6,16 @@ use bitcoin::consensus::encode::{deserialize, serialize_hex};
 use bitcoin::{Address, Amount, OutPoint, TxOut};
 use clap::{Parser, Subcommand};
 use hbp_bitcoin::{
-    apply_key_spend_sig, bond_address, bond_descriptor, build_key_spend_tx,
+    apply_key_spend_sig, bond_address, bond_escrow_from_body, build_key_spend_tx,
     build_split_key_spend_tx, build_unwind_tx, finish_coop_signature, generate_identity,
-    key_spend_sighash, keys_from_body, new_nonce_seed, partida_address, partida_descriptor,
-    sign_body, sign_unwind, validate_funding_tx, verify_body, ExpectedFunding, Identity,
+    key_spend_sighash, keys_from_body, mad_address, mad_escrow_from_body, new_nonce_seed,
+    partida_address, partida_escrow_from_body, sign_body, sign_unwind, validate_funding_tx,
+    verify_body, ExpectedFunding, Identity,
 };
 use hbp_core::{
-    bond_minor, bond_warnings, fiat_minor_to_sats, minor_from_major, ContractBody, Network, Offer,
-    PartidaQuote, PartidaSpec, Quote, Role, SignedContract, Unit,
+    bond_minor, bond_warnings, fiat_minor_to_sats, minor_from_major, ContractBody, DisputePolicy,
+    Network, Offer, PartidaQuote, PartidaSpec, Quote, Role, SignedContract, Unit,
+    DEFAULT_ARBITER_WINDOW_SECS,
 };
 
 mod store;
@@ -49,6 +51,18 @@ enum Cmd {
         /// Unix time (CLTV) for boleta unwind. Must be >= last partida plazo.
         #[arg(long)]
         t_project: u32,
+        /// unwind (default) | mad | arbiter — offeror proposes; accept locks it.
+        #[arg(long, default_value = "unwind")]
+        dispute: String,
+        /// With --dispute mad: bps of partida 1, each party (100 = 1%).
+        #[arg(long)]
+        mad_bps: Option<u16>,
+        /// With --dispute arbiter: compressed pubkey hex.
+        #[arg(long)]
+        arbiter: Option<String>,
+        /// Seconds after plazo before last-resort unwind (default 7 days).
+        #[arg(long, default_value_t = DEFAULT_ARBITER_WINDOW_SECS)]
+        arbiter_window: u32,
     },
     AddPartida {
         #[arg(long)]
@@ -158,7 +172,20 @@ fn run() -> Result<()> {
             unit,
             bond_bps,
             t_project,
-        } => cmd_new(&store, &unit, bond_bps, t_project),
+            dispute,
+            mad_bps,
+            arbiter,
+            arbiter_window,
+        } => cmd_new(
+            &store,
+            &unit,
+            bond_bps,
+            t_project,
+            &dispute,
+            mad_bps,
+            arbiter.as_deref(),
+            arbiter_window,
+        ),
         Cmd::AddPartida {
             desc,
             amount,
@@ -239,8 +266,48 @@ fn cmd_init(store: &Store, network: &str, role: Option<&str>) -> Result<()> {
     Ok(())
 }
 
-fn cmd_new(store: &Store, unit: &str, bond_bps: u16, t_project: u32) -> Result<()> {
+fn parse_dispute(
+    kind: &str,
+    mad_bps: Option<u16>,
+    arbiter: Option<&str>,
+    window: u32,
+    mandante_pk: &str,
+) -> Result<DisputePolicy> {
+    match kind.to_ascii_lowercase().as_str() {
+        "unwind" => Ok(DisputePolicy::Unwind),
+        "mad" => {
+            let mad_bps = mad_bps.context("--mad-bps required with --dispute mad")?;
+            let d = DisputePolicy::Mad { mad_bps };
+            d.validate(mandante_pk)?;
+            Ok(d)
+        }
+        "arbiter" => {
+            let pubkey = arbiter
+                .context("--arbiter pubkey required with --dispute arbiter")?
+                .to_string();
+            let d = DisputePolicy::Arbiter {
+                pubkey,
+                window_secs: window,
+            };
+            d.validate(mandante_pk)?;
+            Ok(d)
+        }
+        other => bail!("dispute must be unwind|mad|arbiter, got {other}"),
+    }
+}
+
+fn cmd_new(
+    store: &Store,
+    unit: &str,
+    bond_bps: u16,
+    t_project: u32,
+    dispute: &str,
+    mad_bps: Option<u16>,
+    arbiter: Option<&str>,
+    arbiter_window: u32,
+) -> Result<()> {
     let id = store.load_identity()?;
+    let dispute = parse_dispute(dispute, mad_bps, arbiter, arbiter_window, &id.public_key)?;
     let body = ContractBody {
         network: id.network,
         unit: Unit::from_str(unit)?,
@@ -249,10 +316,11 @@ fn cmd_new(store: &Store, unit: &str, bond_bps: u16, t_project: u32) -> Result<(
         partidas: vec![],
         mandante_pubkey: id.public_key,
         contratista_pubkey: None,
-        arbiter_pubkey: None,
+        dispute: dispute.clone(),
     };
     store.save_draft(&body)?;
     println!("draft {}", store.draft_path().display());
+    println!("dispute {}", serde_json::to_string(&dispute)?);
     Ok(())
 }
 
@@ -374,6 +442,21 @@ fn cmd_quote(
         };
         partidas.push(PartidaQuote { id: p.id, sats });
     }
+    let mad_sats = match &body.dispute {
+        hbp_core::DisputePolicy::Mad { mad_bps } => {
+            let p1 = partidas
+                .iter()
+                .find(|p| p.id == body.partidas[0].id)
+                .map(|p| p.sats)
+                .unwrap_or(0);
+            Some(
+                p1.checked_mul(u64::from(*mad_bps))
+                    .and_then(|v| v.checked_div(10_000))
+                    .context("mad_sats overflow")?,
+            )
+        }
+        _ => None,
+    };
     let mut quote = Quote {
         contract_id: project.contract.id()?,
         bond_sats,
@@ -382,6 +465,7 @@ fn cmd_quote(
         quoted_at_unix: now_unix(),
         mandante_sig: None,
         contratista_sig: None,
+        mad_sats,
     };
     let sig = sign_quote(&id, &quote)?;
     match party_role(&id, &project.contract.body)? {
@@ -396,6 +480,12 @@ fn cmd_quote(
     let path = store.save_quote(&quote)?;
     println!("{}", path.display());
     println!("bond_sats {bond_sats}");
+    if let Some(m) = mad_sats {
+        println!(
+            "mad_sats_each {m} (on-chain output {})",
+            m.saturating_mul(2)
+        );
+    }
     Ok(())
 }
 
@@ -453,15 +543,22 @@ fn cmd_addresses(store: &Store) -> Result<()> {
     let mut project = store.load_project()?;
     let quote = load_project_quote(store, &mut project)?;
     let body = &project.contract.body;
+    println!("dispute {}", serde_json::to_string(&body.dispute)?);
     let bond = bond_address(body)?;
     println!("bond {}", bond);
     for p in &body.partidas {
         let a = partida_address(body, p.id)?;
         println!("partida {} {}", p.id, a);
     }
+    if matches!(body.dispute, DisputePolicy::Mad { .. }) {
+        println!("mad {}", mad_address(body)?);
+    }
     match quote {
         Some(q) if q.mandante_sig.is_some() && q.contratista_sig.is_some() => {
             println!("bond_sats {}", q.bond_sats);
+            if let Some(m) = q.mad_sats {
+                println!("mad_sats_each {m}");
+            }
             for p in &q.partidas {
                 println!("partida {} sats {}", p.id, p.sats);
             }
@@ -486,10 +583,9 @@ fn cmd_verify_funding(store: &Store, tx_hex: &str, partida: u32, partida_only: b
         bail!("quote needs both signatures");
     }
     let body = &project.contract.body;
-    let (m, c) = keys_from_body(body)?;
-    let spec = body.partida(partida)?;
-    let bond = bond_descriptor(&m, &c, body.t_project)?;
-    let part = partida_descriptor(&m, &c, spec.plazo_unix)?;
+    let _ = keys_from_body(body)?;
+    let bond = bond_escrow_from_body(body)?;
+    let part = partida_escrow_from_body(body, partida)?;
     let raw = hex::decode(tx_hex.trim())?;
     let tx: bitcoin::Transaction = deserialize(&raw).context("tx hex")?;
     let txid = tx.compute_txid().to_string();
@@ -516,6 +612,14 @@ fn cmd_verify_funding(store: &Store, tx_hex: &str, partida: u32, partida_only: b
             allow_other_outputs: true,
         },
     )?;
+    if let (DisputePolicy::Mad { .. }, Some(each)) = (&body.dispute, quote.mad_sats) {
+        let mad = mad_escrow_from_body(body)?;
+        let want = each.saturating_mul(2);
+        tx.output
+            .iter()
+            .find(|o| o.script_pubkey == mad.script_pubkey() && o.value.to_sat() == want)
+            .context("missing MAD output with 2*mad_sats")?;
+    }
     let bond_vout = tx
         .output
         .iter()
@@ -554,11 +658,11 @@ fn cmd_coop_close(
     let escrow = match kind {
         "partida" => {
             let pid = partida.context("--partida required")?;
-            let spec = body.partida(pid)?;
-            partida_descriptor(&m_pk, &c_pk, spec.plazo_unix)?
+            partida_escrow_from_body(body, pid)?
         }
-        "bond" => bond_descriptor(&m_pk, &c_pk, body.t_project)?,
-        other => bail!("kind must be partida|bond, got {other}"),
+        "bond" => bond_escrow_from_body(body)?,
+        "mad" => mad_escrow_from_body(body)?,
+        other => bail!("kind must be partida|bond|mad, got {other}"),
     };
     let net = hbp_bitcoin::to_btc_network(body.network);
     let dest = Address::from_str(dest)
@@ -659,7 +763,6 @@ fn cmd_unwind(
     let id = store.load_identity()?;
     let mut project = store.load_project()?;
     let body = &project.contract.body;
-    let (m, c) = keys_from_body(body)?;
     let role = party_role(&id, body)?;
     let escrow = match kind {
         "partida" => {
@@ -667,14 +770,13 @@ fn cmd_unwind(
                 bail!("only the mandante can unwind a partida");
             }
             let pid = partida.context("--partida required")?;
-            let spec = body.partida(pid)?;
-            partida_descriptor(&m, &c, spec.plazo_unix)?
+            partida_escrow_from_body(body, pid)?
         }
         "bond" => {
             if role != Role::Contratista {
                 bail!("only the contratista can unwind the bond; timeout is not a bank boleta");
             }
-            bond_descriptor(&m, &c, body.t_project)?
+            bond_escrow_from_body(body)?
         }
         other => bail!("kind must be partida|bond, got {other}"),
     };
@@ -756,6 +858,7 @@ fn sign_quote(id: &Identity, quote: &Quote) -> Result<String> {
         "partidas": quote.partidas,
         "fx_note": quote.fx_note,
         "quoted_at_unix": quote.quoted_at_unix,
+        "mad_sats": quote.mad_sats,
     });
     let bytes = serde_json::to_vec(&unsigned)?;
     let secp = bitcoin::secp256k1::Secp256k1::new();

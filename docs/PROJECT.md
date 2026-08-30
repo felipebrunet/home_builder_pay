@@ -33,7 +33,7 @@ Checkpoint de sesión. Actualizar **esta sección** cada vez que se cierre un hi
 - MuSig2 key-path y unwind script-path (librería + tests; output key coincide con rust-bitcoin).
 - Máquina de estados proyecto/partida (una partida viva; no fondear N+1 si N no está terminal).
 - `NonceJournal`: reutilizar seed aborta.
-- CLI: `init`, `new`, `add-partida`, `offer`, `accept`, `commit`, `import`, `quote`, `accept-quote`, `addresses`, `status`, `verify-funding`, `unwind`, `coop-close --peer-dir`.
+- CLI: `init`, `new` (`--dispute unwind\|mad\|arbiter`), `add-partida`, `offer`, `accept`, `commit`, `import`, `quote`, `accept-quote`, `addresses`, `status`, `verify-funding`, `unwind`, `coop-close --peer-dir`.
 - `validate_funding_tx` rechaza monto de partida distinto al quote.
 - Tests: 13 unitarios verdes (`hbp-core` 8, `hbp-bitcoin` 5).
 - **Camino feliz minado en regtest** (60k USD, 2×30k, boleta 20k, 5 s/partida): ver [REGTEST_HAPPY_PATH.md](REGTEST_HAPPY_PATH.md). `hbp coop-close --peer-dir` (misma máquina) + PSBT 2 wallets.
@@ -78,7 +78,7 @@ Copiar Bisq 2-de-2 con quema simétrica no sirve: los montos son asimétricos (2
 
 | # | Tema | Decisión |
 |---|---|---|
-| 1 | Disputa | **Unwind** on-chain. El árbitro tardío es un campo opcional del contrato (cambia el descriptor). El MVP no lo implementa. |
+| 1 | Disputa | Default **unwind**. Opcionales **MAD chico** (quema NUMS) y **árbitro tardío** (hojas A+M / A+C). Las propone el **oferente**; `accept` las cierra. No se añaden después de fondear. Ver [DISPUTE.md](DISPUTE.md). |
 | 2 | Boleta | **Una, global**, `bond_bps` configurable (default 1000 = 10% del total). Se fondea una vez. **Una partida viva a la vez.** |
 | 3 | Moneda | Contrato en USD / UF / CLP. Los sats se fijan **al quotear/fondear**. |
 | 4 | Red | **Sin servidor propio, siempre.** El canal no es parte del contrato. MVP: **archivos** (USB, Signal, mail, carpeta). Después: socket LAN opcional, luego **Tor punto a punto** (onion ya conocido, va en el contrato). **DHT / offer book al final**, solo si el producto es marketplace. |
