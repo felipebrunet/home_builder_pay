@@ -203,6 +203,11 @@ impl Project {
         confs: u32,
         required_confs: u32,
     ) -> Result<()> {
+        if matches!(self.bond, BondStatus::Unfunded) {
+            return Err(Error::protocol(
+                "bond must be funded before any partida (contractor did not post the boleta)",
+            ));
+        }
         self.require_previous_terminal(id)?;
         let p = self.partida_mut(id)?;
         let expected = match p.state {
@@ -284,7 +289,8 @@ impl Project {
         let sats = match &p.state {
             PartidaStatus::Locked { sats, .. }
             | PartidaStatus::Funding { sats, .. }
-            | PartidaStatus::ReceptionProposed { sats, .. } => *sats,
+            | PartidaStatus::ReceptionProposed { sats, .. }
+            | PartidaStatus::AmountAgreed { sats } => *sats,
             _ => return Err(Error::protocol("partida cannot unwind from this state")),
         };
         p.state = PartidaStatus::Unwound { txid, sats };
@@ -425,6 +431,16 @@ mod tests {
             mandante_sig: Some("aa".into()),
             contratista_sig: Some("bb".into()),
         }
+    }
+
+    #[test]
+    fn cannot_fund_partida_without_bond() {
+        let mut p = project();
+        p.set_quote(signed_quote(&p)).unwrap();
+        let err = p
+            .note_partida_funding(1, "x".into(), 0, 20_000, 1, 1)
+            .unwrap_err();
+        assert!(err.to_string().contains("bond must be funded"));
     }
 
     #[test]
