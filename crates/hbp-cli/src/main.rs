@@ -9,8 +9,8 @@ use hbp_bitcoin::{
     apply_key_spend_sig, bond_address, bond_escrow_from_body, build_key_spend_tx,
     build_split_key_spend_tx, build_unwind_tx, finish_coop_signature, generate_identity,
     key_spend_sighash, keys_from_body, mad_address, mad_escrow_from_body, new_nonce_seed,
-    partida_address, partida_escrow_from_body, sign_arbiter, sign_body, sign_unwind,
-    validate_funding_tx, verify_arbiter, verify_body, ExpectedFunding, Identity,
+    partida_address, partida_escrow_from_body, sign_arbiter, sign_body, sign_quote, sign_unwind,
+    validate_funding_tx, verify_arbiter, verify_body, verify_quote, ExpectedFunding, Identity,
 };
 use hbp_core::{
     bond_minor, bond_warnings, fiat_minor_to_sats, minor_from_major, ArbiterNomination,
@@ -554,12 +554,12 @@ fn cmd_quote(
         contratista_sig: None,
         mad_sats,
     };
-    let sig = sign_quote(&id, &quote)?;
+    let sig = sign_quote(&id.secret()?, &quote)?;
     match party_role(&id, &project.contract.body)? {
         Role::Mandante => quote.mandante_sig = Some(sig),
         Role::Contratista => quote.contratista_sig = Some(sig),
     }
-    // If both already present after this signature... unlikely. Save partial.
+    verify_present_quote_sigs(&project.contract.body, &quote)?;
     if quote.mandante_sig.is_some() && quote.contratista_sig.is_some() {
         project.set_quote(quote.clone())?;
         store.save_project(&project)?;
@@ -590,12 +590,13 @@ fn cmd_accept_quote(store: &Store, file: PathBuf) -> Result<()> {
         Role::Contratista => quote.contratista_sig.is_some(),
     };
     if !already {
-        let sig = sign_quote(&id, &quote)?;
+        let sig = sign_quote(&id.secret()?, &quote)?;
         match role {
             Role::Mandante => quote.mandante_sig = Some(sig),
             Role::Contratista => quote.contratista_sig = Some(sig),
         }
     }
+    verify_present_quote_sigs(&project.contract.body, &quote)?;
     if quote.mandante_sig.is_none() || quote.contratista_sig.is_none() {
         let path = store.save_quote(&quote)?;
         println!("partial quote {}", path.display());
@@ -617,6 +618,7 @@ fn load_project_quote(store: &Store, project: &mut hbp_core::Project) -> Result<
     let id = project.contract.id()?;
     if let Some(q) = store.load_quote(&id)? {
         if q.mandante_sig.is_some() && q.contratista_sig.is_some() {
+            verify_present_quote_sigs(&project.contract.body, &q)?;
             project.set_quote(q.clone())?;
             store.save_project(project)?;
             return Ok(Some(q));
@@ -948,25 +950,14 @@ fn party_role(id: &Identity, body: &ContractBody) -> Result<Role> {
     }
 }
 
-fn sign_quote(id: &Identity, quote: &Quote) -> Result<String> {
-    // Quotes are signed as canonical JSON of the unsigned subset.
-    let unsigned = serde_json::json!({
-        "contract_id": quote.contract_id,
-        "bond_sats": quote.bond_sats,
-        "partidas": quote.partidas,
-        "fx_note": quote.fx_note,
-        "quoted_at_unix": quote.quoted_at_unix,
-        "mad_sats": quote.mad_sats,
-    });
-    let bytes = serde_json::to_vec(&unsigned)?;
-    let secp = bitcoin::secp256k1::Secp256k1::new();
-    let sk = id.secret()?;
-    let keypair = bitcoin::key::Keypair::from_secret_key(&secp, &sk);
-    use bitcoin::hashes::{sha256, Hash};
-    let hash = sha256::Hash::hash(&bytes);
-    let msg = bitcoin::secp256k1::Message::from_digest(hash.to_byte_array());
-    let sig = secp.sign_schnorr_no_aux_rand(&msg, &keypair);
-    Ok(hex::encode(sig.as_ref()))
+fn verify_present_quote_sigs(body: &ContractBody, quote: &Quote) -> Result<()> {
+    if let Some(s) = &quote.mandante_sig {
+        verify_quote(&body.mandante_pubkey, s, quote)?;
+    }
+    if let (Some(s), Some(c)) = (&quote.contratista_sig, &body.contratista_pubkey) {
+        verify_quote(c, s, quote)?;
+    }
+    Ok(())
 }
 
 fn now_unix() -> u32 {

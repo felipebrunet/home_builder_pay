@@ -19,7 +19,7 @@ Checkpoint de sesión. Actualizar **esta sección** cada vez que se cierre un hi
 | Fecha | 2026-08-30 |
 | Rama | `master` |
 | Hito | **MVP-0 + E2E unwind 1–8 minados + políticas MAD/árbitro en código** |
-| Verificar al abrir | `cargo test --workspace` (24 unitarios: `hbp-core` 15, `hbp-bitcoin` 9) |
+| Verificar al abrir | `cargo test --workspace` (25 unitarios: `hbp-core` 15, `hbp-bitcoin` 10) |
 | Nodo Bitcoin local | `/home/felipe/projects/btc_clients` — Core 31.1 regtest, RPC `:18443`. Los scripts usan `bitcoin-cli`; `hbp` no embebe el cliente. |
 | Origin | `git@github.com-hbp:felipebrunet/home_builder_pay.git` (MIT, público) |
 
@@ -385,12 +385,12 @@ Claves en claro. Toy. No mainnet.
 - no se fondea partida sin boleta, ni la 2 si la 1 está abierta
 - happy path dos partidas + release de boleta; boleta se suelta si P2 nunca se fondeó
 
-**hbp-bitcoin** (9)
+**hbp-bitcoin** (10)
 
 - output key MuSig2+tweak = rust-bitcoin Taproot
 - unwind script-path; cierre cooperativo y split 80/20
 - funding con partida a 1 sat se rechaza
-- firmas de contrato y de nomination `hbp-arbiter` round-trip
+- firmas de contrato, quote (`hbp-quote`) y nomination `hbp-arbiter` round-trip
 - árbol con A cambia la address; sin A nombrado, error
 - hoja MAD = NUMS
 

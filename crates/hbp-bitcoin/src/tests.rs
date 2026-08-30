@@ -11,7 +11,7 @@ use crate::spend::{
 };
 use crate::taproot::{assert_output_key_matches, bond_descriptor, partida_descriptor};
 use crate::validate::{validate_funding_tx, ExpectedFunding};
-use crate::{sign_arbiter, sign_body, verify_arbiter, verify_body};
+use crate::{sign_arbiter, sign_body, sign_quote, verify_arbiter, verify_body, verify_quote};
 
 fn pair() -> (SecretKey, PublicKey, SecretKey, PublicKey) {
     let secp = Secp256k1::new();
@@ -296,6 +296,32 @@ fn arbiter_nomination_signatures_roundtrip() {
     verify_arbiter(&hex::encode(m_pk.serialize()), &ms, &cid, &a).unwrap();
     verify_arbiter(&hex::encode(c_pk.serialize()), &cs, &cid, &a).unwrap();
     assert!(verify_arbiter(&hex::encode(m_pk.serialize()), &cs, &cid, &a).is_err());
+}
+
+#[test]
+fn quote_signatures_roundtrip() {
+    let (m_sk, m_pk, c_sk, c_pk) = pair();
+    let mut quote = hbp_core::Quote {
+        contract_id: "ab".repeat(32),
+        bond_sats: 20_000,
+        partidas: vec![hbp_core::PartidaQuote {
+            id: 1,
+            sats: 30_000,
+        }],
+        fx_note: "test".into(),
+        quoted_at_unix: 1_700_000_000,
+        mandante_sig: None,
+        contratista_sig: None,
+        mad_sats: None,
+    };
+    let ms = sign_quote(&m_sk, &quote).unwrap();
+    let cs = sign_quote(&c_sk, &quote).unwrap();
+    quote.mandante_sig = Some(ms.clone());
+    quote.contratista_sig = Some(cs.clone());
+    verify_quote(&hex::encode(m_pk.serialize()), &ms, &quote).unwrap();
+    verify_quote(&hex::encode(c_pk.serialize()), &cs, &quote).unwrap();
+    quote.bond_sats = 21_000;
+    assert!(verify_quote(&hex::encode(m_pk.serialize()), &ms, &quote).is_err());
 }
 
 #[test]

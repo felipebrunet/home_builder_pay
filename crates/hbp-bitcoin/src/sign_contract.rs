@@ -1,7 +1,7 @@
-//! BIP340 signatures over the canonical contract JSON (tagged `hbp-contract`).
+//! BIP340 signatures over protocol JSON (tagged `hbp-contract`, `hbp-arbiter`, `hbp-quote`).
 
 use bitcoin::secp256k1::{Keypair, Message, Secp256k1, SecretKey, XOnlyPublicKey};
-use hbp_core::{canonical_json, sha256_bytes, ContractBody};
+use hbp_core::{canonical_json, sha256_bytes, ContractBody, Quote};
 use sha2::{Digest, Sha256};
 
 use crate::convert::parse_btc_pk;
@@ -67,5 +67,32 @@ pub fn verify_arbiter(
     let bytes = hex::decode(sig_hex.trim())?;
     let sig = bitcoin::secp256k1::schnorr::Signature::from_slice(&bytes)?;
     secp.verify_schnorr(&sig, &arbiter_message(contract_id, arbiter_pubkey), &xonly)?;
+    Ok(())
+}
+
+fn quote_message(quote: &Quote) -> Result<Message, Error> {
+    let mut unsigned = quote.clone();
+    unsigned.mandante_sig = None;
+    unsigned.contratista_sig = None;
+    Ok(Message::from_digest(tagged_hash(
+        b"hbp-quote",
+        &canonical_json(&unsigned)?,
+    )))
+}
+
+pub fn sign_quote(secret: &SecretKey, quote: &Quote) -> Result<String, Error> {
+    let secp = Secp256k1::new();
+    let keypair = Keypair::from_secret_key(&secp, secret);
+    let sig = secp.sign_schnorr_no_aux_rand(&quote_message(quote)?, &keypair);
+    Ok(hex::encode(sig.as_ref()))
+}
+
+pub fn verify_quote(pubkey_hex: &str, sig_hex: &str, quote: &Quote) -> Result<(), Error> {
+    let secp = Secp256k1::verification_only();
+    let pk = parse_btc_pk(pubkey_hex)?;
+    let (xonly, _) = pk.x_only_public_key();
+    let bytes = hex::decode(sig_hex.trim())?;
+    let sig = bitcoin::secp256k1::schnorr::Signature::from_slice(&bytes)?;
+    secp.verify_schnorr(&sig, &quote_message(quote)?, &xonly)?;
     Ok(())
 }
