@@ -14,17 +14,13 @@ Bitcoin no ve el muro. Cada escenario termina en firmas, timeouts o silencio.
 
 Tras T, el key path MuSig2(M,C) **sigue existiendo** en las tres políticas (`unwind`, `mad`, `arbiter`). El script path es el plan B. MAD y árbitro no se mezclan en el MVP.
 
-Marca al final de un ítem, si aplica:
-
-- **E2E *n*** — ya minado en regtest (política `unwind`)
-- **código** — descriptores/CLI existen, sin script minado
-- el resto es diseño / resultado humano con el protocolo actual
+Cada ítem lleva ✅ **PASS** o ❌ **NO TEST**. PASS incluye el caso on-chain idéntico a otro que sí se corrió (`= N`).
 
 Política de disputa: [DISPUTE.md](DISPUTE.md).
 
 ## Resultado del catálogo (2026-08-30)
 
-Leyenda: **PASS** = corrido con éxito (o on-chain idéntico a un PASS). **NO TEST** = no hay script; el protocolo no lo expresa o falta automatizar (reorg/RBF/keys).
+Leyenda: **PASS** = corrido con éxito (o on-chain idéntico a un PASS). **NO TEST** = humano/off-chain (obra adelantada, coima, herederos, fotos, tribunal). Reorg/RBF/keys **sí** están minados.
 
 | | Cuántos |
 |---|---|

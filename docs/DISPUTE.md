@@ -32,6 +32,10 @@ hbp --dir .m new ... --dispute arbiter --arbiter-window 15
 hbp --dir .m propose-arbiter --pubkey 02abc...
 hbp --dir .c accept-arbiter .m/contracts/<id>/03-arbiter.json
 hbp --dir .m accept-arbiter .c/contracts/<id>/03-arbiter.json   # el primero importa
+
+# Tras T: A+C paga al contratista (A+M es --with am y --dir del mandante).
+hbp --dir .c arbiter-close --kind partida --partida 1 --with ac \
+  --arbiter-dir .a --outpoint txid:vout --sats N --dest bcrt1… --fee 200
 ```
 
 `accept` no puede cambiar `dispute`. Si el JSON no coincide con el offer, `commit` rechaza (mismo `terms()`).
@@ -77,4 +81,4 @@ Catálogo de escenarios (incl. A que desaparece, MAD improductivo, boleta con A)
 
 ## E2E on-chain de MAD/árbitro
 
-Corridos en `scripts/regtest_catalog.sh`: fondeo MAD 3 salidas + split / MAD improductivo; `hbp arbiter-close --with am|ac` (P1 a C, P1 a M, split 80/20, boleta a M); A desaparece → unwind T2. Índice con ticks: [SCENARIOS.md](SCENARIOS.md).
+Corridos en `scripts/regtest_catalog.sh` y `scripts/regtest_remainders.sh` (todo: `scripts/run_catalog.sh`): fondeo MAD 3 salidas + split / MAD improductivo; `hbp arbiter-close --with am|ac`; A desaparece → T2; carreras, reorg, RBF, keys borradas. Índice: [SCENARIOS.md](SCENARIOS.md) (136 PASS / 6 humano).

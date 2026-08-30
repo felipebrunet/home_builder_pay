@@ -6,7 +6,7 @@ Este archivo es la fuente de verdad de producto, protocolo, arquitectura, roadma
 
 **Si retomas en una sesión nueva: lee la sección 0 y el checklist de “listo / no listo”. El código en `crates/` es la implementación de MVP-0.**
 
-Última actualización: 2026-08-30 (árbitro nombrado por ambos *después* del accept; MAD y arbiter en código, sin E2E minado).
+Última actualización: 2026-08-30 (catálogo 142: 136 PASS, 6 humano; MAD y árbitro minados).
 
 ---
 
@@ -19,7 +19,7 @@ Checkpoint de sesión. Actualizar **esta sección** cada vez que se cierre un hi
 | Fecha | 2026-08-30 |
 | Rama | `master` |
 | Hito | **MVP-0 + catálogo 142 (136 PASS, 6 humano)** |
-| Verificar al abrir | `cargo test --workspace` (25 unitarios: `hbp-core` 15, `hbp-bitcoin` 10) |
+| Verificar al abrir | `cargo test --workspace` (26 unitarios: `hbp-core` 15, `hbp-bitcoin` 11) y `scripts/run_catalog.sh` |
 | Nodo Bitcoin local | `/home/felipe/projects/btc_clients` — Core 31.1 regtest, RPC `:18443`. Los scripts usan `bitcoin-cli`; `hbp` no embebe el cliente. |
 | Origin | `git@github.com-hbp:felipebrunet/home_builder_pay.git` (MIT, público) |
 
@@ -33,8 +33,11 @@ Checkpoint de sesión. Actualizar **esta sección** cada vez que se cierre un hi
 | 2026-08-30 | Políticas opcionales `mad` (hoja NUMS) y `arbiter` (hojas A+M / A+C). **No** a wallet del autor. | [DISPUTE.md](DISPUTE.md), `d8f35b3` |
 | 2026-08-30 | El **quién** del árbitro no va en el offer: ambos lo firman antes de fondear (`propose-arbiter` / `accept-arbiter`) | este checkpoint |
 | 2026-08-30 | Catálogo de 142 escenarios (obra de 2 partidas, incl. A que desaparece) | [SCENARIOS.md](SCENARIOS.md) |
+| 2026-08-30 | Quote con tag `hbp-quote` y verificación al accept | `9be02b1` |
+| 2026-08-30 | MAD 3 salidas + `hbp arbiter-close` (A+M / A+C) minados | `scripts/regtest_catalog.sh`, `6b04665` |
+| 2026-08-30 | Remainders: address mala, RBF, reorg, keys perdidas, carreras T2 | `scripts/regtest_remainders.sh`, `a81c0f9` |
 
-Default on-chain sigue siendo **`unwind`**. MAD y árbitro tienen descriptores y CLI; **no** hay script minado todavía.
+Default on-chain sigue siendo **`unwind`**. MAD y árbitro están minados. Catálogo: **136 PASS**, **6 NO TEST** (humano). **0 FAIL**.
 
 ### Listo
 
@@ -55,12 +58,12 @@ Default on-chain sigue siendo **`unwind`**. MAD y árbitro tienen descriptores y
 - Descriptores: boleta `tr(musig(M,C), pk(C)&&after(T_proyecto))`, partida `tr(musig(M,C), pk(M)&&after(T_partida))`. KeyAgg `[mandante, contratista]`.
 - MuSig2 key-path (64 B) y unwind script-path (CLTV unix, witness 3 ítems).
 - `NonceJournal`: reutilizar seed aborta.
-- CLI: `init`, `new --dispute unwind\|mad\|arbiter`, `propose-arbiter`, `accept-arbiter`, `add-partida`, `offer`, `accept`, `commit`, `import`, `quote`, `accept-quote`, `addresses`, `status`, `verify-funding`, `unwind`, `coop-close --peer-dir`.
+- CLI: `init`, `new --dispute unwind\|mad\|arbiter`, `propose-arbiter`, `accept-arbiter`, `add-partida`, `offer`, `accept`, `commit`, `import`, `quote`, `accept-quote`, `addresses`, `status`, `verify-funding`, `unwind`, `coop-close --peer-dir`, `arbiter-close --with am\|ac --arbiter-dir`.
 - `DisputePolicy::Arbiter { window_secs }` en el body; pubkey en `ArbiterNomination` (`03-arbiter.json`). Sin las dos firmas `hbp-arbiter` no hay addresses.
 - MAD: tercera salida `2 * mad_sats`; key path coop split; tras T solo `pk(NUMS)&&after(T)`.
 - `validate_funding_tx` rechaza monto de partida distinto al quote. `--partida-only` exige boleta ya fondeada.
 
-**E2E minado** — unwind 1–8 [REGTEST_SCENARIOS.md](REGTEST_SCENARIOS.md); MAD + A+M/A+C + T2 [scripts/regtest_catalog.sh](../scripts/regtest_catalog.sh). Catálogo 142 con ticks: [SCENARIOS.md](SCENARIOS.md).
+**E2E minado** — unwind 1–8 [REGTEST_SCENARIOS.md](REGTEST_SCENARIOS.md); MAD + A+M/A+C + T2 [scripts/regtest_catalog.sh](../scripts/regtest_catalog.sh); races/reorg/RBF/keys [scripts/regtest_remainders.sh](../scripts/regtest_remainders.sh). Todo: `scripts/run_catalog.sh`. Catálogo 142 con ticks: [SCENARIOS.md](SCENARIOS.md) (136 PASS / 6 humano).
 
 1. Feliz. 2. Abandono / ambos enojados. 4. Cancel coop. 5. Para tras P1 (timeout boleta). 6. Split 80/20. 7. Sin boleta (rechaza fondeo P1). 8. Cancel acordado tras P1.
 
@@ -384,7 +387,7 @@ Claves en claro. Toy. No mainnet.
 - no se fondea partida sin boleta, ni la 2 si la 1 está abierta
 - happy path dos partidas + release de boleta; boleta se suelta si P2 nunca se fondeó
 
-**hbp-bitcoin** (10)
+**hbp-bitcoin** (11)
 
 - output key MuSig2+tweak = rust-bitcoin Taproot
 - unwind script-path; cierre cooperativo y split 80/20
@@ -392,8 +395,9 @@ Claves en claro. Toy. No mainnet.
 - firmas de contrato, quote (`hbp-quote`) y nomination `hbp-arbiter` round-trip
 - árbol con A cambia la address; sin A nombrado, error
 - hoja MAD = NUMS
+- witness A+M de 4 ítems (script path árbitro)
 
-Los E2E que hablan con `bitcoind` son scripts en `scripts/`, no tests de Cargo. Ver [REGTEST_SCENARIOS.md](REGTEST_SCENARIOS.md).
+Los E2E que hablan con `bitcoind` son scripts en `scripts/` (`run_catalog.sh`). Ver [REGTEST_SCENARIOS.md](REGTEST_SCENARIOS.md) y [SCENARIOS.md](SCENARIOS.md).
 
 ---
 
@@ -441,9 +445,8 @@ Android **después** de desktop estable (wallet + Tor + verificación de cadena 
 
 ### Fase 4 — producto más rico
 
-- Árbitro: política + nomination conjunta ya están ([DISPUTE.md](DISPUTE.md)); falta E2E A+M firmando el script path.
+- Árbitro y MAD: E2E minados ([SCENARIOS.md](SCENARIOS.md)). Siguiente producto: `hbp fund` PSBT.
 - Boleta que **rueda** al 2-de-2 de la siguiente partida (splice) en vez de quedarse en un UTXO estático.
-- MAD sobre un *dispute stake* chico y simétrico (no quemar 20k).
 - Fotos/hashes de evidencia en `reception-proposed` (humanos, no el script).
 - Watchtower casero o calendario para no perder el unwind.
 
@@ -469,7 +472,7 @@ Orden realista, cada ítem deja algo demoable.
 | 3 | Integración regtest con `btc_clients` | tests + scripts | **hecho** (escenarios 1–8, default unwind) |
 | 4 | Seed/backup y red signet | `hbp-cli` | dos máquinas, una partida de prueba |
 | 5 | `hbp listen` / `connect`, luego Tor p2p | crate network nuevo | mismos JSON, primero TCP, después onion conocido |
-| 6 | Árbitro / MAD opcionales | `hbp-bitcoin` taproot tree | **código listo** (política + nomination conjunta + NUMS); falta E2E minado A+M y MAD 3-outputs |
+| 6 | Árbitro / MAD opcionales | `hbp-bitcoin` taproot tree | **hecho** (E2E minado; catálogo 136 PASS) |
 | 7 | Desktop GUI / Android | TBD | no empezar hasta 4 |
 
 Criterio para no saltarse pasos: no hay DHT si el cooperative close no se minó en regtest. No hay GUI si el CLI de dos humanos en signet no cerró una partida.
@@ -480,7 +483,7 @@ Estimación grosera (una persona, no calendario de promesa):
 - Ítem 3: **hecho** (unwind)
 - Ítem 4: 1–2 semanas (UX de keys y fees)
 - Ítem 5: semanas
-- Ítem 6: código listo; faltan scripts de fondeo/gasto (días)
+- Ítem 6: **hecho** (minado)
 - Ítem 7: proyecto aparte
 
 ---

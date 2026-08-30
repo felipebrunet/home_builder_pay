@@ -1,6 +1,6 @@
 # Escenarios E2E en regtest
 
-Catálogo exhaustivo (142, con ticks PASS/NO TEST): [SCENARIOS.md](SCENARIOS.md). Este archivo es el índice **unwind** minado. MAD/árbitro: `scripts/regtest_catalog.sh`.
+Catálogo exhaustivo (142, **136 PASS / 6 humano**): [SCENARIOS.md](SCENARIOS.md). Este archivo es el índice **unwind** 1–8. MAD/árbitro: `scripts/regtest_catalog.sh`. Races/reorg/RBF/keys: `scripts/regtest_remainders.sh`. Todo: `scripts/run_catalog.sh`.
 
 Todos usan la misma obra de demo: **60 000 USD**, 2 partidas de **30 000**, boleta **20 000**, 100 000 USD/BTC. Plazos de obra en **segundos**.
 
