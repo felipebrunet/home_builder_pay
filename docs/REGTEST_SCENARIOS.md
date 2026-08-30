@@ -1,5 +1,7 @@
 # Escenarios E2E en regtest
 
+Catálogo exhaustivo (142 casos, no todos minados): [SCENARIOS.md](SCENARIOS.md). Este archivo es solo lo **ya corrido** contra `bitcoind`.
+
 Todos usan la misma obra de demo: **60 000 USD**, 2 partidas de **30 000**, boleta **20 000**, 100 000 USD/BTC. Plazos de obra en **segundos**.
 
 | # | Escenario | On-chain | Doc | Script |

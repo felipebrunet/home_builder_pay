@@ -73,6 +73,8 @@ Hasta T, A no puede nada. A solo no puede vaciar. Si A no aparece, al cabo de la
 
 A no es M ni C. Cambiar A después de fondear es imposible: cambia la address. El `contract_id` **no** incluye a A (la nomination vive en `03-arbiter.json` / `state.json`).
 
+Catálogo de escenarios (incl. A que desaparece, MAD improductivo, boleta con A): [SCENARIOS.md](SCENARIOS.md) §§8–12.
+
 ## Qué falta para E2E on-chain de MAD/árbitro
 
 Los descriptores, la nomination conjunta y el contrato ya existen (tests: address distinta si hay A, error si A no está nombrado, hoja NUMS, firmas `hbp-arbiter`). Falta un script de fondeo con 3 outputs (MAD) y un flujo A+M firmando juntos el script path. No bloquea el default `unwind`.

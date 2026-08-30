@@ -32,6 +32,7 @@ Checkpoint de sesión. Actualizar **esta sección** cada vez que se cierre un hi
 | 2026-08-30 | Unhappy paths: abandono, no-firma, cancel coop, stops-after-P1, split 80/20, sin boleta, cancel acordado tras P1 | [REGTEST_SCENARIOS.md](REGTEST_SCENARIOS.md) #1–8 |
 | 2026-08-30 | Políticas opcionales `mad` (hoja NUMS) y `arbiter` (hojas A+M / A+C). **No** a wallet del autor. | [DISPUTE.md](DISPUTE.md), `d8f35b3` |
 | 2026-08-30 | El **quién** del árbitro no va en el offer: ambos lo firman antes de fondear (`propose-arbiter` / `accept-arbiter`) | este checkpoint |
+| 2026-08-30 | Catálogo de 142 escenarios (obra de 2 partidas, incl. A que desaparece) | [SCENARIOS.md](SCENARIOS.md) |
 
 Default on-chain sigue siendo **`unwind`**. MAD y árbitro tienen descriptores y CLI; **no** hay script minado todavía.
 
@@ -59,7 +60,7 @@ Default on-chain sigue siendo **`unwind`**. MAD y árbitro tienen descriptores y
 - MAD: tercera salida `2 * mad_sats`; key path coop split; tras T solo `pk(NUMS)&&after(T)`.
 - `validate_funding_tx` rechaza monto de partida distinto al quote. `--partida-only` exige boleta ya fondeada.
 
-**E2E minado (todos `unwind`)** — índice [REGTEST_SCENARIOS.md](REGTEST_SCENARIOS.md)
+**E2E minado (todos `unwind`)** — índice [REGTEST_SCENARIOS.md](REGTEST_SCENARIOS.md). Catálogo completo (142, no todos minados): [SCENARIOS.md](SCENARIOS.md).
 
 1. Feliz. 2. Abandono / ambos enojados. 4. Cancel coop. 5. Para tras P1 (timeout boleta). 6. Split 80/20. 7. Sin boleta (rechaza fondeo P1). 8. Cancel acordado tras P1.
 
@@ -74,7 +75,7 @@ Default on-chain sigue siendo **`unwind`**. MAD y árbitro tienen descriptores y
 
 ### Cómo seguir en la próxima sesión
 
-1. Leer esta sección 0, las decisiones §2 y [DISPUTE.md](DISPUTE.md).
+1. Leer esta sección 0, las decisiones §2, [DISPUTE.md](DISPUTE.md) y [SCENARIOS.md](SCENARIOS.md).
 2. `cargo test --workspace`.
 3. Elegir **uno** (no los dos a la vez):
    - Plan §11 ítem 1: recepción MuSig2 por JSON en `--dir` (el protocolo de archivos, sin bitcoind).

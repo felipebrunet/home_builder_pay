@@ -8,7 +8,7 @@ Esto es un MVP: CLI de escritorio, **regtest/signet**, archivos pasados a mano. 
 
 Protocolo, arquitectura, hoja de ruta y **en qué quedó la última sesión**: [docs/PROJECT.md](docs/PROJECT.md) (empezar por la sección 0).
 
-Hito actual: **MVP-0** más escenarios minados. La **política** de disputa (default unwind; MAD / slot de árbitro) la propone el oferente; a la *persona* la nombran después los dos: [docs/DISPUTE.md](docs/DISPUTE.md). Índice: [docs/REGTEST_SCENARIOS.md](docs/REGTEST_SCENARIOS.md).
+Hito actual: **MVP-0** más escenarios minados. La **política** de disputa (default unwind; MAD / slot de árbitro) la propone el oferente; a la *persona* la nombran después los dos: [docs/DISPUTE.md](docs/DISPUTE.md). Catálogo de casos: [docs/SCENARIOS.md](docs/SCENARIOS.md). E2E minados: [docs/REGTEST_SCENARIOS.md](docs/REGTEST_SCENARIOS.md).
 
 ## Protocolo (resumen)
 
