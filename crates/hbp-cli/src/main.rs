@@ -7,10 +7,11 @@ use bitcoin::{Address, Amount, OutPoint, TxOut};
 use clap::{Parser, Subcommand};
 use hbp_bitcoin::{
     apply_key_spend_sig, bond_address, bond_escrow_from_body, build_key_spend_tx,
-    build_split_key_spend_tx, build_unwind_tx, finish_coop_signature, generate_identity,
-    key_spend_sighash, keys_from_body, mad_address, mad_escrow_from_body, new_nonce_seed,
-    partida_address, partida_escrow_from_body, sign_arbiter, sign_body, sign_quote, sign_unwind,
-    validate_funding_tx, verify_arbiter, verify_body, verify_quote, ExpectedFunding, Identity,
+    build_script_path_tx, build_split_key_spend_tx, build_split_script_path_tx, build_unwind_tx,
+    finish_coop_signature, generate_identity, key_spend_sighash, keys_from_body, mad_address,
+    mad_escrow_from_body, new_nonce_seed, partida_address, partida_escrow_from_body, sign_arbiter,
+    sign_arbiter_leaf, sign_body, sign_quote, sign_unwind, validate_funding_tx, verify_arbiter,
+    verify_body, verify_quote, ArbiterWith, ExpectedFunding, Identity,
 };
 use hbp_core::{
     bond_minor, bond_warnings, fiat_minor_to_sats, minor_from_major, ArbiterNomination,
@@ -143,6 +144,32 @@ enum Cmd {
         #[arg(long)]
         refund_dest: Option<String>,
     },
+    /// Script-path A+M or A+C (after T). `--dir` is the party; `--arbiter-dir` is A.
+    ArbiterClose {
+        #[arg(long)]
+        kind: String,
+        /// am = arbiter+mandante; ac = arbiter+contratista
+        #[arg(long)]
+        with: String,
+        #[arg(long)]
+        arbiter_dir: PathBuf,
+        #[arg(long)]
+        outpoint: String,
+        #[arg(long)]
+        sats: u64,
+        #[arg(long)]
+        dest: String,
+        #[arg(long, default_value_t = 200)]
+        fee: u64,
+        #[arg(long)]
+        partida: Option<u32>,
+        #[arg(long)]
+        pay_sats: Option<u64>,
+        #[arg(long)]
+        refund_dest: Option<String>,
+        #[arg(long)]
+        peer_dir: Option<PathBuf>,
+    },
     /// Build+sign a script-path unwind (after T). Mandante: partida. Contratista: boleta.
     Unwind {
         #[arg(long)]
@@ -238,6 +265,32 @@ fn run() -> Result<()> {
             refund,
             pay_sats,
             refund_dest.as_deref(),
+        ),
+        Cmd::ArbiterClose {
+            kind,
+            with,
+            arbiter_dir,
+            outpoint,
+            sats,
+            dest,
+            fee,
+            partida,
+            pay_sats,
+            refund_dest,
+            peer_dir,
+        } => cmd_arbiter_close(
+            &store,
+            &kind,
+            &with,
+            arbiter_dir,
+            &outpoint,
+            sats,
+            &dest,
+            fee,
+            partida,
+            pay_sats,
+            refund_dest.as_deref(),
+            peer_dir,
         ),
         Cmd::Unwind {
             kind,
@@ -847,6 +900,130 @@ fn cmd_coop_close(
     }
     println!("{hex}");
     eprintln!("coop-close {kind} txid {txid}");
+    Ok(())
+}
+
+fn cmd_arbiter_close(
+    store: &Store,
+    kind: &str,
+    with: &str,
+    arbiter_dir: PathBuf,
+    outpoint: &str,
+    sats: u64,
+    dest: &str,
+    fee: u64,
+    partida: Option<u32>,
+    pay_sats: Option<u64>,
+    refund_dest: Option<&str>,
+    peer_dir: Option<PathBuf>,
+) -> Result<()> {
+    let id = store.load_identity()?;
+    let mut project = store.load_project()?;
+    let named = project
+        .named_arbiter_pubkey()?
+        .ok_or_else(|| anyhow::anyhow!("arbiter not named yet"))?
+        .to_string();
+    let a_store = Store::new(arbiter_dir);
+    let a_id = a_store.load_identity()?;
+    if a_id.public_key != named {
+        bail!(
+            "arbiter-dir pubkey {} != nominated {}",
+            a_id.public_key,
+            named
+        );
+    }
+    let role = party_role(&id, &project.contract.body)?;
+    let with = match with.to_ascii_lowercase().as_str() {
+        "am" | "a+m" | "mandante" => ArbiterWith::Mandante,
+        "ac" | "a+c" | "contratista" => ArbiterWith::Contratista,
+        other => bail!("--with must be am|ac, got {other}"),
+    };
+    match (with, role) {
+        (ArbiterWith::Mandante, Role::Mandante) => {}
+        (ArbiterWith::Contratista, Role::Contratista) => {}
+        _ => bail!("--dir must be the party in --with (am → mandante, ac → contratista)"),
+    }
+    let named_ref = Some(named.as_str());
+    let escrow = match kind {
+        "partida" => {
+            let pid = partida.context("--partida required")?;
+            partida_escrow_from_body(&project.contract.body, pid, named_ref)?
+        }
+        "bond" => bond_escrow_from_body(&project.contract.body, named_ref)?,
+        other => bail!("kind must be partida|bond, got {other}"),
+    };
+    let net = hbp_bitcoin::to_btc_network(project.contract.body.network);
+    let dest_addr = Address::from_str(dest)
+        .map_err(|e| anyhow::anyhow!("{e}"))?
+        .require_network(net)?;
+    let outpoint = OutPoint::from_str(outpoint).map_err(|e| anyhow::anyhow!("{e}"))?;
+    let unsigned = if let Some(pay) = pay_sats {
+        let refund_addr = refund_dest.context("--refund-dest required with --pay-sats")?;
+        let refund_addr = Address::from_str(refund_addr)
+            .map_err(|e| anyhow::anyhow!("{e}"))?
+            .require_network(net)?;
+        build_split_script_path_tx(
+            escrow.dispute_locktime,
+            outpoint,
+            Amount::from_sat(sats),
+            &dest_addr,
+            Amount::from_sat(pay),
+            &refund_addr,
+            Amount::from_sat(fee),
+        )?
+    } else {
+        build_script_path_tx(
+            escrow.dispute_locktime,
+            outpoint,
+            Amount::from_sat(sats),
+            &dest_addr,
+            Amount::from_sat(fee),
+        )?
+    };
+    let prev = TxOut {
+        value: Amount::from_sat(sats),
+        script_pubkey: escrow.script_pubkey(),
+    };
+    let signed = sign_arbiter_leaf(
+        &escrow,
+        with,
+        unsigned,
+        &prev,
+        &a_id.secret()?,
+        &id.secret()?,
+    )?;
+    let hex = serialize_hex(&signed);
+    let txid = signed.compute_txid().to_string();
+    match (kind, with) {
+        ("partida", ArbiterWith::Contratista) if pay_sats.is_none() => {
+            let pid = partida.unwrap();
+            let _ = project.propose_reception(pid);
+            let _ = project.mark_paid(pid, txid.clone());
+        }
+        ("partida", _) => {
+            let pid = partida.unwrap();
+            let _ = project.mark_partida_unwound(pid, txid.clone());
+        }
+        ("bond", ArbiterWith::Contratista) => {
+            let _ = project.mark_bond_released(txid.clone());
+        }
+        ("bond", ArbiterWith::Mandante) => {
+            let _ = project.mark_bond_unwound(txid.clone());
+        }
+        _ => {}
+    }
+    store.save_project(&project)?;
+    if let Some(peer) = peer_dir {
+        let peer_store = Store::new(peer);
+        if peer_store.root.join("CURRENT").exists() {
+            let _ = peer_store.save_project(&project);
+        }
+    }
+    println!("{hex}");
+    eprintln!(
+        "arbiter-close {kind} {:?} txid {txid} locktime {}",
+        with, signed.lock_time
+    );
     Ok(())
 }
 

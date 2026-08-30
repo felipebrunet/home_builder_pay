@@ -22,12 +22,23 @@ pub enum EscrowKind {
     Mad,
 }
 
+/// Who joins the arbiter on a script-path spend (after T, before/with T2).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ArbiterWith {
+    Mandante,
+    Contratista,
+}
+
 #[derive(Clone)]
 pub struct Escrow {
     pub kind: EscrowKind,
     pub spend_info: TaprootSpendInfo,
     pub unwind_script: ScriptBuf,
+    /// Last-resort unwind locktime (T2 if arbiter, else T).
     pub locktime: bitcoin::absolute::LockTime,
+    /// `after(T)` on A&&M / A&&C leaves. Same as `locktime` when there is no arbiter.
+    pub dispute_locktime: bitcoin::absolute::LockTime,
+    pub leaves: Vec<ScriptBuf>,
 }
 
 impl Escrow {
@@ -50,9 +61,28 @@ impl Escrow {
     }
 
     pub fn control_block(&self) -> Result<bitcoin::taproot::ControlBlock, Error> {
+        self.control_block_for(&self.unwind_script)
+    }
+
+    pub fn control_block_for(
+        &self,
+        script: &ScriptBuf,
+    ) -> Result<bitcoin::taproot::ControlBlock, Error> {
         self.spend_info
-            .control_block(&(self.unwind_script.clone(), LeafVersion::TapScript))
+            .control_block(&(script.clone(), LeafVersion::TapScript))
             .ok_or_else(|| Error::Taproot("missing control block".into()))
+    }
+
+    pub fn arbiter_leaf(&self, with: ArbiterWith) -> Result<&ScriptBuf, Error> {
+        if self.leaves.len() != 3 {
+            return Err(Error::Taproot(
+                "escrow has no arbiter leaves (need A&&M / A&&C / unwind)".into(),
+            ));
+        }
+        match with {
+            ArbiterWith::Mandante => Ok(&self.leaves[0]),
+            ArbiterWith::Contratista => Ok(&self.leaves[1]),
+        }
     }
 
     pub fn internal_key(&self) -> bitcoin::key::UntweakedPublicKey {
@@ -165,6 +195,8 @@ fn finalize_escrow(
         spend_info,
         unwind_script: leaves[unwind_idx].clone(),
         locktime: bitcoin::absolute::LockTime::from_consensus(locktime),
+        dispute_locktime: bitcoin::absolute::LockTime::from_consensus(locktime),
+        leaves,
     })
 }
 
@@ -199,7 +231,9 @@ fn arbiter_escrow(
         EscrowKind::Bond => unwind_script(&c, t_end)?,
         EscrowKind::Mad => return Err(Error::Taproot("mad has no arbiter tree".into())),
     };
-    finalize_escrow(mandante, contratista, vec![am, ac, last], 2, t_end, kind)
+    let mut e = finalize_escrow(mandante, contratista, vec![am, ac, last], 2, t_end, kind)?;
+    e.dispute_locktime = bitcoin::absolute::LockTime::from_consensus(t_dispute);
+    Ok(e)
 }
 
 pub fn partida_descriptor(

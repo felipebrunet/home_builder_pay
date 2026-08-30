@@ -128,3 +128,141 @@ hbp_offer_60k() {
   echo "p1   $P1_ADDR"
   echo "p2   $P2_ADDR"
 }
+
+# Optional env: NEW_EXTRA (e.g. --dispute mad --mad-bps 100)
+hbp_offer_60k_ex() {
+  local t1="$1" t2="$2" tproj="$3" note="$4"
+  $HBP --dir .m init --network regtest --role mandante
+  $HBP --dir .c init --network regtest --role contratista
+  # shellcheck disable=SC2086
+  $HBP --dir .m new --unit USD --bond-bps 3333 --t-project "$tproj" ${NEW_EXTRA:-}
+  $HBP --dir .m add-partida --desc Cimentacion --amount 30000 --plazo "$t1"
+  $HBP --dir .m add-partida --desc Muros --amount 30000 --plazo "$t2"
+  $HBP --dir .m offer
+  $HBP --dir .c accept .m/00-offer.json
+  $HBP --dir .m commit .c/01-accepted.pending.json
+  CID="$(cat .m/CURRENT)"
+  $HBP --dir .c import ".m/contracts/$CID/01-accepted.json"
+  $HBP --dir .m quote --btc-price "$PRICE" --bond-sats "$BOND_SATS" --fx-note "$note"
+  $HBP --dir .c accept-quote ".m/contracts/$CID/02-quote.json"
+  $HBP --dir .m accept-quote ".c/contracts/$CID/02-quote.json"
+}
+
+hbp_read_addrs() {
+  mapfile -t ADDRS < <($HBP --dir .m addresses)
+  BOND_ADDR="$(printf '%s\n' "${ADDRS[@]}" | awk '/^bond bcrt/{print $2}')"
+  P1_ADDR="$(printf '%s\n' "${ADDRS[@]}" | awk '/^partida 1 bcrt/{print $3}')"
+  P2_ADDR="$(printf '%s\n' "${ADDRS[@]}" | awk '/^partida 2 bcrt/{print $3}')"
+  MAD_ADDR="$(printf '%s\n' "${ADDRS[@]}" | awk '/^mad bcrt/{print $2}')"
+}
+
+name_arbiter() {
+  $HBP --dir .a init --network regtest
+  local apk
+  apk="$(python3 -c "import json; print(json.load(open('.a/identity.json'))['public_key'])")"
+  $HBP --dir .m propose-arbiter --pubkey "$apk"
+  $HBP --dir .c accept-arbiter ".m/contracts/$CID/03-arbiter.json"
+  $HBP --dir .m accept-arbiter ".c/contracts/$CID/03-arbiter.json"
+  echo "arbiter $apk"
+}
+
+advance_mtp() {
+  local when="$1"
+  rpc setmocktime "$when" >/dev/null
+  rpc generatetoaddress 12 "$MINE_ADDR" >/dev/null
+}
+
+fund_bond_p1_mad() {
+  local bond_addr="$1" p1_addr="$2" mad_addr="$3" mad_btc="$4" tag="$5"
+  python3 - "$BCLI" "$bond_addr" "$p1_addr" "$mad_addr" "$BOND_BTC" "$PARTIDA_BTC" "$mad_btc" "$tag" <<'PY'
+import json, subprocess, sys
+bcli = sys.argv[1].split()
+bond_addr, p1_addr, mad_addr = sys.argv[2], sys.argv[3], sys.argv[4]
+bond, part, mad = float(sys.argv[5]), float(sys.argv[6]), float(sys.argv[7])
+tag = sys.argv[8]
+fee = 0.00020000
+
+def rpc(args, wallet=None):
+    cmd = list(bcli)
+    if wallet:
+        cmd.append(f"-rpcwallet={wallet}")
+    cmd.extend(args)
+    out = subprocess.check_output(cmd, text=True).strip()
+    try:
+        return json.loads(out)
+    except json.JSONDecodeError:
+        return out
+
+def pick(wallet):
+    utxos = [u for u in rpc(["listunspent", "1"], wallet=wallet) if u["spendable"] and u["amount"] >= 1]
+    if not utxos:
+        raise SystemExit(f"no utxo in {wallet}")
+    return max(utxos, key=lambda u: u["amount"])
+
+m, c = pick("hbp_mandante"), pick("hbp_contratista")
+ins = [{"txid": m["txid"], "vout": m["vout"]}, {"txid": c["txid"], "vout": c["vout"]}]
+outs = {
+    bond_addr: bond,
+    p1_addr: part,
+    mad_addr: mad,
+    rpc(["getrawchangeaddress"], wallet="hbp_mandante"): round(m["amount"] - part - mad / 2 - fee / 2, 8),
+    rpc(["getrawchangeaddress"], wallet="hbp_contratista"): round(c["amount"] - bond - mad / 2 - fee / 2, 8),
+}
+psbt = rpc(["createpsbt", json.dumps(ins), json.dumps(outs)])
+p1 = rpc(["walletprocesspsbt", psbt], wallet="hbp_mandante")
+p2 = rpc(["walletprocesspsbt", p1["psbt"]], wallet="hbp_contratista")
+fin = rpc(["finalizepsbt", p2["psbt"]])
+if not fin.get("complete"):
+    raise SystemExit(f"psbt not complete: {fin}")
+txid = rpc(["sendrawtransaction", fin["hex"]])
+open(f"/tmp/hbp-{tag}-fund.hex", "w").write(fin["hex"].strip() + "\n")
+print(txid)
+PY
+}
+
+fund_wrong_p1() {
+  local bond_addr="$1" p1_addr="$2" wrong_btc="$3" tag="$4"
+  python3 - "$BCLI" "$bond_addr" "$p1_addr" "$BOND_BTC" "$wrong_btc" "$tag" <<'PY'
+import json, subprocess, sys
+bcli = sys.argv[1].split()
+bond_addr, p1_addr = sys.argv[2], sys.argv[3]
+bond, part = float(sys.argv[4]), float(sys.argv[5])
+tag = sys.argv[6]
+fee = 0.00020000
+
+def rpc(args, wallet=None):
+    cmd = list(bcli)
+    if wallet:
+        cmd.append(f"-rpcwallet={wallet}")
+    cmd.extend(args)
+    out = subprocess.check_output(cmd, text=True).strip()
+    try:
+        return json.loads(out)
+    except json.JSONDecodeError:
+        return out
+
+def pick(wallet):
+    utxos = [u for u in rpc(["listunspent", "1"], wallet=wallet) if u["spendable"] and u["amount"] >= 1]
+    if not utxos:
+        raise SystemExit(f"no utxo in {wallet}")
+    return max(utxos, key=lambda u: u["amount"])
+
+m, c = pick("hbp_mandante"), pick("hbp_contratista")
+ins = [{"txid": m["txid"], "vout": m["vout"]}, {"txid": c["txid"], "vout": c["vout"]}]
+outs = {
+    bond_addr: bond,
+    p1_addr: part,
+    rpc(["getrawchangeaddress"], wallet="hbp_mandante"): round(m["amount"] - part - fee / 2, 8),
+    rpc(["getrawchangeaddress"], wallet="hbp_contratista"): round(c["amount"] - bond - fee / 2, 8),
+}
+psbt = rpc(["createpsbt", json.dumps(ins), json.dumps(outs)])
+p1 = rpc(["walletprocesspsbt", psbt], wallet="hbp_mandante")
+p2 = rpc(["walletprocesspsbt", p1["psbt"]], wallet="hbp_contratista")
+fin = rpc(["finalizepsbt", p2["psbt"]])
+if not fin.get("complete"):
+    raise SystemExit(f"psbt not complete: {fin}")
+txid = rpc(["sendrawtransaction", fin["hex"]])
+open(f"/tmp/hbp-{tag}-fund.hex", "w").write(fin["hex"].strip() + "\n")
+print(txid)
+PY
+}

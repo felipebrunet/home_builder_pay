@@ -6,10 +6,11 @@ use hbp_core::{NonceJournal, Unit};
 
 use crate::musig::{consume_nonce_seed, finish_coop_signature, verify_aggregated};
 use crate::spend::{
-    apply_key_spend_sig, build_key_spend_tx, build_split_key_spend_tx, build_unwind_tx,
-    key_spend_sighash, sign_unwind, verify_key_spend_sig, verify_unwind_control_block,
+    apply_key_spend_sig, build_key_spend_tx, build_script_path_tx, build_split_key_spend_tx,
+    build_unwind_tx, key_spend_sighash, sign_arbiter_leaf, sign_unwind, verify_key_spend_sig,
+    verify_unwind_control_block,
 };
-use crate::taproot::{assert_output_key_matches, bond_descriptor, partida_descriptor};
+use crate::taproot::{assert_output_key_matches, bond_descriptor, partida_descriptor, ArbiterWith};
 use crate::validate::{validate_funding_tx, ExpectedFunding};
 use crate::{sign_arbiter, sign_body, sign_quote, verify_arbiter, verify_body, verify_quote};
 
@@ -281,6 +282,52 @@ fn arbiter_tree_changes_address() {
         None,
     );
     assert!(unnamed.is_err());
+}
+
+#[test]
+fn arbiter_leaf_two_key_witness() {
+    let (m_sk, mp, _cs, cp) = pair();
+    let secp = Secp256k1::new();
+    let ask = SecretKey::new(&mut OsRng);
+    let ap = PublicKey::from_secret_key(&secp, &ask);
+    let ahex = hex::encode(ap.serialize());
+    let body = hbp_core::ContractBody {
+        network: hbp_core::Network::Regtest,
+        unit: Unit::Usd,
+        bond_bps: 1000,
+        t_project: 1_800_000_000,
+        partidas: vec![hbp_core::PartidaSpec {
+            id: 1,
+            description: "x".into(),
+            amount_minor: 100,
+            plazo_unix: 1_700_000_000,
+        }],
+        mandante_pubkey: hex::encode(mp.serialize()),
+        contratista_pubkey: Some(hex::encode(cp.serialize())),
+        dispute: hbp_core::DisputePolicy::Arbiter { window_secs: 15 },
+    };
+    let escrow = crate::taproot::partida_escrow_from_body(&body, 1, Some(ahex.as_str())).unwrap();
+    let am = escrow.arbiter_leaf(ArbiterWith::Mandante).unwrap();
+    let cb = escrow.control_block_for(am).unwrap();
+    let secp = Secp256k1::verification_only();
+    assert!(cb.verify_taproot_commitment(&secp, escrow.output_key().to_x_only_public_key(), am));
+    let dest = bitcoin::Address::p2tr_tweaked(escrow.output_key(), Network::Regtest);
+    let prev = TxOut {
+        value: Amount::from_sat(20_000),
+        script_pubkey: escrow.script_pubkey(),
+    };
+    let tx = build_script_path_tx(
+        escrow.dispute_locktime,
+        dummy_outpoint(),
+        Amount::from_sat(20_000),
+        &dest,
+        Amount::from_sat(200),
+    )
+    .unwrap();
+    let signed = sign_arbiter_leaf(&escrow, ArbiterWith::Mandante, tx, &prev, &ask, &m_sk).unwrap();
+    assert_eq!(signed.input[0].witness.len(), 4);
+    assert_eq!(signed.lock_time, escrow.dispute_locktime);
+    assert_ne!(signed.lock_time, escrow.locktime);
 }
 
 #[test]

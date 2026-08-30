@@ -6,7 +6,7 @@ use bitcoin::sighash::{Prevouts, SighashCache, TapSighashType};
 use bitcoin::taproot::LeafVersion;
 use bitcoin::{Address, Amount, OutPoint, ScriptBuf, Sequence, Transaction, TxIn, TxOut, Witness};
 
-use crate::taproot::Escrow;
+use crate::taproot::{ArbiterWith, Escrow};
 use crate::Error;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -112,6 +112,73 @@ pub fn build_unwind_tx(
             script_pubkey: dest.script_pubkey(),
         }],
     })
+}
+
+pub fn build_script_path_tx(
+    lock_time: bitcoin::absolute::LockTime,
+    outpoint: OutPoint,
+    prevout_value: Amount,
+    dest: &Address,
+    fee: Amount,
+) -> Result<Transaction, Error> {
+    let mut tx = build_key_spend_tx(outpoint, prevout_value, dest, fee)?;
+    tx.lock_time = lock_time;
+    tx.input[0].sequence = Sequence::ENABLE_LOCKTIME_NO_RBF;
+    Ok(tx)
+}
+
+pub fn build_split_script_path_tx(
+    lock_time: bitcoin::absolute::LockTime,
+    outpoint: OutPoint,
+    prevout_value: Amount,
+    pay_dest: &Address,
+    pay: Amount,
+    refund_dest: &Address,
+    fee: Amount,
+) -> Result<Transaction, Error> {
+    let mut tx =
+        build_split_key_spend_tx(outpoint, prevout_value, pay_dest, pay, refund_dest, fee)?;
+    tx.lock_time = lock_time;
+    tx.input[0].sequence = Sequence::ENABLE_LOCKTIME_NO_RBF;
+    Ok(tx)
+}
+
+/// Script-path spend with two Schnorr sigs: `and_v(v:pk(A), and_v(v:pk(party), after(T)))`.
+/// Witness: `[sig_A, sig_party, script, control_block]`.
+pub fn sign_arbiter_leaf(
+    escrow: &Escrow,
+    with: ArbiterWith,
+    mut tx: Transaction,
+    prevout: &TxOut,
+    arbiter_secret: &SecretKey,
+    party_secret: &SecretKey,
+) -> Result<Transaction, Error> {
+    let script = escrow.arbiter_leaf(with)?.clone();
+    let secp = Secp256k1::new();
+    let leaf_hash = bitcoin::taproot::TapLeafHash::from_script(&script, LeafVersion::TapScript);
+    let mut cache = SighashCache::new(&tx);
+    let sighash = cache
+        .taproot_script_spend_signature_hash(
+            0,
+            &Prevouts::All(&[prevout]),
+            leaf_hash,
+            TapSighashType::Default,
+        )
+        .map_err(|e| Error::Sighash(e.to_string()))?;
+    let msg = Message::from_digest(sighash.to_byte_array());
+    let sig_a =
+        secp.sign_schnorr_no_aux_rand(&msg, &Keypair::from_secret_key(&secp, arbiter_secret));
+    let sig_p = secp.sign_schnorr_no_aux_rand(&msg, &Keypair::from_secret_key(&secp, party_secret));
+    let cb = escrow.control_block_for(&script)?;
+    let mut witness = Witness::new();
+    // Tapscript `and_v(v:pk(A), and_v(v:pk(party), after(T)))` consumes
+    // the arbiter signature first (top of stack).
+    witness.push(sig_p.as_ref());
+    witness.push(sig_a.as_ref());
+    witness.push(script.as_bytes());
+    witness.push(&cb.serialize());
+    tx.input[0].witness = witness;
+    Ok(tx)
 }
 
 pub fn sign_unwind(

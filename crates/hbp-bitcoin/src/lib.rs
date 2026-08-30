@@ -19,14 +19,15 @@ pub use sign_contract::{
     sign_arbiter, sign_body, sign_quote, verify_arbiter, verify_body, verify_quote,
 };
 pub use spend::{
-    apply_key_spend_sig, build_key_spend_tx, build_split_key_spend_tx, build_unwind_tx,
-    key_spend_sighash, sign_unwind, verify_key_spend_sig, verify_unwind_control_block, UnwindRole,
+    apply_key_spend_sig, build_key_spend_tx, build_script_path_tx, build_split_key_spend_tx,
+    build_split_script_path_tx, build_unwind_tx, key_spend_sighash, sign_arbiter_leaf, sign_unwind,
+    verify_key_spend_sig, verify_unwind_control_block, UnwindRole,
 };
 pub use taproot::{
     assert_output_key_matches, bond_address, bond_descriptor, bond_escrow_from_body,
     keys_from_body, mad_address, mad_escrow, mad_escrow_from_body, nums_xonly, partida_address,
-    partida_descriptor, partida_escrow_from_body, to_btc_network, tweaked_key_agg, Escrow,
-    EscrowKind,
+    partida_descriptor, partida_escrow_from_body, to_btc_network, tweaked_key_agg, ArbiterWith,
+    Escrow, EscrowKind,
 };
 pub use validate::{validate_funding_tx, ExpectedFunding, FundingIssue};
 

@@ -18,7 +18,7 @@ Checkpoint de sesión. Actualizar **esta sección** cada vez que se cierre un hi
 |---|---|
 | Fecha | 2026-08-30 |
 | Rama | `master` |
-| Hito | **MVP-0 + E2E unwind 1–8 minados + políticas MAD/árbitro en código** |
+| Hito | **MVP-0 + catálogo 142 (123 PASS) + MAD/árbitro minados** |
 | Verificar al abrir | `cargo test --workspace` (25 unitarios: `hbp-core` 15, `hbp-bitcoin` 10) |
 | Nodo Bitcoin local | `/home/felipe/projects/btc_clients` — Core 31.1 regtest, RPC `:18443`. Los scripts usan `bitcoin-cli`; `hbp` no embebe el cliente. |
 | Origin | `git@github.com-hbp:felipebrunet/home_builder_pay.git` (MIT, público) |
@@ -60,26 +60,23 @@ Default on-chain sigue siendo **`unwind`**. MAD y árbitro tienen descriptores y
 - MAD: tercera salida `2 * mad_sats`; key path coop split; tras T solo `pk(NUMS)&&after(T)`.
 - `validate_funding_tx` rechaza monto de partida distinto al quote. `--partida-only` exige boleta ya fondeada.
 
-**E2E minado (todos `unwind`)** — índice [REGTEST_SCENARIOS.md](REGTEST_SCENARIOS.md). Catálogo completo (142, no todos minados): [SCENARIOS.md](SCENARIOS.md).
+**E2E minado** — unwind 1–8 [REGTEST_SCENARIOS.md](REGTEST_SCENARIOS.md); MAD + A+M/A+C + T2 [scripts/regtest_catalog.sh](../scripts/regtest_catalog.sh). Catálogo 142 con ticks: [SCENARIOS.md](SCENARIOS.md).
 
 1. Feliz. 2. Abandono / ambos enojados. 4. Cancel coop. 5. Para tras P1 (timeout boleta). 6. Split 80/20. 7. Sin boleta (rechaza fondeo P1). 8. Cancel acordado tras P1.
 
 ### No listo
 
 - CLI MuSig2 **por archivos** (sin `--peer-dir`). Hoy el demo en una máquina usa `coop-close --peer-dir`.
-- PSBT de fondeo **dentro de** `hbp` (los scripts lo arman con `bitcoin-cli`).
-- E2E minado de **MAD** (fondeo 3 salidas + split / quema).
-- E2E minado de **árbitro** (CLI de script-path A+M o A+C; dos firmas, no MuSig2).
+- PSBT `hbp fund` (el fondeo exacto aún se arma con `bitcoin-cli` / scripts).
 - `hbp listen` / `connect`, Tor, DHT.
 - Seed BIP39, boleta que rueda al siguiente 2-de-2, GUI, Android, mainnet.
+- 19 ítems del catálogo sin script (reorg, RBF, keys perdidas, humano): [SCENARIOS.md](SCENARIOS.md).
 
 ### Cómo seguir en la próxima sesión
 
-1. Leer esta sección 0, las decisiones §2, [DISPUTE.md](DISPUTE.md) y [SCENARIOS.md](SCENARIOS.md).
-2. `cargo test --workspace`.
-3. Elegir **uno** (no los dos a la vez):
-   - Plan §11 ítem 1: recepción MuSig2 por JSON en `--dir` (el protocolo de archivos, sin bitcoind).
-   - Cerrar el loop de disputa: script regtest MAD (3 outputs) **o** gasto A+M del script path.
+1. Leer esta sección 0, [DISPUTE.md](DISPUTE.md) y [SCENARIOS.md](SCENARIOS.md).
+2. `scripts/run_catalog.sh` (unit + CLI + MAD/árbitro minados).
+3. Siguiente código: `hbp fund` (PSBT montos exactos) **o** MuSig2 por archivos (ítem 1).
 4. No abrir Tor, DHT ni GUI.
 
 El usuario acordó: canal = archivos ahora; Tor p2p después; DHT solo si hay marketplace. MAD nunca a wallet del autor. Árbitro solo si ambos nombran a la misma persona antes de los UTXO.
@@ -366,6 +363,7 @@ hbp --dir <carpeta> <comando>
 | `status` | ambos | JSON de estado |
 | `verify-funding --tx-hex --partida` | ambos | valida y marca funded |
 | `coop-close --kind --peer-dir …` | demo misma máquina | MuSig2 key-path |
+| `arbiter-close --kind --with am\|ac --arbiter-dir` | A+M o A+C | script path tras T |
 | `unwind --kind --outpoint --sats --dest --fee` | dueño del unwind | tx hex |
 
 Claves en claro. Toy. No mainnet.

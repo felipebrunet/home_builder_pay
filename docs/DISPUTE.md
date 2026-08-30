@@ -75,6 +75,6 @@ A no es M ni C. Cambiar A después de fondear es imposible: cambia la address. E
 
 Catálogo de escenarios (incl. A que desaparece, MAD improductivo, boleta con A): [SCENARIOS.md](SCENARIOS.md) §§8–12.
 
-## Qué falta para E2E on-chain de MAD/árbitro
+## E2E on-chain de MAD/árbitro
 
-Los descriptores, la nomination conjunta y el contrato ya existen (tests: address distinta si hay A, error si A no está nombrado, hoja NUMS, firmas `hbp-arbiter`). Falta un script de fondeo con 3 outputs (MAD) y un flujo A+M firmando juntos el script path. No bloquea el default `unwind`.
+Corridos en `scripts/regtest_catalog.sh`: fondeo MAD 3 salidas + split / MAD improductivo; `hbp arbiter-close --with am|ac` (P1 a C, P1 a M, split 80/20, boleta a M); A desaparece → unwind T2. Índice con ticks: [SCENARIOS.md](SCENARIOS.md).
