@@ -58,10 +58,10 @@ hbp --dir .m commit .c/01-accepted.pending.json
 # el contratista importa el contrato firmado
 hbp --dir .c import .m/contracts/<id>/01-accepted.json
 
-# ambos firman una cotizacion en sats (precio de BTC en la unidad del contrato)
+# ambos firman una cotización en sats (precio de BTC en la unidad del contrato)
 hbp --dir .m quote --btc-price 80000 --fx-note "manual"
 hbp --dir .c accept-quote .m/contracts/<id>/02-quote.json
-hbp --dir .m accept-quote .c/contracts/<id>/02-quote.json   # el mandante importa la cotizacion ya contrafirmada
+hbp --dir .m accept-quote .c/contracts/<id>/02-quote.json   # el mandante importa la cotización ya contrafirmada
 
 hbp --dir .m addresses
 hbp --dir .c status
