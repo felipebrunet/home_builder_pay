@@ -1,0 +1,21 @@
+[package]
+name = "hbp-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "CLI client for home_builder_pay"
+
+[[bin]]
+name = "hbp"
+path = "src/main.rs"
+
+[dependencies]
+hbp-core.workspace = true
+hbp-bitcoin.workspace = true
+anyhow.workspace = true
+bitcoin.workspace = true
+clap.workspace = true
+hex.workspace = true
+serde.workspace = true
+serde_json.workspace = true
