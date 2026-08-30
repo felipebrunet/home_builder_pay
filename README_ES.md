@@ -8,7 +8,7 @@ Esto es un MVP: CLI de escritorio, **regtest/signet**, archivos pasados a mano. 
 
 Protocolo, arquitectura, hoja de ruta y **en qué quedó la última sesión**: [docs/PROJECT.md](docs/PROJECT.md) (empezar por la sección 0).
 
-Hito actual: **MVP-0** más demos **minadas** en regtest (camino feliz y contratista que abandona). Relatos: [docs/REGTEST_HAPPY_PATH.md](docs/REGTEST_HAPPY_PATH.md), [docs/REGTEST_CONTRACTOR_ABANDONS.md](docs/REGTEST_CONTRACTOR_ABANDONS.md).
+Hito actual: **MVP-0** más escenarios **minados** en regtest (feliz e infelices). Índice: [docs/REGTEST_SCENARIOS.md](docs/REGTEST_SCENARIOS.md).
 
 ## Protocolo (resumen)
 

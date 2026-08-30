@@ -8,7 +8,7 @@ This is an MVP: desktop CLI, **regtest/signet**, files passed by hand. No Tor, n
 
 Full protocol, architecture, roadmap, and **where the last session left off**: [docs/PROJECT.md](docs/PROJECT.md) (start at section 0). That document is currently in Spanish.
 
-Current milestone: **MVP-0** plus mined regtest demos (happy path and contractor-abandons). Walkthroughs (Spanish): [docs/REGTEST_HAPPY_PATH.md](docs/REGTEST_HAPPY_PATH.md), [docs/REGTEST_CONTRACTOR_ABANDONS.md](docs/REGTEST_CONTRACTOR_ABANDONS.md).
+Current milestone: **MVP-0** plus mined regtest scenarios (happy path and unhappy paths). Index: [docs/REGTEST_SCENARIOS.md](docs/REGTEST_SCENARIOS.md) (Spanish).
 
 ## Protocol (short)
 

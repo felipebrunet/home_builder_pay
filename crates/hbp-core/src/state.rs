@@ -291,17 +291,36 @@ impl Project {
         Ok(())
     }
 
+    pub fn has_open_onchain_partida(&self) -> bool {
+        self.partidas.iter().any(|p| {
+            matches!(
+                p.state,
+                PartidaStatus::Funding { .. }
+                    | PartidaStatus::Locked { .. }
+                    | PartidaStatus::ReceptionProposed { .. }
+            )
+        })
+    }
+
     pub fn mark_bond_released(&mut self, txid: String) -> Result<()> {
         if !matches!(self.bond, BondStatus::Funded { .. }) {
             return Err(Error::protocol("bond is not funded"));
         }
-        if !self.partidas.iter().all(|p| p.is_terminal()) {
+        if self.has_open_onchain_partida() {
             return Err(Error::protocol(
-                "cannot release bond while a partida is open",
+                "cannot release bond while a partida is locked on-chain",
             ));
         }
         self.bond = BondStatus::Released { txid };
-        self.status = ProjectStatus::Closed;
+        self.status = if self
+            .partidas
+            .iter()
+            .any(|p| matches!(p.state, PartidaStatus::Paid { .. }))
+        {
+            ProjectStatus::Closed
+        } else {
+            ProjectStatus::Cancelled
+        };
         Ok(())
     }
 
@@ -434,6 +453,22 @@ mod tests {
         p.mark_paid(2, "pay2".into()).unwrap();
         p.mark_bond_released("bondout".into()).unwrap();
         assert_eq!(p.status, ProjectStatus::Closed);
+    }
+
+    #[test]
+    fn can_release_bond_if_later_partidas_never_funded() {
+        let mut p = project();
+        p.set_quote(signed_quote(&p)).unwrap();
+        p.note_bond_funding("bond".into(), 0, 50_000, 1).unwrap();
+        p.note_partida_funding(1, "p1".into(), 1, 20_000, 1, 1)
+            .unwrap();
+        p.mark_paid(1, "pay1".into()).unwrap();
+        p.mark_bond_released("bondout".into()).unwrap();
+        assert_eq!(p.status, ProjectStatus::Closed);
+        assert!(matches!(
+            p.partida(2).unwrap().state,
+            PartidaStatus::AmountAgreed { .. }
+        ));
     }
 
     #[test]

@@ -113,6 +113,9 @@ enum Cmd {
         /// Directory of the other party (`identity.json` + nonce journal).
         #[arg(long)]
         peer_dir: PathBuf,
+        /// Cooperative refund (partida → mandante) instead of payment to contratista.
+        #[arg(long, default_value_t = false)]
+        refund: bool,
     },
     /// Build+sign a script-path unwind (after T). Mandante: partida. Contratista: boleta.
     Unwind {
@@ -181,8 +184,9 @@ fn run() -> Result<()> {
             fee,
             partida,
             peer_dir,
+            refund,
         } => cmd_coop_close(
-            &store, &kind, &outpoint, sats, &dest, fee, partida, peer_dir,
+            &store, &kind, &outpoint, sats, &dest, fee, partida, peer_dir, refund,
         ),
         Cmd::Unwind {
             kind,
@@ -516,6 +520,7 @@ fn cmd_coop_close(
     fee: u64,
     partida: Option<u32>,
     peer_dir: PathBuf,
+    refund: bool,
 ) -> Result<()> {
     let us = store.load_identity()?;
     let peer_store = Store::new(peer_dir);
@@ -572,13 +577,18 @@ fn cmd_coop_close(
     let signed = apply_key_spend_sig(unsigned, &sig);
     let hex = serialize_hex(&signed);
     let txid = signed.compute_txid().to_string();
-    match kind {
-        "partida" => {
+    match (kind, refund) {
+        ("partida", false) => {
             let pid = partida.unwrap();
             let _ = project.propose_reception(pid);
             project.mark_paid(pid, txid.clone())?;
         }
-        "bond" => project.mark_bond_released(txid.clone())?,
+        ("partida", true) => {
+            let pid = partida.unwrap();
+            project.mark_partida_unwound(pid, txid.clone())?;
+        }
+        ("bond", false) => project.mark_bond_released(txid.clone())?,
+        ("bond", true) => project.mark_bond_unwound(txid.clone())?,
         _ => {}
     }
     store.save_project(&project)?;
