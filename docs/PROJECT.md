@@ -6,7 +6,7 @@ Este archivo es la fuente de verdad de producto, protocolo, arquitectura, roadma
 
 **Si retomas en una sesión nueva: lee la sección 0 y el checklist de “listo / no listo”. El código en `crates/` es la implementación de MVP-0.**
 
-Última actualización: 2026-08-30 (`hbp fund` + MuSig2 por archivos + identidad pubkey/restore; catálogo 136 PASS / 6 humano).
+Última actualización: 2026-08-30 (opción C locked: Taproot MuSig2 + árbol; catálogo 142 no se recorta).
 
 ---
 
@@ -38,6 +38,7 @@ Checkpoint de sesión. Actualizar **esta sección** cada vez que se cierre un hi
 | 2026-08-30 | Remainders: address mala, RBF, reorg, keys perdidas, carreras T2 | `scripts/regtest_remainders.sh`, `a81c0f9` |
 | 2026-08-30 | `hbp fund` PSBT montos exactos; `coop-propose` / `coop-sign` / `coop-finish` (sin `--peer-dir`) | `crates/hbp-bitcoin/src/fund.rs`, CLI |
 | 2026-08-30 | Identidad: se comparte pubkey comprimido (no xpub). Restore `init --secret`. `hbp identity [--backup]` | CLI |
+| 2026-08-30 | **Opción C:** se mantiene el descriptor actual (`tr(musig(M,C), hojas)`). Los 142 no se recortan. No se baja a `wsh` ni a `multi_a` en lugar de MuSig2. | este checkpoint |
 
 Default on-chain sigue siendo **`unwind`**. MAD y árbitro están minados. Catálogo: **136 PASS**, **6 NO TEST** (humano). **0 FAIL**.
 
@@ -57,8 +58,8 @@ Default on-chain sigue siendo **`unwind`**. MAD y árbitro están minados. Catá
 - Workspace `hbp-core` / `hbp-bitcoin` / `hbp-cli` (binario `hbp`).
 - Offer / accept / commit / import; JSON canónico; firmas BIP340 tagged `hbp-contract`.
 - Quote de sats (ambos firman).
-- Descriptores: boleta `tr(musig(M,C), pk(C)&&after(T_proyecto))`, partida `tr(musig(M,C), pk(M)&&after(T_partida))`. KeyAgg `[mandante, contratista]`.
-- MuSig2 key-path (64 B) y unwind script-path (CLTV unix, witness 3 ítems).
+- Descriptores (**opción C, locked**): boleta `tr(musig(M,C), pk(C)&&after(T_proyecto))`, partida `tr(musig(M,C), pk(M)&&after(T_partida))`. KeyAgg `[mandante, contratista]`. No se cambia por vault Electrum/`wsh` ni por coop `multi_a`.
+- MuSig2 key-path (64 B) y unwind script-path (CLTV unix, witness 3 ítems). Sparrow/Blue firman el **fondeo** (singlesig → escrow). **No** firman la recepción/unwind: eso es BIP-327 + árbol, que esas wallets no implementan.
 - `NonceJournal`: reutilizar seed aborta.
 - CLI: `init [--secret]`, `identity [--backup]`, `new --dispute unwind\|mad\|arbiter`, `propose-arbiter`, `accept-arbiter`, `add-partida`, `offer`, `accept`, `commit`, `import`, `quote`, `accept-quote`, `addresses`, `status`, `verify-funding`, `fund`, `coop-propose` / `coop-sign` / `coop-finish`, `unwind`, `coop-close --peer-dir` (atajo misma máquina), `arbiter-close --with am\|ac --arbiter-dir`.
 - Identidad = **una** clave secp256k1 por punta. Lo que ve el otro es el **pubkey comprimido** (33 B hex) dentro de `00-offer.json`. No es un xpub HD. El secreto no se pega ni se manda.
@@ -82,10 +83,10 @@ Default on-chain sigue siendo **`unwind`**. MAD y árbitro están minados. Catá
 
 1. Leer esta sección 0, [DISPUTE.md](DISPUTE.md) y [SCENARIOS.md](SCENARIOS.md).
 2. `scripts/run_catalog.sh` (unit + CLI + MAD/árbitro + remainders; el fondeo P1 ya usa `hbp fund`).
-3. Siguiente: **signet en dos laptops** (mismo flujo de archivos). Después `hbp listen` / `connect`. Tor más tarde.
+3. Siguiente: **signet en dos laptops** (mismo flujo de archivos; fondeo Sparrow/Blue o Core; redeem sigue siendo `hbp` / MuSig2). Después `hbp listen` / `connect`. Tor más tarde.
 4. No abrir Tor, DHT ni GUI.
 
-El usuario acordó: canal = archivos ahora; Tor p2p después; DHT solo si hay marketplace. MAD nunca a wallet del autor. Árbitro solo si ambos nombran a la misma persona antes de los UTXO.
+El usuario acordó: canal = archivos ahora; Tor p2p después; DHT solo si hay marketplace. MAD nunca a wallet del autor. Árbitro solo si ambos nombran a la misma persona antes de los UTXO. On-chain = **opción C** (MuSig2 + árbol; 142 intactos).
 
 ---
 
@@ -113,6 +114,7 @@ Copiar Bisq 2-de-2 con quema simétrica no sirve: los montos son asimétricos (2
 | 3 | Moneda | Contrato en USD / UF / CLP. Los sats se fijan **al quotear/fondear**. |
 | 4 | Red | **Sin servidor propio, siempre.** El canal no es parte del contrato. MVP: **archivos** (USB, Signal, mail, carpeta). Después: socket LAN opcional, luego **Tor punto a punto** (onion ya conocido, va en el contrato). **DHT / offer book al final**, solo si el producto es marketplace. |
 | 5 | Lenguaje | **100% Rust** |
+| 6 | On-chain (opción C) | Se **conserva** Taproot + MuSig2 key-path + hojas (`after(T)`, MAD NUMS, árbitro A&&M/A&&C). Catálogo 142 no transable. No se recorta a 2-de-2 `wsh`/Electrum para ganar Sparrow/Blue en el redeem. Fondeo: hot wallet externa (Sparrow/Blue/Core). Redeem: firmante que hable MuSig2 (hoy `hbp`; después Core/Ledger/Nunchuk si calzan). |
 
 Cómo se “conectan”: Bitcoin no necesita un socket. Dos laptops que se pasan `00-offer.json` ya cierran un 2-de-2. Tor oculta IP cuando el contacto ya existe; la DHT es para *encontrar* extraños. No se finge un marketplace antes de minar una recepción en regtest.
 
