@@ -12,7 +12,7 @@ mod validate;
 
 pub use error::Error;
 pub use fund::{build_funding_psbt, funding_tx, FundingCoin, FundingRequest};
-pub use identity::{generate_identity, Identity};
+pub use identity::{generate_identity, identity_from_secret, Identity};
 pub use musig::{
     agg_nonce, combine_partials, consume_nonce_seed, encode_partial, encode_pubnonce,
     finish_coop_signature, new_nonce_seed, our_partial_signature, parse_partial, parse_pubnonce,

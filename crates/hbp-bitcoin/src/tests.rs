@@ -14,6 +14,15 @@ use crate::taproot::{assert_output_key_matches, bond_descriptor, partida_descrip
 use crate::validate::{validate_funding_tx, ExpectedFunding};
 use crate::{sign_arbiter, sign_body, sign_quote, verify_arbiter, verify_body, verify_quote};
 
+#[test]
+fn identity_restore_from_secret() {
+    let id = crate::generate_identity(hbp_core::Network::Regtest).unwrap();
+    let rest = crate::identity_from_secret(hbp_core::Network::Regtest, &id.secret_key).unwrap();
+    assert_eq!(id.public_key, rest.public_key);
+    assert_eq!(id.secret_key, rest.secret_key);
+    assert!(crate::identity_from_secret(hbp_core::Network::Regtest, "00").is_err());
+}
+
 fn pair() -> (SecretKey, PublicKey, SecretKey, PublicKey) {
     let secp = Secp256k1::new();
     let m_sk = SecretKey::new(&mut OsRng);

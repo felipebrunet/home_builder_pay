@@ -15,8 +15,17 @@ pub struct Identity {
 }
 
 pub fn generate_identity(network: Network) -> Result<Identity, Error> {
-    let secp = Secp256k1::new();
     let sk = SecretKey::new(&mut OsRng);
+    identity_from_secret(network, &hex::encode(sk.secret_bytes()))
+}
+
+/// Restore an identity from the 32-byte secret (64 hex chars).
+///
+/// This is the backup: one key, not an HD xprv. The shareable half is
+/// [`Identity::public_key`] (compressed 33-byte hex), not an xpub.
+pub fn identity_from_secret(network: Network, secret_hex: &str) -> Result<Identity, Error> {
+    let sk = crate::convert::parse_btc_sk(secret_hex)?;
+    let secp = Secp256k1::new();
     let pk = PublicKey::from_secret_key(&secp, &sk);
     Ok(Identity {
         network,

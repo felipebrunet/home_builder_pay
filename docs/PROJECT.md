@@ -6,7 +6,7 @@ Este archivo es la fuente de verdad de producto, protocolo, arquitectura, roadma
 
 **Si retomas en una sesión nueva: lee la sección 0 y el checklist de “listo / no listo”. El código en `crates/` es la implementación de MVP-0.**
 
-Última actualización: 2026-08-30 (`hbp fund` PSBT + MuSig2 por archivos; catálogo 136 PASS / 6 humano).
+Última actualización: 2026-08-30 (`hbp fund` + MuSig2 por archivos + identidad pubkey/restore; catálogo 136 PASS / 6 humano).
 
 ---
 
@@ -18,8 +18,8 @@ Checkpoint de sesión. Actualizar **esta sección** cada vez que se cierre un hi
 |---|---|
 | Fecha | 2026-08-30 |
 | Rama | `master` |
-| Hito | **MVP-0 + catálogo 142 (136 PASS, 6 humano) + `hbp fund` + MuSig2 por archivos** |
-| Verificar al abrir | `cargo test --workspace` (34 unitarios: `hbp-core` 16, `hbp-bitcoin` 18) y `scripts/run_catalog.sh` |
+| Hito | **MVP-0 + catálogo 142 (136 PASS, 6 humano) + `hbp fund` + MuSig2 por archivos + identidad pubkey** |
+| Verificar al abrir | `cargo test --workspace` (35 unitarios: `hbp-core` 16, `hbp-bitcoin` 19) y `scripts/run_catalog.sh` |
 | Nodo Bitcoin local | `/home/felipe/projects/btc_clients` — Core 31.1 regtest, RPC `:18443`. Los scripts usan `bitcoin-cli`; `hbp` no embebe el cliente. |
 | Origin | `git@github.com-hbp:felipebrunet/home_builder_pay.git` (MIT, público) |
 
@@ -37,6 +37,7 @@ Checkpoint de sesión. Actualizar **esta sección** cada vez que se cierre un hi
 | 2026-08-30 | MAD 3 salidas + `hbp arbiter-close` (A+M / A+C) minados | `scripts/regtest_catalog.sh`, `6b04665` |
 | 2026-08-30 | Remainders: address mala, RBF, reorg, keys perdidas, carreras T2 | `scripts/regtest_remainders.sh`, `a81c0f9` |
 | 2026-08-30 | `hbp fund` PSBT montos exactos; `coop-propose` / `coop-sign` / `coop-finish` (sin `--peer-dir`) | `crates/hbp-bitcoin/src/fund.rs`, CLI |
+| 2026-08-30 | Identidad: se comparte pubkey comprimido (no xpub). Restore `init --secret`. `hbp identity [--backup]` | CLI |
 
 Default on-chain sigue siendo **`unwind`**. MAD y árbitro están minados. Catálogo: **136 PASS**, **6 NO TEST** (humano). **0 FAIL**.
 
@@ -59,7 +60,8 @@ Default on-chain sigue siendo **`unwind`**. MAD y árbitro están minados. Catá
 - Descriptores: boleta `tr(musig(M,C), pk(C)&&after(T_proyecto))`, partida `tr(musig(M,C), pk(M)&&after(T_partida))`. KeyAgg `[mandante, contratista]`.
 - MuSig2 key-path (64 B) y unwind script-path (CLTV unix, witness 3 ítems).
 - `NonceJournal`: reutilizar seed aborta.
-- CLI: `init`, `new --dispute unwind\|mad\|arbiter`, `propose-arbiter`, `accept-arbiter`, `add-partida`, `offer`, `accept`, `commit`, `import`, `quote`, `accept-quote`, `addresses`, `status`, `verify-funding`, `fund`, `coop-propose` / `coop-sign` / `coop-finish`, `unwind`, `coop-close --peer-dir` (atajo misma máquina), `arbiter-close --with am\|ac --arbiter-dir`.
+- CLI: `init [--secret]`, `identity [--backup]`, `new --dispute unwind\|mad\|arbiter`, `propose-arbiter`, `accept-arbiter`, `add-partida`, `offer`, `accept`, `commit`, `import`, `quote`, `accept-quote`, `addresses`, `status`, `verify-funding`, `fund`, `coop-propose` / `coop-sign` / `coop-finish`, `unwind`, `coop-close --peer-dir` (atajo misma máquina), `arbiter-close --with am\|ac --arbiter-dir`.
+- Identidad = **una** clave secp256k1 por punta. Lo que ve el otro es el **pubkey comprimido** (33 B hex) dentro de `00-offer.json`. No es un xpub HD. El secreto no se pega ni se manda.
 - `hbp fund`: PSBT sin firmar; salidas de escrow **exactas** (boleta + partida [+ MAD]); fee y change desde otros inputs. Dust &lt;546 se rechaza, no se pliega. stdout = PSBT en base64 para `bitcoin-cli walletprocesspsbt`. `--partida-only`: solo el mandante.
 - MuSig2 por archivos: `04-coop.json` (pubnonces + parciales, no el seed). El seed queda en `NonceJournal.pending[sighash]`. `coop-close --peer-dir` sigue para el demo en una máquina.
 - `DisputePolicy::Arbiter { window_secs }` en el body; pubkey en `ArbiterNomination` (`03-arbiter.json`). Sin las dos firmas `hbp-arbiter` no hay addresses.
@@ -73,14 +75,14 @@ Default on-chain sigue siendo **`unwind`**. MAD y árbitro están minados. Catá
 ### No listo
 
 - `hbp listen` / `connect`, Tor, DHT.
-- Seed BIP39, boleta que rueda al siguiente 2-de-2, GUI, Android, mainnet.
+- Boleta que rueda al siguiente 2-de-2, GUI, Android, mainnet. BIP39 no hace falta: el 2-de-2 no tiene seed; backup = `identity --backup` / `init --secret`.
 - 6 ítems del catálogo sin test (humano/off-chain: obra adelantada, coima, herederos, fotos, tribunal): [SCENARIOS.md](SCENARIOS.md).
 
 ### Cómo seguir en la próxima sesión
 
 1. Leer esta sección 0, [DISPUTE.md](DISPUTE.md) y [SCENARIOS.md](SCENARIOS.md).
 2. `scripts/run_catalog.sh` (unit + CLI + MAD/árbitro + remainders; el fondeo P1 ya usa `hbp fund`).
-3. Siguiente código: seed/backup (BIP39 o descriptor), después signet en dos laptops, después `hbp listen` / `connect`. Tor más tarde.
+3. Siguiente: **signet en dos laptops** (mismo flujo de archivos). Después `hbp listen` / `connect`. Tor más tarde.
 4. No abrir Tor, DHT ni GUI.
 
 El usuario acordó: canal = archivos ahora; Tor p2p después; DHT solo si hay marketplace. MAD nunca a wallet del autor. Árbitro solo si ambos nombran a la misma persona antes de los UTXO.
@@ -352,7 +354,8 @@ hbp --dir <carpeta> <comando>
 
 | Comando | Quién | Efecto |
 |---|---|---|
-| `init --network --role` | ambos | identidad |
+| `init --network --role [--secret HEX]` | ambos | identidad (o restore) |
+| `identity [--backup]` | ambos | pubkey para compartir; `--backup` = secret de papel |
 | `new --unit --bond-bps --t-project [--dispute]` | mandante | draft (política, no la persona del árbitro) |
 | `add-partida --desc --amount --plazo` | mandante | hito |
 | `offer` | mandante | `00-offer.json` |
@@ -390,12 +393,13 @@ Claves en claro. Toy. No mainnet.
 - no se fondea partida sin boleta, ni la 2 si la 1 está abierta
 - happy path dos partidas + release de boleta; boleta se suelta si P2 nunca se fondeó
 
-**hbp-bitcoin** (18)
+**hbp-bitcoin** (19)
 
 - output key MuSig2+tweak = rust-bitcoin Taproot
 - unwind script-path; cierre cooperativo y split 80/20
 - funding con partida a 1 sat se rechaza
 - PSBT de fondeo: montos de escrow exactos; dust se rechaza; MAD 50/50; `--partida-only`
+- identidad se restaura desde el secret hex
 - MuSig2 por archivos = mismo sig que el helper in-process
 - firmas de contrato, quote (`hbp-quote`) y nomination `hbp-arbiter` round-trip
 - árbol con A cambia la address; sin A nombrado, error
@@ -431,7 +435,7 @@ Usar `/home/felipe/projects/btc_clients`.
 
 ### Fase 2 — signet usable por dos humanos
 
-- Identidades con backup de seed (BIP39 o descriptor), no hex suelto.
+- Identidades: backup = secret hex (`identity --backup` / `init --secret`). No hay xpub/BIP39 del 2-de-2.
 - Confirmaciones según monto (1 en signet, política en mainnet después).
 - Fee bump del unwind (RBF ya está en sequence; falta UX).
 - `extend-partida` / `renew` cooperativo si se va a pasar T.

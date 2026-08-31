@@ -271,4 +271,19 @@ assert len(h) > 80 and all(c in "0123456789abcdefABCDEF" for c in h), h[:40]
 PY
 echo "PASS file_musig"
 
+# identity: share pubkey only; restore from secret hex
+mkdir -p sid
+$HBP --dir sid/a init --network regtest --role mandante >/dev/null
+IDOUT="$($HBP --dir sid/a identity)"
+echo "$IDOUT" | grep -q "^public_key 0" || fail identity missing_pub
+echo "$IDOUT" | grep -q secret_key && fail identity leaked_secret
+SEC="$($HBP --dir sid/a identity --backup | awk '/^secret_key/{print $2}')"
+PUB="$(printf '%s\n' "$IDOUT" | awk '/^public_key/{print $2}')"
+[[ -n "$SEC" && ${#SEC} -eq 64 ]] || fail identity backup_len
+$HBP --dir sid/b init --network regtest --role mandante --secret "$SEC" >/dev/null
+PUB2="$($HBP --dir sid/b identity | awk '/^public_key/{print $2}')"
+[[ "$PUB" == "$PUB2" ]] || fail identity restore_mismatch
+expect_fail identity_exists already $HBP --dir sid/a init --network regtest
+echo "PASS identity_restore"
+
 echo "CLI_CATALOG_OK"

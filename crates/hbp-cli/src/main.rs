@@ -10,11 +10,12 @@ use hbp_bitcoin::{
     apply_key_spend_sig, bond_address, bond_escrow_from_body, build_funding_psbt,
     build_key_spend_tx, build_script_path_tx, build_split_key_spend_tx, build_split_script_path_tx,
     build_unwind_tx, combine_partials, encode_partial, encode_pubnonce, finish_coop_signature,
-    generate_identity, key_spend_sighash, keys_from_body, mad_address, mad_escrow_from_body,
-    new_nonce_seed, our_partial_signature, parse_partial, parse_pubnonce, partida_address,
-    partida_escrow_from_body, sign_arbiter, sign_arbiter_leaf, sign_body, sign_quote, sign_unwind,
-    start_round, tweaked_key_agg, validate_funding_tx, verify_arbiter, verify_body, verify_quote,
-    ArbiterWith, CoopFile, ExpectedFunding, FundingCoin, FundingRequest, Identity,
+    generate_identity, identity_from_secret, key_spend_sighash, keys_from_body, mad_address,
+    mad_escrow_from_body, new_nonce_seed, our_partial_signature, parse_partial, parse_pubnonce,
+    partida_address, partida_escrow_from_body, sign_arbiter, sign_arbiter_leaf, sign_body,
+    sign_quote, sign_unwind, start_round, tweaked_key_agg, validate_funding_tx, verify_arbiter,
+    verify_body, verify_quote, ArbiterWith, CoopFile, ExpectedFunding, FundingCoin, FundingRequest,
+    Identity,
 };
 use hbp_core::{
     bond_minor, bond_warnings, fiat_minor_to_sats, minor_from_major, ArbiterNomination,
@@ -45,6 +46,15 @@ enum Cmd {
         network: String,
         #[arg(long)]
         role: Option<String>,
+        /// Restore from a 32-byte secret hex (paper backup). Never share this.
+        #[arg(long)]
+        secret: Option<String>,
+    },
+    /// Show the shareable half of this identity (compressed pubkey, not an xpub).
+    Identity {
+        /// Also print the secret. Paper backup only — not for the other party.
+        #[arg(long, default_value_t = false)]
+        backup: bool,
     },
     /// Start a contract draft as mandante.
     New {
@@ -259,7 +269,12 @@ fn run() -> Result<()> {
     let cli = Cli::parse();
     let store = Store::new(cli.dir);
     match cli.cmd {
-        Cmd::Init { network, role } => cmd_init(&store, &network, role.as_deref()),
+        Cmd::Init {
+            network,
+            role,
+            secret,
+        } => cmd_init(&store, &network, role.as_deref(), secret.as_deref()),
+        Cmd::Identity { backup } => cmd_identity(&store, backup),
         Cmd::New {
             unit,
             bond_bps,
@@ -414,7 +429,7 @@ fn run() -> Result<()> {
     }
 }
 
-fn cmd_init(store: &Store, network: &str, role: Option<&str>) -> Result<()> {
+fn cmd_init(store: &Store, network: &str, role: Option<&str>, secret: Option<&str>) -> Result<()> {
     if store.identity_path().exists() {
         bail!(
             "identity already exists at {}",
@@ -422,7 +437,11 @@ fn cmd_init(store: &Store, network: &str, role: Option<&str>) -> Result<()> {
         );
     }
     let network = Network::from_str(network)?;
-    let mut id = generate_identity(network)?;
+    let mut id = if let Some(s) = secret {
+        identity_from_secret(network, s)?
+    } else {
+        generate_identity(network)?
+    };
     if let Some(r) = role {
         id.role = Some(Role::from_str(r)?);
     }
@@ -430,7 +449,33 @@ fn cmd_init(store: &Store, network: &str, role: Option<&str>) -> Result<()> {
     println!("network    {}", network_name(network));
     println!("public_key {}", id.public_key);
     println!("stored     {}", store.identity_path().display());
-    println!("warning    secret is plaintext; toy keys only");
+    println!(
+        "share      public_key only (the offer already carries it). not an xpub; one key, not HD"
+    );
+    println!(
+        "backup     hbp --dir {} identity --backup",
+        store.root.display()
+    );
+    println!("warning    secret is plaintext; never send identity.json to the other party");
+    Ok(())
+}
+
+fn cmd_identity(store: &Store, backup: bool) -> Result<()> {
+    let id = store.load_identity()?;
+    println!("network    {}", network_name(id.network));
+    if let Some(r) = id.role {
+        let role = match r {
+            Role::Mandante => "mandante",
+            Role::Contratista => "contratista",
+        };
+        println!("role       {role}");
+    }
+    println!("public_key {}", id.public_key);
+    println!("share      this pubkey (or the offer file). equivalent of an xpub for a single key");
+    if backup {
+        println!("secret_key {}", id.secret_key);
+        println!("warning    secret_key is YOUR half of the 2-of-2. the other party never sees it");
+    }
     Ok(())
 }
 
@@ -794,6 +839,10 @@ fn cmd_addresses(store: &Store) -> Result<()> {
     let quote = load_project_quote(store, &mut project)?;
     let body = &project.contract.body;
     println!("dispute {}", serde_json::to_string(&body.dispute)?);
+    println!("mandante_pubkey {}", body.mandante_pubkey);
+    if let Some(c) = &body.contratista_pubkey {
+        println!("contratista_pubkey {c}");
+    }
     let named = project.named_arbiter_pubkey()?;
     if matches!(body.dispute, DisputePolicy::Arbiter { .. }) && named.is_none() {
         println!(

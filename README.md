@@ -45,6 +45,8 @@ Two directories, one per party:
 ```bash
 # principal
 hbp --dir .m init --network regtest --role mandante
+hbp --dir .m identity                 # public_key only — that is what the offer carries
+# hbp --dir .m identity --backup      # YOUR secret; restore later with init --secret HEX
 hbp --dir .m new --unit USD --bond-bps 1000 --t-project 1800000000
 hbp --dir .m add-partida --desc Foundation --amount 1500 --plazo 1700000000
 hbp --dir .m add-partida --desc Walls --amount 500 --plazo 1710000000
@@ -87,7 +89,7 @@ hbp --dir .m coop-finish .c/04-coop.json
 
 `verify-funding` checks a raw funding transaction against the quoted amounts (rejects a malicious package amount). `unwind` builds the script-path timeout transaction after `T`.
 
-Keys are **plaintext** in `.hbp/identity.json`. Toy only. Do not use on mainnet.
+Keys are **plaintext** in `.hbp/identity.json`. Toy only. Do not use on mainnet. The other party never sees that file: they get a compressed pubkey inside `00-offer.json` (the equivalent of an xpub for a **single** key, not HD). Restore with `hbp init --secret HEX`.
 
 ## Crates
 
@@ -103,4 +105,4 @@ Keys are **plaintext** in `.hbp/identity.json`. Toy only. Do not use on mainnet.
 
 ## Not in this MVP
 
-Tor, DHT, Android, rolling the bond into the next 2-of-2 without returning it, watchtowers, mainnet. Seed/backup for two-laptop signet is next.
+Tor, DHT, Android, rolling the bond into the next 2-of-2 without returning it, watchtowers, mainnet. Next: two laptops on signet with the file protocol.

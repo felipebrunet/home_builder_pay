@@ -43,6 +43,8 @@ Dos directorios, uno por parte:
 ```bash
 # mandante
 hbp --dir .m init --network regtest --role mandante
+hbp --dir .m identity                 # solo public_key — eso es lo que lleva el offer
+# hbp --dir .m identity --backup      # TU secreto; restaurar con init --secret HEX
 hbp --dir .m new --unit USD --bond-bps 1000 --t-project 1800000000
 hbp --dir .m add-partida --desc Cimentación --amount 1500 --plazo 1700000000
 hbp --dir .m add-partida --desc Muros --amount 500 --plazo 1710000000
@@ -83,7 +85,7 @@ hbp --dir .m coop-finish .c/04-coop.json
 
 `verify-funding` comprueba una transacción de fondeo en crudo contra los montos cotizados (rechaza un monto de partida malicioso). `unwind` arma la transacción de timeout por script path después de `T`.
 
-Las claves están en **texto plano** en `.hbp/identity.json`. Solo para pruebas. No usar en mainnet.
+Las claves están en **texto plano** en `.hbp/identity.json`. Solo para pruebas. No usar en mainnet. La otra punta no ve ese archivo: recibe un pubkey comprimido dentro de `00-offer.json` (el equivalente de un xpub para **una** clave, no HD). Restaurar: `hbp init --secret HEX`.
 
 ## Crates
 
@@ -99,4 +101,4 @@ Las claves están en **texto plano** en `.hbp/identity.json`. Solo para pruebas.
 
 ## Fuera de este MVP
 
-Tor, DHT, Android, boleta que rueda al siguiente 2-de-2 sin devolverse, watchtowers, mainnet. Lo siguiente es seed/backup para signet en dos laptops.
+Tor, DHT, Android, boleta que rueda al siguiente 2-de-2 sin devolverse, watchtowers, mainnet. Lo siguiente: dos laptops en signet con el protocolo de archivos.
