@@ -13,10 +13,13 @@ hbp-core = { path = "crates/hbp-core" }
 hbp-bitcoin = { path = "crates/hbp-bitcoin" }
 
 anyhow = "1"
+argon2 = "0.5"
 base64 = "0.22"
 bitcoin = { version = "0.32.8", features = ["std", "rand-std", "serde"] }
-clap = { version = "4", features = ["derive"] }
+chacha20poly1305 = "0.10"
+clap = { version = "4", features = ["derive", "env"] }
 getrandom = "0.2"
+rpassword = "7"
 hex = "0.4"
 miniscript = { version = "12.3.7", features = ["std"] }
 musig2 = { version = "0.4.1", features = ["secp256k1", "rand", "serde"] }

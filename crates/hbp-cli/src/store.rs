@@ -1,18 +1,34 @@
 use std::fs;
+use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use hbp_bitcoin::Identity;
-use hbp_core::{ArbiterNomination, NonceJournal, Offer, Project, Quote, SignedContract};
+use hbp_core::{
+    vault_decrypt, vault_encrypt, vault_is_encrypted, ArbiterNomination, NonceJournal, Offer,
+    Project, Quote, SignedContract,
+};
 
 #[derive(Clone)]
 pub struct Store {
     pub root: PathBuf,
+    passphrase: Option<String>,
 }
 
 impl Store {
     pub fn new(root: PathBuf) -> Self {
-        Self { root }
+        Self {
+            root,
+            passphrase: None,
+        }
+    }
+
+    pub fn with_passphrase(root: PathBuf, passphrase: Option<String>) -> Self {
+        Self { root, passphrase }
+    }
+
+    pub fn has_passphrase(&self) -> bool {
+        self.passphrase.is_some()
     }
 
     pub fn init_dir(&self) -> Result<()> {
@@ -28,12 +44,39 @@ impl Store {
     pub fn load_identity(&self) -> Result<Identity> {
         let raw = fs::read_to_string(self.identity_path())
             .context("identity.json missing; run hbp init")?;
-        Ok(serde_json::from_str(&raw)?)
+        if vault_is_encrypted(&raw) {
+            let pass = self.unlock_passphrase()?;
+            let pt = vault_decrypt(&raw, &pass)?;
+            Ok(serde_json::from_slice(&pt)?)
+        } else {
+            Ok(serde_json::from_str(&raw)?)
+        }
     }
 
     pub fn save_identity(&self, id: &Identity) -> Result<()> {
         self.init_dir()?;
-        write_json(&self.identity_path(), id)
+        let path = self.identity_path();
+        if let Some(pass) = &self.passphrase {
+            let pt = serde_json::to_vec(id)?;
+            let enc = vault_encrypt(&pt, pass)?;
+            fs::write(&path, enc)?;
+        } else {
+            write_json(&path, id)?;
+        }
+        set_owner_secret(&path)?;
+        Ok(())
+    }
+
+    fn unlock_passphrase(&self) -> Result<String> {
+        if let Some(p) = &self.passphrase {
+            return Ok(p.clone());
+        }
+        if std::io::stdin().is_terminal() {
+            eprint!("passphrase: ");
+            let p = rpassword::read_password().context("read passphrase")?;
+            return Ok(p);
+        }
+        bail!("identity is encrypted; pass --passphrase or HBP_PASSPHRASE")
     }
 
     pub fn nonce_path(&self) -> PathBuf {
@@ -157,4 +200,13 @@ pub fn write_json<T: serde::Serialize>(path: &Path, value: &T) -> Result<()> {
 
 pub fn read_json<T: serde::de::DeserializeOwned>(path: &Path) -> Result<T> {
     Ok(serde_json::from_str(&fs::read_to_string(path)?)?)
+}
+
+fn set_owner_secret(path: &Path) -> Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(path, fs::Permissions::from_mode(0o600))?;
+    }
+    Ok(())
 }

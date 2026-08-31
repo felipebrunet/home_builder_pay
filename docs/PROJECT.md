@@ -19,7 +19,7 @@ Checkpoint de sesión. Actualizar **esta sección** cada vez que se cierre un hi
 | Fecha | 2026-08-30 |
 | Rama | `master` |
 | Hito | **MVP-0 + catálogo 142 (136 PASS, 6 humano) + `hbp fund` + MuSig2 por archivos + identidad pubkey** |
-| Verificar al abrir | `cargo test --workspace` (35 unitarios: `hbp-core` 16, `hbp-bitcoin` 19) y `scripts/run_catalog.sh` |
+| Verificar al abrir | `cargo test --workspace` (36 unitarios: `hbp-core` 17, `hbp-bitcoin` 19) y `scripts/run_catalog.sh` |
 | Nodo Bitcoin local | `/home/felipe/projects/btc_clients` — Core 31.1 regtest, RPC `:18443`. Los scripts usan `bitcoin-cli`; `hbp` no embebe el cliente. |
 | Origin | `git@github.com-hbp:felipebrunet/home_builder_pay.git` (MIT, público) |
 
@@ -39,6 +39,7 @@ Checkpoint de sesión. Actualizar **esta sección** cada vez que se cierre un hi
 | 2026-08-30 | `hbp fund` PSBT montos exactos; `coop-propose` / `coop-sign` / `coop-finish` (sin `--peer-dir`) | `crates/hbp-bitcoin/src/fund.rs`, CLI |
 | 2026-08-30 | Identidad: se comparte pubkey comprimido (no xpub). Restore `init --secret`. `hbp identity [--backup]` | CLI |
 | 2026-08-30 | **Opción C:** se mantiene el descriptor actual (`tr(musig(M,C), hojas)`). Los 142 no se recortan. No se baja a `wsh` ni a `multi_a` en lugar de MuSig2. | este checkpoint |
+| 2026-08-30 | `identity.json` se puede cifrar con passphrase (Argon2id + XChaCha20). Sin política de fortaleza. Tests siguen en claro. | CLI `--passphrase` / `HBP_PASSPHRASE` |
 
 Default on-chain sigue siendo **`unwind`**. MAD y árbitro están minados. Catálogo: **136 PASS**, **6 NO TEST** (humano). **0 FAIL**.
 
@@ -61,7 +62,7 @@ Default on-chain sigue siendo **`unwind`**. MAD y árbitro están minados. Catá
 - Descriptores (**opción C, locked**): boleta `tr(musig(M,C), pk(C)&&after(T_proyecto))`, partida `tr(musig(M,C), pk(M)&&after(T_partida))`. KeyAgg `[mandante, contratista]`. No se cambia por vault Electrum/`wsh` ni por coop `multi_a`.
 - MuSig2 key-path (64 B) y unwind script-path (CLTV unix, witness 3 ítems). Sparrow/Blue firman el **fondeo** (singlesig → escrow). **No** firman la recepción/unwind: eso es BIP-327 + árbol, que esas wallets no implementan.
 - `NonceJournal`: reutilizar seed aborta.
-- CLI: `init [--secret]`, `identity [--backup]`, `new --dispute unwind\|mad\|arbiter`, `propose-arbiter`, `accept-arbiter`, `add-partida`, `offer`, `accept`, `commit`, `import`, `quote`, `accept-quote`, `addresses`, `status`, `verify-funding`, `fund`, `coop-propose` / `coop-sign` / `coop-finish`, `unwind`, `coop-close --peer-dir` (atajo misma máquina), `arbiter-close --with am\|ac --arbiter-dir`.
+- CLI: `init [--secret]`, `identity [--backup\|--encrypt]`, `--passphrase` / `HBP_PASSPHRASE` (cifra identity.json; 4 letras vale; sin passphrase = claro, como los scripts). `new --dispute unwind\|mad\|arbiter`, `propose-arbiter`, `accept-arbiter`, `add-partida`, `offer`, `accept`, `commit`, `import`, `quote`, `accept-quote`, `addresses`, `status`, `verify-funding`, `fund`, `coop-propose` / `coop-sign` / `coop-finish`, `unwind`, `coop-close --peer-dir` (atajo misma máquina), `arbiter-close --with am\|ac --arbiter-dir`.
 - Identidad = **una** clave secp256k1 por punta. Lo que ve el otro es el **pubkey comprimido** (33 B hex) dentro de `00-offer.json`. No es un xpub HD. El secreto no se pega ni se manda.
 - `hbp fund`: PSBT sin firmar; salidas de escrow **exactas** (boleta + partida [+ MAD]); fee y change desde otros inputs. Dust &lt;546 se rechaza, no se pliega. stdout = PSBT en base64 para `bitcoin-cli walletprocesspsbt`. `--partida-only`: solo el mandante.
 - MuSig2 por archivos: `04-coop.json` (pubnonces + parciales, no el seed). El seed queda en `NonceJournal.pending[sighash]`. `coop-close --peer-dir` sigue para el demo en una máquina.
@@ -385,13 +386,14 @@ Claves en claro. Toy. No mainnet.
 
 `cargo test --workspace`
 
-**hbp-core** (16)
+**hbp-core** (17)
 
 - parseo de montos y conversión fiat→sats; boleta = % del total
 - JSON canónico estable; `DisputePolicy::Arbiter` **sin** pubkey
 - nomination fuera del `contract_id`; A ≠ M y A ≠ C
 - A se nombra solo con dos firmas y **antes** de fondear
 - nonce reuse aborta; seed pendiente de un `coop-propose` se guarda y se consume
+- vault: round-trip de identity cifrada (passphrase corta)
 - no se fondea partida sin boleta, ni la 2 si la 1 está abierta
 - happy path dos partidas + release de boleta; boleta se suelta si P2 nunca se fondeó
 

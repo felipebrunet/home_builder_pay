@@ -34,13 +34,16 @@ use store::{read_json, Store};
 struct Cli {
     #[arg(long, global = true, default_value = ".hbp")]
     dir: PathBuf,
+    /// Unlock / encrypt identity.json. No minimum length (toy). Also HBP_PASSPHRASE.
+    #[arg(long, global = true, env = "HBP_PASSPHRASE", hide_env_values = true)]
+    passphrase: Option<String>,
     #[command(subcommand)]
     cmd: Cmd,
 }
 
 #[derive(Subcommand)]
 enum Cmd {
-    /// Create a local identity (toy keys, plaintext on disk).
+    /// Create a local identity. Use --passphrase to encrypt identity.json.
     Init {
         #[arg(long, default_value = "regtest")]
         network: String,
@@ -55,6 +58,9 @@ enum Cmd {
         /// Also print the secret. Paper backup only — not for the other party.
         #[arg(long, default_value_t = false)]
         backup: bool,
+        /// Re-save identity.json encrypted with --passphrase / HBP_PASSPHRASE.
+        #[arg(long, default_value_t = false)]
+        encrypt: bool,
     },
     /// Start a contract draft as mandante.
     New {
@@ -267,14 +273,14 @@ fn main() {
 
 fn run() -> Result<()> {
     let cli = Cli::parse();
-    let store = Store::new(cli.dir);
+    let store = Store::with_passphrase(cli.dir, cli.passphrase);
     match cli.cmd {
         Cmd::Init {
             network,
             role,
             secret,
         } => cmd_init(&store, &network, role.as_deref(), secret.as_deref()),
-        Cmd::Identity { backup } => cmd_identity(&store, backup),
+        Cmd::Identity { backup, encrypt } => cmd_identity(&store, backup, encrypt),
         Cmd::New {
             unit,
             bond_bps,
@@ -452,15 +458,37 @@ fn cmd_init(store: &Store, network: &str, role: Option<&str>, secret: Option<&st
     println!(
         "share      public_key only (the offer already carries it). not an xpub; one key, not HD"
     );
-    println!(
-        "backup     hbp --dir {} identity --backup",
-        store.root.display()
-    );
-    println!("warning    secret is plaintext; never send identity.json to the other party");
+    if store.has_passphrase() {
+        println!("encrypted  identity.json (passphrase; no strength check — toy)");
+        println!(
+            "backup     hbp --dir {} --passphrase … identity --backup",
+            store.root.display()
+        );
+    } else {
+        println!(
+            "backup     hbp --dir {} identity --backup",
+            store.root.display()
+        );
+        println!(
+            "warning    secret is plaintext; encrypt with: hbp --passphrase … identity --encrypt"
+        );
+        println!("warning    never send identity.json to the other party");
+    }
     Ok(())
 }
 
-fn cmd_identity(store: &Store, backup: bool) -> Result<()> {
+fn cmd_identity(store: &Store, backup: bool, encrypt: bool) -> Result<()> {
+    if encrypt {
+        if !store.has_passphrase() {
+            bail!("--encrypt needs --passphrase or HBP_PASSPHRASE");
+        }
+        let id = store.load_identity()?;
+        store.save_identity(&id)?;
+        println!("encrypted  {}", store.identity_path().display());
+        if !backup {
+            return Ok(());
+        }
+    }
     let id = store.load_identity()?;
     println!("network    {}", network_name(id.network));
     if let Some(r) = id.role {

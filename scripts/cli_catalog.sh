@@ -286,4 +286,21 @@ PUB2="$($HBP --dir sid/b identity | awk '/^public_key/{print $2}')"
 expect_fail identity_exists already $HBP --dir sid/a init --network regtest
 echo "PASS identity_restore"
 
+# encrypted identity, short passphrase (no strength policy)
+mkdir -p senc
+$HBP --dir senc/m --passphrase ab init --network regtest --role mandante >/dev/null
+grep -q secret_key senc/m/identity.json && fail enc leaked_plaintext
+grep -q hbp-identity-v1 senc/m/identity.json || fail enc missing_envelope
+$HBP --dir senc/m --passphrase ab identity >/tmp/hbp-enc-id.out
+grep -q "^public_key 0" /tmp/hbp-enc-id.out || fail enc missing_pub
+grep -q secret_key /tmp/hbp-enc-id.out && fail enc identity_leaked_secret
+expect_fail enc_wrong wrongpass $HBP --dir senc/m --passphrase zz identity
+expect_fail enc_nopass missing $HBP --dir senc/m identity </dev/null
+SEC="$($HBP --dir senc/m --passphrase ab identity --backup | awk '/^secret_key/{print $2}')"
+$HBP --dir senc/b --passphrase xy init --network regtest --role mandante --secret "$SEC" >/dev/null
+PUBA="$($HBP --dir senc/m --passphrase ab identity | awk '/^public_key/{print $2}')"
+PUBB="$($HBP --dir senc/b --passphrase xy identity | awk '/^public_key/{print $2}')"
+[[ "$PUBA" == "$PUBB" ]] || fail enc restore_mismatch
+echo "PASS identity_encrypted"
+
 echo "CLI_CATALOG_OK"
