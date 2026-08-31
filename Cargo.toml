@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/hbp-core", "crates/hbp-bitcoin", "crates/hbp-cli"]
+members = ["crates/hbp-core", "crates/hbp-bitcoin", "crates/hbp-cli", "crates/hbp-ui"]
 
 [workspace.package]
 edition = "2021"

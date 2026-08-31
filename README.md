@@ -34,6 +34,8 @@ Unwind is **not** a bank performance bond: Bitcoin cannot see whether the wall w
 ```bash
 cargo test --workspace
 cargo run -p hbp-cli -- --help
+# throwaway test UI (localhost): cargo run -p hbp-ui
+# then open http://127.0.0.1:3847
 ```
 
 Binary name: `hbp`.

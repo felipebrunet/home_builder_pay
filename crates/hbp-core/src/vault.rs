@@ -99,5 +99,8 @@ mod tests {
         assert!(decrypt(&enc, "zz").is_err());
         let enc4 = encrypt(pt, "abcd").unwrap();
         assert_eq!(decrypt(&enc4, "abcd").unwrap(), pt);
+        let nonces = br#"{"used_seed_hashes":[],"pending":{}}"#;
+        let encn = encrypt(nonces, "ab").unwrap();
+        assert_eq!(decrypt(&encn, "ab").unwrap(), nonces);
     }
 }

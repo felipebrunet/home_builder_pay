@@ -32,6 +32,8 @@ El unwind **no** es una boleta bancaria: Bitcoin no puede ver si el muro está c
 ```bash
 cargo test --workspace
 cargo run -p hbp-cli -- --help
+# UI de pruebas (localhost): cargo run -p hbp-ui
+# abrir http://127.0.0.1:3847
 ```
 
 Nombre del ejecutable: `hbp`.

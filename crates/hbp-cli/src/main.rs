@@ -1,3 +1,4 @@
+use std::io::{self, IsTerminal, Write};
 use std::path::PathBuf;
 use std::str::FromStr;
 
@@ -37,6 +38,9 @@ struct Cli {
     /// Unlock / encrypt identity.json. No minimum length (toy). Also HBP_PASSPHRASE.
     #[arg(long, global = true, env = "HBP_PASSPHRASE", hide_env_values = true)]
     passphrase: Option<String>,
+    /// Skip TTY confirmation on coop/unwind (scripts and UI).
+    #[arg(long, global = true, default_value_t = false)]
+    yes: bool,
     #[command(subcommand)]
     cmd: Cmd,
 }
@@ -273,7 +277,8 @@ fn main() {
 
 fn run() -> Result<()> {
     let cli = Cli::parse();
-    let store = Store::with_passphrase(cli.dir, cli.passphrase);
+    let mut store = Store::with_passphrase(cli.dir, cli.passphrase);
+    store.yes = cli.yes;
     match cli.cmd {
         Cmd::Init {
             network,
@@ -912,6 +917,29 @@ fn cmd_status(store: &Store) -> Result<()> {
     Ok(())
 }
 
+/// Print dest/sats. On a TTY, require typing YES unless `--yes`.
+fn confirm_spend(
+    store: &Store,
+    kind: &str,
+    sats: u64,
+    dest: &str,
+    outpoint: &str,
+    extra: &str,
+) -> Result<()> {
+    eprintln!("confirm {kind} {sats} sats → {dest}  in {outpoint}{extra}");
+    if store.yes || !io::stdin().is_terminal() {
+        return Ok(());
+    }
+    eprint!("type YES to sign: ");
+    io::stderr().flush().ok();
+    let mut line = String::new();
+    io::stdin().read_line(&mut line)?;
+    if line.trim() != "YES" {
+        bail!("cancelled (not YES)");
+    }
+    Ok(())
+}
+
 fn cmd_verify_funding(store: &Store, tx_hex: &str, partida: u32, partida_only: bool) -> Result<()> {
     let mut project = store.load_project()?;
     let quote = load_project_quote(store, &mut project)?
@@ -1091,6 +1119,12 @@ fn cmd_coop_close(
         Role::Mandante => (us.secret()?, peer.secret()?),
         Role::Contratista => (peer.secret()?, us.secret()?),
     };
+    let extra = match (refund, pay_sats, refund_dest) {
+        (true, _, _) => " refund".to_string(),
+        (_, Some(p), Some(r)) => format!(" pay {p} refund→{r}"),
+        _ => String::new(),
+    };
+    confirm_spend(store, kind, sats, dest, outpoint, &extra)?;
     let escrow = match kind {
         "partida" => {
             let pid = partida.context("--partida required")?;
@@ -1222,6 +1256,12 @@ fn coop_unsigned(
     let dest = Address::from_str(dest)
         .map_err(|e| anyhow::anyhow!("{e}"))?
         .require_network(net)?;
+    let extra = match (refund, pay_sats, refund_dest) {
+        (true, _, _) => " refund".to_string(),
+        (_, Some(p), Some(r)) => format!(" pay {p} refund→{r}"),
+        _ => String::new(),
+    };
+    confirm_spend(store, kind, sats, &dest.to_string(), outpoint, &extra)?;
     let outpoint = OutPoint::from_str(outpoint).map_err(|e| anyhow::anyhow!("{e}"))?;
     if refund && pay_sats.is_some() {
         bail!("use either --refund or --pay-sats, not both");
@@ -1522,6 +1562,14 @@ fn cmd_arbiter_close(
     let dest_addr = Address::from_str(dest)
         .map_err(|e| anyhow::anyhow!("{e}"))?
         .require_network(net)?;
+    confirm_spend(
+        store,
+        kind,
+        sats,
+        &dest_addr.to_string(),
+        outpoint,
+        &format!(" arbiter {with:?}"),
+    )?;
     let outpoint = OutPoint::from_str(outpoint).map_err(|e| anyhow::anyhow!("{e}"))?;
     let unsigned = if let Some(pay) = pay_sats {
         let refund_addr = refund_dest.context("--refund-dest required with --pay-sats")?;
@@ -1626,6 +1674,7 @@ fn cmd_unwind(
     let dest = Address::from_str(dest)
         .map_err(|e| anyhow::anyhow!("{e}"))?
         .require_network(hbp_bitcoin::to_btc_network(body.network))?;
+    confirm_spend(store, kind, sats, &dest.to_string(), outpoint, " unwind")?;
     let outpoint = OutPoint::from_str(outpoint).map_err(|e| anyhow::anyhow!("{e}"))?;
     let tx = build_unwind_tx(
         &escrow,

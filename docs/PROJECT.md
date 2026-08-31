@@ -19,7 +19,7 @@ Checkpoint de sesión. Actualizar **esta sección** cada vez que se cierre un hi
 | Fecha | 2026-08-30 |
 | Rama | `master` |
 | Hito | **MVP-0 + catálogo 142 (136 PASS, 6 humano) + `hbp fund` + MuSig2 por archivos + identidad pubkey/cifrada (opción C)** |
-| Verificar al abrir | `cargo test --workspace` (36 unitarios: `hbp-core` 17, `hbp-bitcoin` 19) y `scripts/run_catalog.sh` |
+| Verificar al abrir | `cargo test --workspace` (36 unitarios: `hbp-core` 17, `hbp-bitcoin` 19) y `scripts/run_catalog.sh`. UI de prueba: `cargo run -p hbp-ui` → http://127.0.0.1:3847 |
 | Nodo Bitcoin local | `/home/felipe/projects/btc_clients` — Core 31.1 regtest, RPC `:18443`. Los scripts usan `bitcoin-cli`; `hbp` no embebe el cliente. |
 | Origin | `git@github.com-hbp:felipebrunet/home_builder_pay.git` (MIT, público) |
 
@@ -41,6 +41,7 @@ Checkpoint de sesión. Actualizar **esta sección** cada vez que se cierre un hi
 | 2026-08-30 | **Opción C:** se mantiene el descriptor actual (`tr(musig(M,C), hojas)`). Los 142 no se recortan. No se baja a `wsh` ni a `multi_a` en lugar de MuSig2. | este checkpoint |
 | 2026-08-30 | `identity.json` se puede cifrar con passphrase (Argon2id + XChaCha20). Sin política de fortaleza. Tests siguen en claro. | CLI `--passphrase` / `HBP_PASSPHRASE` |
 | 2026-08-30 | Guía Signet **global** en dos PCs (Sparrow fondea; `hbp` redima). Faucet; montos chicos (no el demo 60k). | [SIGNET_TWO_PCS.md](SIGNET_TWO_PCS.md) |
+| 2026-08-30 | Confirmación TTY (YES) en coop/unwind; `--yes` para scripts/UI. `nonces.json` se cifra con la misma passphrase. UI de pruebas `hbp-ui`. | CLI, `crates/hbp-ui` |
 
 Default on-chain sigue siendo **`unwind`**. MAD y árbitro están minados. Catálogo: **136 PASS**, **6 NO TEST** (humano). **0 FAIL**.
 
@@ -63,7 +64,7 @@ Default on-chain sigue siendo **`unwind`**. MAD y árbitro están minados. Catá
 - Descriptores (**opción C, locked**): boleta `tr(musig(M,C), pk(C)&&after(T_proyecto))`, partida `tr(musig(M,C), pk(M)&&after(T_partida))`. KeyAgg `[mandante, contratista]`. No se cambia por vault Electrum/`wsh` ni por coop `multi_a`.
 - MuSig2 key-path (64 B) y unwind script-path (CLTV unix, witness 3 ítems). Sparrow/Blue firman el **fondeo** (singlesig → escrow). **No** firman la recepción/unwind: eso es BIP-327 + árbol, que esas wallets no implementan.
 - `NonceJournal`: reutilizar seed aborta.
-- CLI: `init [--secret]`, `identity [--backup\|--encrypt]`, `--passphrase` / `HBP_PASSPHRASE` (cifra identity.json; 4 letras vale; sin passphrase = claro, como los scripts). `new --dispute unwind\|mad\|arbiter`, `propose-arbiter`, `accept-arbiter`, `add-partida`, `offer`, `accept`, `commit`, `import`, `quote`, `accept-quote`, `addresses`, `status`, `verify-funding`, `fund`, `coop-propose` / `coop-sign` / `coop-finish`, `unwind`, `coop-close --peer-dir` (atajo misma máquina), `arbiter-close --with am\|ac --arbiter-dir`.
+- CLI: `init [--secret]`, `identity [--backup\|--encrypt]`, `--passphrase` / `HBP_PASSPHRASE` (cifra identity.json **y** nonces.json; 4 letras vale; sin passphrase = claro). `--yes` salta el “type YES” en TTY. UI de pruebas: `hbp-ui` (localhost:3847, llama a `hbp --yes`). `new --dispute unwind\|mad\|arbiter`, `propose-arbiter`, `accept-arbiter`, `add-partida`, `offer`, `accept`, `commit`, `import`, `quote`, `accept-quote`, `addresses`, `status`, `verify-funding`, `fund`, `coop-propose` / `coop-sign` / `coop-finish`, `unwind`, `coop-close --peer-dir` (atajo misma máquina), `arbiter-close --with am\|ac --arbiter-dir`.
 - Identidad = **una** clave secp256k1 por punta. Lo que ve el otro es el **pubkey comprimido** (33 B hex) dentro de `00-offer.json`. No es un xpub HD. El secreto no se pega ni se manda.
 - `hbp fund`: PSBT sin firmar; salidas de escrow **exactas** (boleta + partida [+ MAD]); fee y change desde otros inputs. Dust &lt;546 se rechaza, no se pliega. stdout = PSBT en base64 para `bitcoin-cli walletprocesspsbt`. `--partida-only`: solo el mandante.
 - MuSig2 por archivos: `04-coop.json` (pubnonces + parciales, no el seed). El seed queda en `NonceJournal.pending[sighash]`. `coop-close --peer-dir` sigue para el demo en una máquina.
@@ -85,7 +86,7 @@ Default on-chain sigue siendo **`unwind`**. MAD y árbitro están minados. Catá
 
 1. Leer esta sección 0, [DISPUTE.md](DISPUTE.md) y [SCENARIOS.md](SCENARIOS.md).
 2. `scripts/run_catalog.sh` (unit + CLI + MAD/árbitro + remainders; el fondeo P1 ya usa `hbp fund`).
-3. Siguiente: **correr** [SIGNET_TWO_PCS.md](SIGNET_TWO_PCS.md) (Sparrow Signet + faucet + `hbp`). Redeem sigue siendo MuSig2 en `hbp`. Después `hbp listen` / `connect`. Tor más tarde.
+3. Probar el feliz con `cargo run -p hbp-ui` en regtest. Signet dos PCs: [SIGNET_TWO_PCS.md](SIGNET_TWO_PCS.md). Después `listen`/`connect`. Tor más tarde.
 4. No abrir Tor, DHT ni GUI.
 
 El usuario acordó: canal = archivos ahora; Tor p2p después; DHT solo si hay marketplace. MAD nunca a wallet del autor. Árbitro solo si ambos nombran a la misma persona antes de los UTXO. On-chain = **opción C** (MuSig2 + árbol; 142 intactos).

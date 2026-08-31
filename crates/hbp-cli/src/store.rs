@@ -13,6 +13,8 @@ use hbp_core::{
 pub struct Store {
     pub root: PathBuf,
     passphrase: Option<String>,
+    /// Skip TTY confirm on spend (scripts / UI after the user clicked).
+    pub yes: bool,
 }
 
 impl Store {
@@ -20,11 +22,16 @@ impl Store {
         Self {
             root,
             passphrase: None,
+            yes: false,
         }
     }
 
     pub fn with_passphrase(root: PathBuf, passphrase: Option<String>) -> Self {
-        Self { root, passphrase }
+        Self {
+            root,
+            passphrase,
+            yes: false,
+        }
     }
 
     pub fn has_passphrase(&self) -> bool {
@@ -88,11 +95,26 @@ impl Store {
         if !p.exists() {
             return Ok(NonceJournal::default());
         }
-        Ok(serde_json::from_str(&fs::read_to_string(p)?)?)
+        let raw = fs::read_to_string(&p)?;
+        if vault_is_encrypted(&raw) {
+            let pass = self.unlock_passphrase()?;
+            let pt = vault_decrypt(&raw, &pass)?;
+            Ok(serde_json::from_slice(&pt)?)
+        } else {
+            Ok(serde_json::from_str(&raw)?)
+        }
     }
 
     pub fn save_nonces(&self, j: &NonceJournal) -> Result<()> {
-        write_json(&self.nonce_path(), j)
+        let path = self.nonce_path();
+        if let Some(pass) = &self.passphrase {
+            let pt = serde_json::to_vec(j)?;
+            fs::write(&path, vault_encrypt(&pt, pass)?)?;
+            set_owner_secret(&path)?;
+        } else {
+            write_json(&path, j)?;
+        }
+        Ok(())
     }
 
     pub fn draft_path(&self) -> PathBuf {

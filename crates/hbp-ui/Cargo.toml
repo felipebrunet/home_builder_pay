@@ -1,0 +1,18 @@
+[package]
+name = "hbp-ui"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Throwaway local UI for testing home_builder_pay"
+
+[[bin]]
+name = "hbp-ui"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+axum = { version = "0.7", features = ["json"] }
+serde.workspace = true
+serde_json.workspace = true
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "process"] }
