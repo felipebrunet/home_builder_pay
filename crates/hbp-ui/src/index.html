@@ -93,11 +93,12 @@
 
   <div class="card" id="s4">
     <h2><span class="n">4</span> Encerrar el bitcoin</h2>
-    <p>Como una transferencia, pero a las direcciones del contrato y <b>con el monto exacto</b>. Una sola transacción: boleta + trabajo 1.</p>
+    <p>Como una transferencia, pero a las direcciones del contrato y <b>con el monto exacto</b>.</p>
+    <p><b>Una sola transacción, dos destinos</b> (no dos envíos): boleta <i>y</i> trabajo 1. El hex es el de esa transacción, entero. No pegues dos hex uno atrás del otro.</p>
     <button class="go sec" data-step="addresses">Mostrar direcciones y montos</button>
     <div id="addr-box"></div>
-    <label><span class="req">*</span> Hex de esa transacción (cuando ya se minó)</label>
-    <textarea id="txhex" rows="3" placeholder="pega el hex…"></textarea>
+    <label><span class="req">*</span> Hex crudo de esa transacción (Sparrow: ver transacción → hex / raw). Un solo bloque de texto.</label>
+    <textarea id="txhex" rows="3" placeholder="un solo hex, empieza con 02… o 01…"></textarea>
     <button class="go" data-step="verify">Comprobar que cerró bien</button>
     <details>
       <summary>Avanzado: que hbp arme el PSBT (dos wallets)</summary>
@@ -212,7 +213,8 @@ document.body.addEventListener('click', async (ev) => {
       await hbp(['accept-quote', $('quote-file').value.trim()]);
     } else if (s === 'addresses') {
       const o = await hbp(['addresses']);
-      $('addr-box').innerHTML = '<pre class="copy">' + (o.j.stdout || '').replace(/</g,'') + '</pre><p>Copiá las líneas bond y partida 1. En Sparrow mandá <b>exactamente</b> esos sats, las dos salidas en la misma transacción.</p>';
+      $('addr-box').innerHTML = '<pre class="copy">' + (o.j.stdout || '').replace(/</g,'') + '</pre>'
+        + '<p>En Sparrow: <b>un envío con dos pagos</b> — exactamente <code>bond_sats</code> a la address <code>bond</code>, y exactamente los sats de <code>partida 1</code> a esa address. Confirmá 1 bloque. Después copiá el <b>hex de esa tx</b> (no el txid, no dos hex juntos).</p>';
     } else if (s === 'verify') {
       if (!need($('txhex'), 'hex de la transacción')) return;
       await hbp(['verify-funding', '--tx-hex', $('txhex').value.trim(), '--partida', '1']);
