@@ -2,149 +2,256 @@
 <html lang="es">
 <head>
 <meta charset="utf-8"/>
-<title>hbp UI (pruebas)</title>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>hbp — prueba</title>
 <style>
-  body { font-family: ui-sans-serif, system-ui, sans-serif; margin: 1rem; background: #111; color: #eee; }
-  h1 { font-size: 1.1rem; }
-  .row { display: flex; gap: 1rem; flex-wrap: wrap; }
-  .col { flex: 1; min-width: 320px; border: 1px solid #444; padding: 0.8rem; border-radius: 8px; }
-  label { display: block; font-size: 0.75rem; color: #aaa; margin-top: 0.4rem; }
-  input, select, textarea { width: 100%; box-sizing: border-box; background: #1c1c1c; color: #eee; border: 1px solid #555; padding: 0.3rem; }
-  button { margin: 0.2rem 0.2rem 0 0; padding: 0.35rem 0.6rem; cursor: pointer; }
-  pre { white-space: pre-wrap; font-size: 0.75rem; background: #000; padding: 0.5rem; max-height: 280px; overflow: auto; }
-  .warn { color: #fc6; font-size: 0.85rem; }
-  small { color: #888; }
+  :root { --bg:#f4f1ea; --ink:#1a1a1a; --muted:#5c5c5c; --card:#fff; --acc:#0b5; --req:#b00; --line:#ddd; }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: system-ui, sans-serif; background: var(--bg); color: var(--ink); line-height: 1.4; }
+  main { max-width: 36rem; margin: 0 auto; padding: 1.25rem; }
+  h1 { font-size: 1.35rem; margin: 0 0 .25rem; }
+  .lead { color: var(--muted); margin: 0 0 1.25rem; }
+  .who { display: flex; gap: .5rem; margin-bottom: 1rem; }
+  .who button { flex: 1; padding: .7rem; font-size: 1rem; border: 2px solid var(--line); background: #fff; cursor: pointer; border-radius: 8px; }
+  .who button.on { border-color: var(--acc); background: #e8fff0; font-weight: 600; }
+  .card { background: var(--card); border-radius: 10px; padding: 1rem 1.1rem; margin: 0 0 .75rem; box-shadow: 0 1px 2px #0001; }
+  .card h2 { font-size: 1rem; margin: 0 0 .4rem; }
+  .card p { margin: 0 0 .6rem; color: var(--muted); font-size: .95rem; }
+  .n { display: inline-block; width: 1.4rem; height: 1.4rem; line-height: 1.4rem; text-align: center; border-radius: 50%; background: var(--acc); color: #fff; font-size: .8rem; margin-right: .35rem; }
+  label { display: block; font-size: .8rem; margin: .45rem 0 .15rem; }
+  .req { color: var(--req); }
+  input, select, textarea { width: 100%; padding: .45rem .5rem; font-size: 1rem; border: 1px solid var(--line); border-radius: 6px; }
+  .go { background: var(--acc); color: #fff; border: 0; padding: .55rem 1rem; font-size: 1rem; border-radius: 6px; cursor: pointer; margin-top: .5rem; }
+  .go:disabled { opacity: .4; }
+  .sec { background: transparent; border: 1px solid var(--line); color: var(--ink); }
+  pre { background: #1a1a1a; color: #ddd; padding: .6rem; border-radius: 6px; font-size: .75rem; white-space: pre-wrap; max-height: 12rem; overflow: auto; }
+  .copy { font-family: ui-monospace, monospace; background: #f0f0f0; padding: .4rem .5rem; border-radius: 6px; word-break: break-all; font-size: .85rem; }
+  details { margin-top: .5rem; color: var(--muted); font-size: .9rem; }
+  .err { color: var(--req); }
+  .ok { color: #070; }
+  .hide { display: none; }
 </style>
 </head>
 <body>
-<h1>hbp — UI de pruebas (no es el producto)</h1>
-<p class="warn">Opción C: esta UI llama al binario <code>hbp</code>. El redeem lo firma hbp, no Sparrow.
-Los scripts y esta UI pasan <code>--yes</code> después de que vos confirmes aquí.</p>
-<p><small>Regtest / signet. Un contrato, política unwind. Mandante a la izquierda, contratista a la derecha.</small></p>
-<div class="row">
-  <div class="col" id="m"></div>
-  <div class="col" id="c"></div>
-</div>
-<script>
-function pane(id, role, defDir) {
-  return `<h2>${role}</h2>
-    <label>directorio</label><input id="${id}-dir" value="${defDir}"/>
-    <label>passphrase (vacío = identity en claro)</label><input id="${id}-pass" type="password"/>
-    <label>red</label>
-    <select id="${id}-net"><option>regtest</option><option>signet</option><option>testnet</option></select>
-    <div style="margin-top:0.6rem">
-      <button data-a="init">init</button>
-      <button data-a="identity">identity</button>
-      <button data-a="status">status</button>
-      <button data-a="addresses">addresses</button>
-    </div>
-    <label>t_project unix</label><input id="${id}-tproj" placeholder="ahora+21d"/>
-    <label>plazo P1 / P2</label><input id="${id}-t1"/><input id="${id}-t2"/>
-    <button data-a="new">new unwind + 2 partidas 5+5 USD</button>
-    <button data-a="offer">offer</button>
-    <label>archivo offer/pending/quote/coop</label><input id="${id}-file"/>
-    <button data-a="accept">accept FILE</button>
-    <button data-a="commit">commit FILE</button>
-    <button data-a="import">import FILE</button>
-    <button data-a="quote">quote --btc-price 100000</button>
-    <button data-a="accept-quote">accept-quote FILE</button>
-    <label>fund / coop (sats, dest, outpoint…)</label>
-    <input id="${id}-m-op" placeholder="m outpoint txid:vout"/>
-    <input id="${id}-m-sats" placeholder="m sats"/>
-    <input id="${id}-m-prev" placeholder="m prev address"/>
-    <input id="${id}-m-chg" placeholder="m change"/>
-    <input id="${id}-c-op" placeholder="c outpoint"/>
-    <input id="${id}-c-sats" placeholder="c sats"/>
-    <input id="${id}-c-prev" placeholder="c prev"/>
-    <input id="${id}-c-chg" placeholder="c change"/>
-    <button data-a="fund">fund P1</button>
-    <label>tx hex verify</label><textarea id="${id}-hex" rows="2"></textarea>
-    <button data-a="verify">verify-funding P1</button>
-    <input id="${id}-coop-op" placeholder="escrow outpoint"/>
-    <input id="${id}-coop-sats" placeholder="sats (quote)"/>
-    <input id="${id}-coop-dest" placeholder="dest (Sparrow del cobro)"/>
-    <button data-a="propose">coop-propose partida 1</button>
-    <button data-a="sign">coop-sign FILE</button>
-    <button data-a="finish">coop-finish FILE</button>
-    <button data-a="unwind">unwind partida 1</button>
-    <pre id="${id}-out"></pre>`;
-}
-document.getElementById('m').innerHTML = pane('m', 'Mandante', '.m');
-document.getElementById('c').innerHTML = pane('c', 'Contratista', '.c');
+<main>
+  <h1>Pagar un trabajo con Bitcoin</h1>
+  <p class="lead">Como enviar bitcoin a alguien, pero el dinero queda <b>cerrado</b> hasta que los dos están de acuerdo — o hasta que vence el plazo.</p>
 
-async function run(id, args) {
-  const dir = document.getElementById(id+'-dir').value;
-  const passphrase = document.getElementById(id+'-pass').value;
-  const out = document.getElementById(id+'-out');
-  out.textContent = '…';
+  <p>¿Quién sos?</p>
+  <div class="who">
+    <button type="button" id="btn-m" class="on">Yo pago la obra</button>
+    <button type="button" id="btn-c">Yo hago el trabajo</button>
+  </div>
+
+  <div class="card">
+    <label>Carpeta en esta computadora</label>
+    <input id="dir" value=".m"/>
+    <label>Red</label>
+    <select id="net"><option>regtest</option><option>signet</option></select>
+    <details>
+      <summary>Opciones (casi nunca hace falta)</summary>
+      <label>Contraseña de tu clave hbp (opcional)</label>
+      <input id="pass" type="password" autocomplete="off"/>
+    </details>
+  </div>
+
+  <div class="card" id="s1">
+    <h2><span class="n">1</span> Crear tu clave</h2>
+    <p>Una sola vez. No es tu Sparrow: es la llave del contrato. El otro nunca la ve.</p>
+    <button class="go" data-step="init">Crear mi clave</button>
+  </div>
+
+  <div class="card hide" id="s2m">
+    <h2><span class="n">2</span> Armar el acuerdo</h2>
+    <p>Montos de prueba: dos trabajos de 5 USD y boleta 10%. Los plazos se calculan solos (7, 14 y 21 días).</p>
+    <button class="go" data-step="draft">Crear acuerdo y archivo para el otro</button>
+    <p id="offer-hint" class="ok hide">Mandale al otro (USB, Signal) el archivo <span class="copy" id="offer-path"></span></p>
+    <label><span class="req">*</span> Archivo que te devolvió (termina en pending.json)</label>
+    <input id="pending-file" placeholder="01-accepted.pending.json"/>
+    <button class="go sec" data-step="commit">Confirmar su aceptación</button>
+  </div>
+
+  <div class="card hide" id="s2c">
+    <h2><span class="n">2</span> Aceptar el acuerdo</h2>
+    <label><span class="req">*</span> Archivo que te mandó (00-offer.json)</label>
+    <input id="offer-file" placeholder="00-offer.json"/>
+    <button class="go" data-step="accept">Aceptar</button>
+    <p id="pending-hint" class="ok hide">Devolvéle el archivo pending. Cuando te mande el contrato firmado:</p>
+    <label>Archivo del contrato firmado (01-accepted.json)</label>
+    <input id="accepted-file" placeholder="01-accepted.json"/>
+    <button class="go sec" data-step="import">Guardar contrato</button>
+  </div>
+
+  <div class="card" id="s3">
+    <h2><span class="n">3</span> Fijar los sats</h2>
+    <p>El precio de bitcoin se usa una vez. Después los montos no cambian.</p>
+    <button class="go" data-step="quote">Proponer montos en sats</button>
+    <label><span class="req">*</span> Archivo 02-quote.json del otro (cuando te lo pase)</label>
+    <input id="quote-file" placeholder="02-quote.json"/>
+    <button class="go sec" data-step="accept-quote">Aceptar montos</button>
+  </div>
+
+  <div class="card" id="s4">
+    <h2><span class="n">4</span> Encerrar el bitcoin</h2>
+    <p>Como una transferencia, pero a las direcciones del contrato y <b>con el monto exacto</b>. Una sola transacción: boleta + trabajo 1.</p>
+    <button class="go sec" data-step="addresses">Mostrar direcciones y montos</button>
+    <div id="addr-box"></div>
+    <label><span class="req">*</span> Hex de esa transacción (cuando ya se minó)</label>
+    <textarea id="txhex" rows="3" placeholder="pega el hex…"></textarea>
+    <button class="go" data-step="verify">Comprobar que cerró bien</button>
+    <details>
+      <summary>Avanzado: que hbp arme el PSBT (dos wallets)</summary>
+      <p>Solo si no armás la tx en Sparrow. Cada uno pone su moneda y su vuelto.</p>
+      <label>Tu moneda (txid:vout) *</label><input id="my-op"/>
+      <label>Sats de esa moneda *</label><input id="my-sats"/>
+      <label>Address de esa moneda *</label><input id="my-prev"/>
+      <label>Address de vuelto *</label><input id="my-chg"/>
+      <label>Moneda del otro (txid:vout)</label><input id="peer-op"/>
+      <label>Sats del otro</label><input id="peer-sats"/>
+      <label>Address del otro</label><input id="peer-prev"/>
+      <label>Vuelto del otro</label><input id="peer-chg"/>
+      <button class="go sec" data-step="fund">Armar PSBT</button>
+    </details>
+  </div>
+
+  <div class="card" id="s5">
+    <h2><span class="n">5</span> Pagar el trabajo (los dos firman)</h2>
+    <p>El que trabaja pega una address de <b>su</b> Sparrow para cobrar. El que paga propone. El otro firma. Se transmite el hex.</p>
+    <label><span class="req">*</span> Dónde está el dinero cerrado (txid:vout de la partida)</label>
+    <input id="escrow-op" placeholder="txid:0"/>
+    <label><span class="req">*</span> Sats de la partida (paso 3)</label>
+    <input id="escrow-sats" placeholder="5000"/>
+    <label><span class="req">*</span> Address de cobro</label>
+    <input id="pay-dest" placeholder="tb1… o bcrt1…"/>
+    <button class="go" data-step="propose">Proponer el pago</button>
+    <label><span class="req">*</span> Archivo 04-coop.json</label>
+    <input id="coop-file" placeholder="04-coop.json"/>
+    <button class="go" data-step="sign">Firmar el pago</button>
+    <button class="go" data-step="finish">Cerrar y dar el hex para transmitir</button>
+  </div>
+
+  <details class="card">
+    <summary>Si no se ponen de acuerdo (plazo vencido)</summary>
+    <p>El que pagó puede recuperar <b>solo</b> el trabajo. El que trabajó recupera <b>solo</b> la boleta. Usá las mismas cajas del paso 5 (outpoint, sats, tu address).</p>
+    <button class="go sec" data-step="unwind-p">Recuperar el trabajo (quien pagó)</button>
+    <button class="go sec" data-step="unwind-b">Recuperar la boleta (quien trabajó)</button>
+  </details>
+
+  <pre id="out">Acá se ve lo que responde el programa.</pre>
+</main>
+<script>
+const $ = (id) => document.getElementById(id);
+let role = 'mandante';
+
+function showRole() {
+  $('btn-m').classList.toggle('on', role === 'mandante');
+  $('btn-c').classList.toggle('on', role === 'contratista');
+  $('dir').value = role === 'mandante' ? '.m' : '.c';
+  $('s2m').classList.toggle('hide', role !== 'mandante');
+  $('s2c').classList.toggle('hide', role !== 'contratista');
+}
+$('btn-m').onclick = () => { role = 'mandante'; showRole(); };
+$('btn-c').onclick = () => { role = 'contratista'; showRole(); };
+showRole();
+
+function unix(d) { return String(Math.floor(Date.now()/1000) + d*86400); }
+
+async function hbp(args) {
   const r = await fetch('/api/hbp', {
     method: 'POST',
-    headers: {'content-type':'application/json'},
-    body: JSON.stringify({ dir, passphrase, args })
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      dir: $('dir').value,
+      passphrase: $('pass').value,
+      args
+    })
   });
   const j = await r.json();
-  out.textContent = (j.stderr || '') + (j.stdout || '') + (j.error ? '\nERROR '+j.error : '');
+  const text = (j.stderr || '') + (j.stdout || '') + (j.error ? '\nERROR ' + j.error : '');
+  $('out').textContent = text;
+  $('out').classList.toggle('err', !!j.error);
+  return { j, text };
 }
 
-function unix(days) {
-  return String(Math.floor(Date.now()/1000) + days*86400);
+function need(el, name) {
+  if (!el.value.trim()) { alert('Falta: ' + name); el.focus(); return false; }
+  return true;
 }
 
-document.body.addEventListener('click', (ev) => {
-  const b = ev.target.closest('button[data-a]');
+document.body.addEventListener('click', async (ev) => {
+  const b = ev.target.closest('[data-step]');
   if (!b) return;
-  const col = b.closest('.col');
-  const id = col.id;
-  const a = b.getAttribute('data-a');
-  const net = document.getElementById(id+'-net').value;
-  const file = document.getElementById(id+'-file').value;
-  const role = id === 'm' ? 'mandante' : 'contratista';
-  let tproj = document.getElementById(id+'-tproj').value || unix(21);
-  let t1 = document.getElementById(id+'-t1').value || unix(7);
-  let t2 = document.getElementById(id+'-t2').value || unix(14);
-  const args = {
-    init: ['init','--network', net, '--role', role],
-    identity: ['identity'],
-    status: ['status'],
-    addresses: ['addresses'],
-    new: ['new','--unit','USD','--bond-bps','1000','--t-project', tproj, '--dispute','unwind'],
-    offer: ['offer'],
-    accept: ['accept', file],
-    commit: ['commit', file],
-    import: ['import', file],
-    quote: ['quote','--btc-price','100000','--fx-note','ui'],
-    'accept-quote': ['accept-quote', file],
-    fund: ['fund','--fee','500',
-      '--m-outpoint', document.getElementById(id+'-m-op').value,
-      '--m-sats', document.getElementById(id+'-m-sats').value,
-      '--m-prev', document.getElementById(id+'-m-prev').value,
-      '--m-change', document.getElementById(id+'-m-chg').value,
-      '--c-outpoint', document.getElementById(id+'-c-op').value,
-      '--c-sats', document.getElementById(id+'-c-sats').value,
-      '--c-prev', document.getElementById(id+'-c-prev').value,
-      '--c-change', document.getElementById(id+'-c-chg').value],
-    verify: ['verify-funding','--tx-hex', document.getElementById(id+'-hex').value, '--partida','1'],
-    propose: ['coop-propose','--kind','partida','--partida','1',
-      '--outpoint', document.getElementById(id+'-coop-op').value,
-      '--sats', document.getElementById(id+'-coop-sats').value,
-      '--dest', document.getElementById(id+'-coop-dest').value,
-      '--fee','200'],
-    sign: ['coop-sign', file],
-    finish: ['coop-finish', file],
-    unwind: ['unwind','--kind','partida','--partida','1',
-      '--outpoint', document.getElementById(id+'-coop-op').value,
-      '--sats', document.getElementById(id+'-coop-sats').value,
-      '--dest', document.getElementById(id+'-coop-dest').value,
-      '--fee','200'],
-  }[a];
-  if (!args) return;
-  if (a === 'new') {
-    run(id, args).then(() => run(id, ['add-partida','--desc','Cimentacion','--amount','5','--plazo', t1]))
-      .then(() => run(id, ['add-partida','--desc','Muros','--amount','5','--plazo', t2]));
-    return;
+  const s = b.getAttribute('data-step');
+  const net = $('net').value;
+  try {
+    if (s === 'init') {
+      await hbp(['init', '--network', net, '--role', role]);
+    } else if (s === 'draft') {
+      const t1 = unix(7), t2 = unix(14), tp = unix(21);
+      await hbp(['new', '--unit', 'USD', '--bond-bps', '1000', '--t-project', tp, '--dispute', 'unwind']);
+      await hbp(['add-partida', '--desc', 'Trabajo 1', '--amount', '5', '--plazo', t1]);
+      await hbp(['add-partida', '--desc', 'Trabajo 2', '--amount', '5', '--plazo', t2]);
+      const o = await hbp(['offer']);
+      const path = (o.j.stdout || '').trim().split('\n').pop();
+      $('offer-path').textContent = path;
+      $('offer-hint').classList.remove('hide');
+    } else if (s === 'commit') {
+      if (!need($('pending-file'), 'archivo pending')) return;
+      await hbp(['commit', $('pending-file').value.trim()]);
+    } else if (s === 'accept') {
+      if (!need($('offer-file'), 'archivo de oferta')) return;
+      await hbp(['accept', $('offer-file').value.trim()]);
+      $('pending-hint').classList.remove('hide');
+    } else if (s === 'import') {
+      if (!need($('accepted-file'), 'contrato firmado')) return;
+      await hbp(['import', $('accepted-file').value.trim()]);
+    } else if (s === 'quote') {
+      await hbp(['quote', '--btc-price', '100000', '--fx-note', 'ui']);
+    } else if (s === 'accept-quote') {
+      if (!need($('quote-file'), 'archivo de quote')) return;
+      await hbp(['accept-quote', $('quote-file').value.trim()]);
+    } else if (s === 'addresses') {
+      const o = await hbp(['addresses']);
+      $('addr-box').innerHTML = '<pre class="copy">' + (o.j.stdout || '').replace(/</g,'') + '</pre><p>Copiá las líneas bond y partida 1. En Sparrow mandá <b>exactamente</b> esos sats, las dos salidas en la misma transacción.</p>';
+    } else if (s === 'verify') {
+      if (!need($('txhex'), 'hex de la transacción')) return;
+      await hbp(['verify-funding', '--tx-hex', $('txhex').value.trim(), '--partida', '1']);
+    } else if (s === 'fund') {
+      if (!need($('my-op'), 'tu txid:vout') || !need($('my-sats'), 'tus sats')) return;
+      const args = ['fund', '--fee', '500',
+        '--m-outpoint', $('my-op').value, '--m-sats', $('my-sats').value,
+        '--m-prev', $('my-prev').value, '--m-change', $('my-chg').value];
+      if (!need($('peer-op'), 'txid:vout del otro')) return;
+      args.push('--c-outpoint', $('peer-op').value, '--c-sats', $('peer-sats').value,
+        '--c-prev', $('peer-prev').value, '--c-change', $('peer-chg').value);
+      await hbp(args);
+    } else if (s === 'propose') {
+      if (!need($('escrow-op'), 'txid:vout') || !need($('pay-dest'), 'address de cobro') || !need($('escrow-sats'), 'sats')) return;
+      if (!confirm('¿Pagar ' + $('escrow-sats').value + ' sats a\n' + $('pay-dest').value + '?')) return;
+      await hbp(['coop-propose', '--kind', 'partida', '--partida', '1',
+        '--outpoint', $('escrow-op').value.trim(), '--sats', $('escrow-sats').value.trim(),
+        '--dest', $('pay-dest').value.trim(), '--fee', '200']);
+    } else if (s === 'sign') {
+      if (!need($('coop-file'), '04-coop.json')) return;
+      if (!confirm('¿Firmar este pago?')) return;
+      await hbp(['coop-sign', $('coop-file').value.trim()]);
+    } else if (s === 'finish') {
+      if (!need($('coop-file'), '04-coop.json')) return;
+      if (!confirm('¿Cerrar y generar el hex?')) return;
+      await hbp(['coop-finish', $('coop-file').value.trim()]);
+    } else if (s === 'unwind-p' || s === 'unwind-b') {
+      if (!need($('escrow-op'), 'txid:vout') || !need($('pay-dest'), 'tu address') || !need($('escrow-sats'), 'sats')) return;
+      const kind = s === 'unwind-p' ? 'partida' : 'bond';
+      if (!confirm('¿Recuperar ' + kind + ' a ' + $('pay-dest').value + '?')) return;
+      const args = ['unwind', '--kind', kind, '--outpoint', $('escrow-op').value.trim(),
+        '--sats', $('escrow-sats').value.trim(), '--dest', $('pay-dest').value.trim(), '--fee', '200'];
+      if (kind === 'partida') args.push('--partida', '1');
+      await hbp(args);
+    }
+  } catch (e) {
+    $('out').textContent = String(e);
+    $('out').classList.add('err');
   }
-  if ((a === 'propose' || a === 'finish' || a === 'unwind') && !confirm('¿Firmar / proponer este gasto? Revisá dest y sats.')) return;
-  run(id, args);
 });
 </script>
 </body>
