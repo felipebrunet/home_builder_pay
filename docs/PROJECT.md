@@ -6,7 +6,7 @@ Este archivo es la fuente de verdad de producto, protocolo, arquitectura, roadma
 
 **Si retomas en una sesión nueva: lee la sección 0 y el checklist de “listo / no listo”. El código en `crates/` es la implementación de MVP-0.**
 
-Última actualización: 2026-08-30 (opción C locked: Taproot MuSig2 + árbol; catálogo 142 no se recorta).
+Última actualización: 2026-08-30 (opción C + identity.json cifrable con passphrase; catálogo 136 PASS / 6 humano).
 
 ---
 
@@ -18,7 +18,7 @@ Checkpoint de sesión. Actualizar **esta sección** cada vez que se cierre un hi
 |---|---|
 | Fecha | 2026-08-30 |
 | Rama | `master` |
-| Hito | **MVP-0 + catálogo 142 (136 PASS, 6 humano) + `hbp fund` + MuSig2 por archivos + identidad pubkey** |
+| Hito | **MVP-0 + catálogo 142 (136 PASS, 6 humano) + `hbp fund` + MuSig2 por archivos + identidad pubkey/cifrada (opción C)** |
 | Verificar al abrir | `cargo test --workspace` (36 unitarios: `hbp-core` 17, `hbp-bitcoin` 19) y `scripts/run_catalog.sh` |
 | Nodo Bitcoin local | `/home/felipe/projects/btc_clients` — Core 31.1 regtest, RPC `:18443`. Los scripts usan `bitcoin-cli`; `hbp` no embebe el cliente. |
 | Origin | `git@github.com-hbp:felipebrunet/home_builder_pay.git` (MIT, público) |
@@ -236,7 +236,7 @@ Sin red en el MVP. Cada parte tiene un directorio (`--dir`, default `.hbp`). Se 
 
 ```
 <dir>/
-  identity.json          # toy: secret en claro
+  identity.json          # secret; opcionalmente cifrado (passphrase)
   nonces.json            # seeds MuSig2 consumidos
   draft.json
   00-offer.json
@@ -250,7 +250,7 @@ Sin red en el MVP. Cada parte tiene un directorio (`--dir`, default `.hbp`). Se 
 
 Secuencia:
 
-1. `init` — identidad (secp256k1, pubkey comprimida 33 bytes hex).
+1. `init` — identidad (secp256k1, pubkey comprimida 33 bytes hex). `--passphrase` opcional cifra `identity.json`.
 2. Mandante `new` + `add-partida` + `offer`. Firma BIP340 tagged `hbp-contract` sobre el JSON canónico del body **sin** clave del contratista.
 3. Contratista `accept` — agrega su pubkey, firma el body completo. Sale `01-accepted.pending.json`.
 4. Mandante `commit` — comprueba que los *terms* coinciden con la oferta, contrafirma el body completo.
@@ -357,8 +357,9 @@ hbp --dir <carpeta> <comando>
 
 | Comando | Quién | Efecto |
 |---|---|---|
-| `init --network --role [--secret HEX]` | ambos | identidad (o restore) |
-| `identity [--backup]` | ambos | pubkey para compartir; `--backup` = secret de papel |
+| `--passphrase` / `HBP_PASSPHRASE` | ambos | global; cifra/desbloquea `identity.json` (sin largo mínimo) |
+| `init --network --role [--secret HEX]` | ambos | identidad (o restore); con `--passphrase` queda cifrada |
+| `identity [--backup] [--encrypt]` | ambos | pubkey; `--backup` = secret; `--encrypt` pasa de claro a cifrado |
 | `new --unit --bond-bps --t-project [--dispute]` | mandante | draft (política, no la persona del árbitro) |
 | `add-partida --desc --amount --plazo` | mandante | hito |
 | `offer` | mandante | `00-offer.json` |
@@ -378,7 +379,7 @@ hbp --dir <carpeta> <comando>
 | `arbiter-close --kind --with am\|ac --arbiter-dir` | A+M o A+C | script path tras T |
 | `unwind --kind --outpoint --sats --dest --fee` | dueño del unwind | tx hex |
 
-Claves en claro. Toy. No mainnet.
+Claves en claro por defecto; `--passphrase` las cifra. Toy. No mainnet.
 
 ---
 
