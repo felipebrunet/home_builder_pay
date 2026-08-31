@@ -6,7 +6,7 @@ Peer-to-peer Bitcoin escrow for **work packages** plus a **performance bond**. T
 
 This is an MVP: desktop CLI, **regtest/signet**, files passed by hand. No Tor, no DHT. An optional arbiter exists as a Taproot leaf, jointly named by both parties before funding — not picked by the offeror in the listing.
 
-Full protocol, architecture, roadmap, and **where the last session left off**: [docs/PROJECT.md](docs/PROJECT.md) (start at section 0). That document is currently in Spanish.
+Full protocol, architecture, roadmap, and **where the last session left off**: [docs/PROJECT.md](docs/PROJECT.md) (start at section 0). That document is currently in Spanish. Two-PC Signet playbook (Sparrow + faucet): [docs/SIGNET_TWO_PCS.md](docs/SIGNET_TWO_PCS.md).
 
 Current milestone: **MVP-0** plus mined catalog (**136 PASS / 6 human-only**). Dispute **policy** (unwind default; optional MAD / arbiter slot) is set by the offeror; the arbiter *person* is named later by both: [docs/DISPUTE.md](docs/DISPUTE.md). Catalog: [docs/SCENARIOS.md](docs/SCENARIOS.md). Run everything: `scripts/run_catalog.sh`. Unwind index: [docs/REGTEST_SCENARIOS.md](docs/REGTEST_SCENARIOS.md).
 

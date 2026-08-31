@@ -6,7 +6,7 @@ Este archivo es la fuente de verdad de producto, protocolo, arquitectura, roadma
 
 **Si retomas en una sesión nueva: lee la sección 0 y el checklist de “listo / no listo”. El código en `crates/` es la implementación de MVP-0.**
 
-Última actualización: 2026-08-30 (opción C + identity.json cifrable con passphrase; catálogo 136 PASS / 6 humano).
+Última actualización: 2026-08-30 (opción C; guía Signet dos PCs + Sparrow).
 
 ---
 
@@ -40,6 +40,7 @@ Checkpoint de sesión. Actualizar **esta sección** cada vez que se cierre un hi
 | 2026-08-30 | Identidad: se comparte pubkey comprimido (no xpub). Restore `init --secret`. `hbp identity [--backup]` | CLI |
 | 2026-08-30 | **Opción C:** se mantiene el descriptor actual (`tr(musig(M,C), hojas)`). Los 142 no se recortan. No se baja a `wsh` ni a `multi_a` en lugar de MuSig2. | este checkpoint |
 | 2026-08-30 | `identity.json` se puede cifrar con passphrase (Argon2id + XChaCha20). Sin política de fortaleza. Tests siguen en claro. | CLI `--passphrase` / `HBP_PASSPHRASE` |
+| 2026-08-30 | Guía Signet **global** en dos PCs (Sparrow fondea; `hbp` redima). Faucet; montos chicos (no el demo 60k). | [SIGNET_TWO_PCS.md](SIGNET_TWO_PCS.md) |
 
 Default on-chain sigue siendo **`unwind`**. MAD y árbitro están minados. Catálogo: **136 PASS**, **6 NO TEST** (humano). **0 FAIL**.
 
@@ -84,7 +85,7 @@ Default on-chain sigue siendo **`unwind`**. MAD y árbitro están minados. Catá
 
 1. Leer esta sección 0, [DISPUTE.md](DISPUTE.md) y [SCENARIOS.md](SCENARIOS.md).
 2. `scripts/run_catalog.sh` (unit + CLI + MAD/árbitro + remainders; el fondeo P1 ya usa `hbp fund`).
-3. Siguiente: **signet en dos laptops** (mismo flujo de archivos; fondeo Sparrow/Blue o Core; redeem sigue siendo `hbp` / MuSig2). Después `hbp listen` / `connect`. Tor más tarde.
+3. Siguiente: **correr** [SIGNET_TWO_PCS.md](SIGNET_TWO_PCS.md) (Sparrow Signet + faucet + `hbp`). Redeem sigue siendo MuSig2 en `hbp`. Después `hbp listen` / `connect`. Tor más tarde.
 4. No abrir Tor, DHT ni GUI.
 
 El usuario acordó: canal = archivos ahora; Tor p2p después; DHT solo si hay marketplace. MAD nunca a wallet del autor. Árbitro solo si ambos nombran a la misma persona antes de los UTXO. On-chain = **opción C** (MuSig2 + árbol; 142 intactos).
@@ -245,6 +246,7 @@ Sin red en el MVP. Cada parte tiene un directorio (`--dir`, default `.hbp`). Se 
     01-accepted.json
     02-quote.json
     03-arbiter.json      # nomination conjunta (solo policy=arbiter)
+    04-coop.json         # MuSig2 por archivos (pubnonces + parciales)
     state.json
 ```
 
@@ -440,7 +442,7 @@ Usar `/home/felipe/projects/btc_clients`.
 
 ### Fase 2 — signet usable por dos humanos
 
-- Identidades: backup = secret hex (`identity --backup` / `init --secret`). No hay xpub/BIP39 del 2-de-2.
+- Identidades: backup = secret hex (`identity --backup` / `init --secret`). No hay xpub/BIP39 del 2-de-2. Guía dos PCs: [SIGNET_TWO_PCS.md](SIGNET_TWO_PCS.md).
 - Confirmaciones según monto (1 en signet, política en mainnet después).
 - Fee bump del unwind (RBF ya está en sequence; falta UX).
 - `extend-partida` / `renew` cooperativo si se va a pasar T.

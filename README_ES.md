@@ -6,7 +6,7 @@ Custodia Bitcoin entre pares para **partidas de obra** más una **boleta de gara
 
 Esto es un MVP: CLI de escritorio, **regtest/signet**, archivos pasados a mano. Todavía no hay Tor ni DHT. El árbitro es opcional: una hoja Taproot que **ambos** nombran antes de fondear, no un amigo que el mandante pone en el aviso.
 
-Protocolo, arquitectura, hoja de ruta y **en qué quedó la última sesión**: [docs/PROJECT.md](docs/PROJECT.md) (empezar por la sección 0).
+Protocolo, arquitectura, hoja de ruta y **en qué quedó la última sesión**: [docs/PROJECT.md](docs/PROJECT.md) (empezar por la sección 0). Dos PCs en Signet (Sparrow + faucet): [docs/SIGNET_TWO_PCS.md](docs/SIGNET_TWO_PCS.md).
 
 Hito actual: **MVP-0** más catálogo minado (**136 PASS / 6 humano**). La **política** de disputa (default unwind; MAD / slot de árbitro) la propone el oferente; a la *persona* la nombran después los dos: [docs/DISPUTE.md](docs/DISPUTE.md). Catálogo: [docs/SCENARIOS.md](docs/SCENARIOS.md). Correr todo: `scripts/run_catalog.sh`. Unwind 1–8: [docs/REGTEST_SCENARIOS.md](docs/REGTEST_SCENARIOS.md).
 
