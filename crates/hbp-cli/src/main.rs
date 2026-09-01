@@ -5,18 +5,20 @@ use std::str::FromStr;
 use anyhow::{bail, Context, Result};
 use base64::Engine;
 use bitcoin::consensus::encode::{deserialize, serialize_hex};
+use bitcoin::psbt::Psbt;
 use bitcoin::{Address, Amount, OutPoint, TxOut};
 use clap::{Parser, Subcommand};
 use hbp_bitcoin::{
-    apply_key_spend_sig, bond_address, bond_escrow_from_body, build_funding_psbt,
+    apply_key_spend_sig, attach_prev_tx, bond_address, bond_escrow_from_body, build_funding_psbt,
     build_key_spend_tx, build_script_path_tx, build_split_key_spend_tx, build_split_script_path_tx,
-    build_unwind_tx, combine_partials, encode_partial, encode_pubnonce, finish_coop_signature,
-    generate_identity, identity_from_secret, key_spend_sighash, keys_from_body, mad_address,
+    build_unwind_tx, combine_partials, combine_psbts, default_esplora_urls, encode_partial,
+    encode_pubnonce, extract_signed_funding_tx, finish_coop_signature, generate_identity,
+    identity_from_secret, import_watch, key_spend_sighash, keys_from_body, mad_address,
     mad_escrow_from_body, new_nonce_seed, our_partial_signature, parse_partial, parse_pubnonce,
-    partida_address, partida_escrow_from_body, sign_arbiter, sign_arbiter_leaf, sign_body,
-    sign_quote, sign_unwind, start_round, tweaked_key_agg, validate_funding_tx, verify_arbiter,
-    verify_body, verify_quote, ArbiterWith, CoopFile, ExpectedFunding, FundingCoin, FundingRequest,
-    Identity,
+    partida_address, partida_escrow_from_body, scan_watch, sign_arbiter, sign_arbiter_leaf,
+    sign_body, sign_quote, sign_unwind, start_round, tweaked_key_agg, validate_funding_tx,
+    verify_arbiter, verify_body, verify_quote, ArbiterWith, CoopFile, ExpectedFunding, FundingCoin,
+    FundingRequest, Identity, OfferedCoin, WatchKind,
 };
 use hbp_core::{
     bond_minor, bond_warnings, fiat_minor_to_sats, minor_from_major, ArbiterNomination,
@@ -24,7 +26,10 @@ use hbp_core::{
     SignedContract, Unit, DEFAULT_ARBITER_WINDOW_SECS,
 };
 
+mod esplora;
+mod psbt_io;
 mod store;
+use esplora::Esplora;
 use store::{read_json, Store};
 
 #[derive(Parser)]
@@ -65,6 +70,40 @@ enum Cmd {
         /// Re-save identity.json encrypted with --passphrase / HBP_PASSPHRASE.
         #[arg(long, default_value_t = false)]
         encrypt: bool,
+    },
+    /// Import YOUR Blue/Sparrow xpub as local watch-only. Never send this to the other party.
+    WatchImport {
+        /// Account xpub / zpub / vpub from Blue (Wallet details).
+        #[arg(long)]
+        xpub: Option<String>,
+        /// Ranged descriptor instead of xpub, e.g. wpkh(tpub…/0/*).
+        #[arg(long)]
+        descriptor: Option<String>,
+        /// wpkh (Native SegWit, default) or tr (Taproot). Inferred from zpub/vpub.
+        #[arg(long)]
+        kind: Option<String>,
+        #[arg(long, default_value_t = 20)]
+        gap: u32,
+    },
+    /// List UTXOs on the local watch-only (Electrum/Esplora). Does not talk to Blue.
+    Coins {
+        #[arg(long, env = "HBP_ESPLORA")]
+        esplora: Option<String>,
+    },
+    /// Write the shareable 05-coin.json for THIS funding (one UTXO + change; no xpub).
+    OfferCoin {
+        #[arg(long)]
+        outpoint: String,
+        /// Manual (Sparrow): sats of that UTXO. Skips watch/Esplora.
+        #[arg(long)]
+        sats: Option<u64>,
+        /// Manual: address of that UTXO.
+        #[arg(long)]
+        address: Option<String>,
+        #[arg(long)]
+        change: Option<String>,
+        #[arg(long, env = "HBP_ESPLORA")]
+        esplora: Option<String>,
     },
     /// Start a contract draft as mandante.
     New {
@@ -141,7 +180,7 @@ enum Cmd {
         #[arg(long, default_value_t = false)]
         partida_only: bool,
     },
-    /// Unsigned PSBT: escrow outputs exact; fee from change. Sign with Core/Sparrow.
+    /// Unsigned PSBT: escrow outputs exact; fee from change. Sign in Blue (do not broadcast).
     Fund {
         #[arg(long, default_value_t = 1)]
         partida: u32,
@@ -149,15 +188,25 @@ enum Cmd {
         partida_only: bool,
         #[arg(long, default_value_t = 2000)]
         fee: u64,
+        /// Your 05-coin.json (this laptop). Pair with --peer.
         #[arg(long)]
-        m_outpoint: String,
+        mine: Option<PathBuf>,
+        /// Counterparty 05-coin.json (one UTXO, not their xpub).
         #[arg(long)]
-        m_sats: u64,
+        peer: Option<PathBuf>,
+        #[arg(long)]
+        m_coin: Option<PathBuf>,
+        #[arg(long)]
+        c_coin: Option<PathBuf>,
+        #[arg(long)]
+        m_outpoint: Option<String>,
+        #[arg(long)]
+        m_sats: Option<u64>,
         /// Address of the mandante coin being spent (witness UTXO).
         #[arg(long)]
-        m_prev: String,
+        m_prev: Option<String>,
         #[arg(long)]
-        m_change: String,
+        m_change: Option<String>,
         #[arg(long)]
         c_outpoint: Option<String>,
         #[arg(long)]
@@ -166,6 +215,10 @@ enum Cmd {
         c_prev: Option<String>,
         #[arg(long)]
         c_change: Option<String>,
+    },
+    /// Combine Blue-signed PSBTs (each party signed their input) and print tx hex.
+    FundCombine {
+        files: Vec<PathBuf>,
     },
     /// Start a file MuSig2 close (writes 04-coop.json with our pubnonce).
     CoopPropose {
@@ -286,6 +339,33 @@ fn run() -> Result<()> {
             secret,
         } => cmd_init(&store, &network, role.as_deref(), secret.as_deref()),
         Cmd::Identity { backup, encrypt } => cmd_identity(&store, backup, encrypt),
+        Cmd::WatchImport {
+            xpub,
+            descriptor,
+            kind,
+            gap,
+        } => cmd_watch_import(
+            &store,
+            xpub.as_deref(),
+            descriptor.as_deref(),
+            kind.as_deref(),
+            gap,
+        ),
+        Cmd::Coins { esplora } => cmd_coins(&store, esplora.as_deref()),
+        Cmd::OfferCoin {
+            outpoint,
+            sats,
+            address,
+            change,
+            esplora,
+        } => cmd_offer_coin(
+            &store,
+            &outpoint,
+            sats,
+            address.as_deref(),
+            change.as_deref(),
+            esplora.as_deref(),
+        ),
         Cmd::New {
             unit,
             bond_bps,
@@ -330,6 +410,10 @@ fn run() -> Result<()> {
             partida,
             partida_only,
             fee,
+            mine,
+            peer,
+            m_coin,
+            c_coin,
             m_outpoint,
             m_sats,
             m_prev,
@@ -343,15 +427,20 @@ fn run() -> Result<()> {
             partida,
             partida_only,
             fee,
-            &m_outpoint,
+            mine,
+            peer,
+            m_coin,
+            c_coin,
+            m_outpoint.as_deref(),
             m_sats,
-            &m_prev,
-            &m_change,
+            m_prev.as_deref(),
+            m_change.as_deref(),
             c_outpoint.as_deref(),
             c_sats,
             c_prev.as_deref(),
             c_change.as_deref(),
         ),
+        Cmd::FundCombine { files } => cmd_fund_combine(&store, files),
         Cmd::CoopPropose {
             kind,
             outpoint,
@@ -998,15 +1087,160 @@ fn cmd_verify_funding(store: &Store, tx_hex: &str, partida: u32, partida_only: b
     Ok(())
 }
 
+fn cmd_watch_import(
+    store: &Store,
+    xpub: Option<&str>,
+    descriptor: Option<&str>,
+    kind: Option<&str>,
+    gap: u32,
+) -> Result<()> {
+    let id = store.load_identity()?;
+    let raw = match (xpub, descriptor) {
+        (Some(x), None) => x,
+        (None, Some(d)) => d,
+        (Some(_), Some(_)) => bail!("use either --xpub or --descriptor, not both"),
+        (None, None) => bail!("pass --xpub (Blue account xpub/zpub/vpub) or --descriptor"),
+    };
+    let kind = kind.map(WatchKind::from_str).transpose()?;
+    let acc = import_watch(raw, kind, id.network, gap)?;
+    store.save_watch(&acc)?;
+    let recv0 = hbp_bitcoin::address_at(&acc.receive_descriptor, 0, id.network)?;
+    eprintln!("LOCAL watch-only. Do not send watch.json or the xpub to the other party.");
+    eprintln!("file      {}", store.watch_path().display());
+    eprintln!("kind      {:?}", acc.kind);
+    eprintln!("gap       {}", acc.gap_limit);
+    eprintln!("receive/0 {recv0}");
+    eprintln!("check     this address should match the first receive in Blue");
+    println!("{}", recv0);
+    Ok(())
+}
+
+fn resolve_esplora(store: &Store, explicit: Option<&str>) -> Result<Esplora> {
+    let id = store.load_identity()?;
+    let candidates: Vec<String> = if let Some(u) = explicit {
+        vec![u.to_string()]
+    } else {
+        let urls = default_esplora_urls(id.network);
+        if urls.is_empty() {
+            bail!(
+                "no default Esplora for {:?}; pass --esplora URL (regtest/mainnet have none)",
+                id.network
+            );
+        }
+        urls.iter().map(|s| (*s).to_string()).collect()
+    };
+    let client = Esplora::connect(&candidates)?;
+    eprintln!("esplora {}", client.base);
+    Ok(client)
+}
+
+fn cmd_coins(store: &Store, esplora: Option<&str>) -> Result<()> {
+    let acc = store.load_watch()?;
+    let client = resolve_esplora(store, esplora)?;
+    let scan = scan_watch(&acc, |addr| client.address_utxos(addr).map_err(hbp_err))?;
+    eprintln!(
+        "{} UTXO(s); suggested change {}; next: hbp offer-coin --outpoint TXID:VOUT",
+        scan.utxos.len(),
+        scan.change
+    );
+    println!("{}", serde_json::to_string_pretty(&scan)?);
+    Ok(())
+}
+
+fn parse_outpoint(raw: &str) -> Result<OutPoint> {
+    let s = raw.trim().replace(',', ":").replace([' ', '\t'], "");
+    OutPoint::from_str(&s).map_err(|e| anyhow::anyhow!("outpoint '{raw}': {e}"))
+}
+
+fn cmd_offer_coin(
+    store: &Store,
+    outpoint: &str,
+    sats: Option<u64>,
+    address: Option<&str>,
+    change: Option<&str>,
+    esplora: Option<&str>,
+) -> Result<()> {
+    let id = store.load_identity()?;
+    let project = store.load_project()?;
+    let role = party_role(&id, &project.contract.body)?;
+    let want = parse_outpoint(outpoint)?;
+    let (sats, address, change, prev_tx_hex) = if let (Some(sats), Some(address), Some(change)) =
+        (sats, address, change)
+    {
+        let net = hbp_bitcoin::to_btc_network(id.network);
+        Address::from_str(address)
+            .map_err(|e| anyhow::anyhow!("{e}"))?
+            .require_network(net)?;
+        Address::from_str(change)
+            .map_err(|e| anyhow::anyhow!("{e}"))?
+            .require_network(net)?;
+        if sats == 0 {
+            bail!("--sats must be > 0");
+        }
+        (sats, address.to_string(), change.to_string(), None)
+    } else if sats.is_some() || address.is_some() {
+        bail!("manual Sparrow path needs --sats AND --address AND --change (or omit all three to scan watch-only)");
+    } else {
+        let acc = store.load_watch()?;
+        let client = resolve_esplora(store, esplora)?;
+        let scan = scan_watch(&acc, |addr| client.address_utxos(addr).map_err(hbp_err))?;
+        let found = scan
+            .utxos
+            .iter()
+            .find(|u| u.outpoint == want.to_string())
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "outpoint {want} is not on this watch-only; on regtest paste sats+address+change from Sparrow instead of scanning Esplora"
+                )
+            })?;
+        let change = change.unwrap_or(&scan.change).to_string();
+        let prev_tx_hex = match client.tx_hex(&want.txid.to_string()) {
+            Ok(h) => Some(h),
+            Err(e) => {
+                eprintln!(
+                    "warning: could not fetch prev tx ({e}); Blue may want the full previous tx"
+                );
+                None
+            }
+        };
+        (found.sats, found.address.clone(), change, prev_tx_hex)
+    };
+    let coin = OfferedCoin {
+        role,
+        outpoint: want.to_string(),
+        sats,
+        address,
+        change,
+        prev_tx_hex,
+    };
+    let path = store.save_offered_coin(&coin)?;
+    eprintln!("share this file (one UTXO). Not your xpub.");
+    eprintln!("{}", path.display());
+    println!("{}", serde_json::to_string_pretty(&coin)?);
+    Ok(())
+}
+
+fn hbp_err(e: anyhow::Error) -> hbp_bitcoin::Error {
+    hbp_bitcoin::Error::msg(e.to_string())
+}
+
+fn load_offered(path: &std::path::Path) -> Result<OfferedCoin> {
+    read_json(path)
+}
+
 fn cmd_fund(
     store: &Store,
     partida: u32,
     partida_only: bool,
     fee: u64,
-    m_outpoint: &str,
-    m_sats: u64,
-    m_prev: &str,
-    m_change: &str,
+    mine: Option<PathBuf>,
+    peer: Option<PathBuf>,
+    m_coin: Option<PathBuf>,
+    c_coin: Option<PathBuf>,
+    m_outpoint: Option<&str>,
+    m_sats: Option<u64>,
+    m_prev: Option<&str>,
+    m_change: Option<&str>,
     c_outpoint: Option<&str>,
     c_sats: Option<u64>,
     c_prev: Option<&str>,
@@ -1026,6 +1260,80 @@ fn cmd_fund(
             .map_err(|e| anyhow::anyhow!("{e}"))?
             .require_network(net)?)
     };
+
+    let (m_offered, c_offered) =
+        resolve_fund_coins(store, body, mine, peer, m_coin, c_coin, partida_only)?;
+
+    let (mandante, mandante_change, m_prev_tx, contratista, contratista_change, c_prev_tx) =
+        if let Some(m) = m_offered {
+            if m.role != Role::Mandante {
+                bail!("mandante coin file has role {:?}", m.role);
+            }
+            let c = if partida_only {
+                None
+            } else {
+                let c = c_offered.context("need contratista 05-coin.json (--peer or --c-coin)")?;
+                if c.role != Role::Contratista {
+                    bail!("contratista coin file has role {:?}", c.role);
+                }
+                Some(c)
+            };
+            let m_tx = m.prev_tx().map_err(|e| anyhow::anyhow!("{e}"))?;
+            let c_tx = c
+                .as_ref()
+                .map(|c| c.prev_tx().map_err(|e| anyhow::anyhow!("{e}")))
+                .transpose()?
+                .flatten();
+            (
+                m.funding_coin(body.network)
+                    .map_err(|e| anyhow::anyhow!("{e}"))?,
+                m.change_address(body.network)
+                    .map_err(|e| anyhow::anyhow!("{e}"))?,
+                m_tx,
+                c.as_ref()
+                    .map(|c| {
+                        c.funding_coin(body.network)
+                            .map_err(|e| anyhow::anyhow!("{e}"))
+                    })
+                    .transpose()?,
+                c.as_ref()
+                    .map(|c| {
+                        c.change_address(body.network)
+                            .map_err(|e| anyhow::anyhow!("{e}"))
+                    })
+                    .transpose()?,
+                c_tx,
+            )
+        } else {
+            let m_outpoint = m_outpoint.context("--m-outpoint or --mine/--m-coin required")?;
+            let m_sats = m_sats.context("--m-sats required")?;
+            let m_prev = m_prev.context("--m-prev required")?;
+            let m_change = m_change.context("--m-change required")?;
+            let contratista = if partida_only {
+                None
+            } else {
+                Some(FundingCoin {
+                    outpoint: OutPoint::from_str(c_outpoint.context("--c-outpoint required")?)
+                        .map_err(|e| anyhow::anyhow!("{e}"))?,
+                    sats: c_sats.context("--c-sats required")?,
+                    script_pubkey: parse_addr(c_prev.context("--c-prev required")?)?
+                        .script_pubkey(),
+                })
+            };
+            (
+                FundingCoin {
+                    outpoint: OutPoint::from_str(m_outpoint).map_err(|e| anyhow::anyhow!("{e}"))?,
+                    sats: m_sats,
+                    script_pubkey: parse_addr(m_prev)?.script_pubkey(),
+                },
+                parse_addr(m_change)?,
+                None,
+                contratista,
+                c_change.map(parse_addr).transpose()?,
+                None,
+            )
+        };
+
     let part = partida_escrow_from_body(body, partida, named)?;
     let part_sats = quote.partida_sats(partida)?;
     let bond = if partida_only {
@@ -1047,31 +1355,23 @@ fn cmd_fund(
     } else {
         None
     };
-    let contratista = if partida_only {
-        None
-    } else {
-        Some(FundingCoin {
-            outpoint: OutPoint::from_str(c_outpoint.context("--c-outpoint required")?)
-                .map_err(|e| anyhow::anyhow!("{e}"))?,
-            sats: c_sats.context("--c-sats required")?,
-            script_pubkey: parse_addr(c_prev.context("--c-prev required")?)?.script_pubkey(),
-        })
-    };
     let req = FundingRequest {
         bond,
         partida: (part.script_pubkey(), part_sats),
         mad,
         fee,
-        mandante: FundingCoin {
-            outpoint: OutPoint::from_str(m_outpoint).map_err(|e| anyhow::anyhow!("{e}"))?,
-            sats: m_sats,
-            script_pubkey: parse_addr(m_prev)?.script_pubkey(),
-        },
-        mandante_change: parse_addr(m_change)?,
+        mandante,
+        mandante_change,
         contratista,
-        contratista_change: c_change.map(parse_addr).transpose()?,
+        contratista_change,
     };
-    let psbt = build_funding_psbt(&req)?;
+    let mut psbt = build_funding_psbt(&req)?;
+    if let Some(tx) = m_prev_tx {
+        attach_prev_tx(&mut psbt, req.mandante.outpoint, tx)?;
+    }
+    if let (Some(c), Some(tx)) = (&req.contratista, c_prev_tx) {
+        attach_prev_tx(&mut psbt, c.outpoint, tx)?;
+    }
     if !partida_only {
         validate_funding_tx(
             &psbt.unsigned_tx,
@@ -1085,14 +1385,88 @@ fn cmd_fund(
             },
         )?;
     }
+    let id = project.contract.id()?;
+    let psbt_path = store.contract_dir(&id).join("05-funding.unsigned.psbt");
+    psbt_io::write_psbt_binary(&psbt_path, &psbt)?;
     eprintln!(
         "partida {partida} {} sats exact; fee {fee} from change (not escrow)",
         part_sats
+    );
+    eprintln!(
+        "PSBT {} — each Blue signs ITS input. Do not broadcast until fund-combine.",
+        psbt_path.display()
     );
     println!(
         "{}",
         base64::engine::general_purpose::STANDARD.encode(psbt.serialize())
     );
+    Ok(())
+}
+
+fn resolve_fund_coins(
+    store: &Store,
+    body: &ContractBody,
+    mine: Option<PathBuf>,
+    peer: Option<PathBuf>,
+    m_coin: Option<PathBuf>,
+    c_coin: Option<PathBuf>,
+    partida_only: bool,
+) -> Result<(Option<OfferedCoin>, Option<OfferedCoin>)> {
+    if m_coin.is_some() || c_coin.is_some() {
+        return Ok((
+            m_coin.as_ref().map(|p| load_offered(p)).transpose()?,
+            c_coin.as_ref().map(|p| load_offered(p)).transpose()?,
+        ));
+    }
+    if mine.is_none() && peer.is_none() {
+        return Ok((None, None));
+    }
+    let id = store.load_identity()?;
+    let role = party_role(&id, body)?;
+    let mine = mine.context("--mine required with --peer")?;
+    let mine_coin = load_offered(&mine)?;
+    if mine_coin.role != role {
+        bail!(
+            "--mine is {:?} but this identity is {role:?}",
+            mine_coin.role
+        );
+    }
+    if partida_only {
+        if role != Role::Mandante {
+            bail!("--partida-only is the mandante's send");
+        }
+        return Ok((Some(mine_coin), None));
+    }
+    let peer = peer.context("--peer 05-coin.json required")?;
+    let peer_coin = load_offered(&peer)?;
+    match role {
+        Role::Mandante => Ok((Some(mine_coin), Some(peer_coin))),
+        Role::Contratista => Ok((Some(peer_coin), Some(mine_coin))),
+    }
+}
+
+fn cmd_fund_combine(store: &Store, files: Vec<PathBuf>) -> Result<()> {
+    if files.is_empty() {
+        bail!("pass the unsigned PSBT and/or each Blue-signed PSBT");
+    }
+    let parts: Vec<Psbt> = files
+        .iter()
+        .map(|p| psbt_io::load_psbt(p))
+        .collect::<Result<_>>()?;
+    let combined = combine_psbts(&parts).map_err(|e| anyhow::anyhow!("{e}"))?;
+    let tx = extract_signed_funding_tx(combined).map_err(|e| anyhow::anyhow!("{e}"))?;
+    let hex = serialize_hex(&tx);
+    if let Ok(id) = store.current_id() {
+        let path = store.contract_dir(&id).join("05-funding.signed.hex");
+        std::fs::write(&path, &hex)?;
+        eprintln!(
+            "both inputs signed. Either party broadcasts (Blue: Settings → Tools → Broadcast)."
+        );
+        eprintln!("{}", path.display());
+    } else {
+        eprintln!("both inputs signed. Broadcast this hex from either Blue.");
+    }
+    println!("{hex}");
     Ok(())
 }
 

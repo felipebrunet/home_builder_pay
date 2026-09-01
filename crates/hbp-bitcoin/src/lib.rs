@@ -9,9 +9,13 @@ mod sign_contract;
 mod spend;
 mod taproot;
 mod validate;
+mod watch;
 
 pub use error::Error;
-pub use fund::{build_funding_psbt, funding_tx, FundingCoin, FundingRequest};
+pub use fund::{
+    attach_prev_tx, build_funding_psbt, combine_psbts, extract_signed_funding_tx, funding_tx,
+    FundingCoin, FundingRequest,
+};
 pub use identity::{generate_identity, identity_from_secret, Identity};
 pub use musig::{
     agg_nonce, combine_partials, consume_nonce_seed, encode_partial, encode_pubnonce,
@@ -33,6 +37,11 @@ pub use taproot::{
     Escrow, EscrowKind,
 };
 pub use validate::{validate_funding_tx, ExpectedFunding, FundingIssue};
+pub use watch::{
+    address_at, default_esplora_url, default_esplora_urls, import_watch, scan_watch, script_at,
+    slip132_to_xpub,
+    OfferedCoin, WatchAccount, WatchKind, WatchScan, WatchedUtxo,
+};
 
 pub type Result<T> = std::result::Result<T, Error>;
 

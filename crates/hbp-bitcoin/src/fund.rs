@@ -156,3 +156,68 @@ pub fn funding_tx(req: &FundingRequest) -> Result<(Transaction, Vec<TxOut>), Err
     };
     Ok((tx, witness_utxos))
 }
+
+/// Attach the full previous transaction when we have it (helps Blue/Sparrow on P2WPKH).
+pub fn attach_prev_tx(psbt: &mut Psbt, outpoint: OutPoint, prev: Transaction) -> Result<(), Error> {
+    let want = prev.compute_txid();
+    if want != outpoint.txid {
+        return Err(Error::msg(format!(
+            "prev tx {want} does not match outpoint {}",
+            outpoint.txid
+        )));
+    }
+    let pos = psbt
+        .unsigned_tx
+        .input
+        .iter()
+        .position(|i| i.previous_output == outpoint)
+        .ok_or_else(|| Error::msg(format!("psbt has no input {outpoint}")))?;
+    psbt.inputs[pos].non_witness_utxo = Some(prev);
+    Ok(())
+}
+
+/// Merge PSBTs that share the same unsigned tx (each Blue signs its own input).
+pub fn combine_psbts(parts: &[Psbt]) -> Result<Psbt, Error> {
+    if parts.is_empty() {
+        return Err(Error::msg("need at least one PSBT"));
+    }
+    let mut acc = parts[0].clone();
+    for extra in &parts[1..] {
+        acc.combine(extra.clone())
+            .map_err(|e| Error::msg(e.to_string()))?;
+    }
+    Ok(acc)
+}
+
+/// Finalize singlesig inputs Blue can sign (P2WPKH / P2TR key-path) and extract the tx.
+pub fn extract_signed_funding_tx(mut psbt: Psbt) -> Result<Transaction, Error> {
+    for (i, input) in psbt.inputs.iter_mut().enumerate() {
+        finalize_singlesig_input(input).map_err(|e| Error::msg(format!("input {i}: {e}")))?;
+    }
+    psbt.extract_tx().map_err(|e| Error::msg(e.to_string()))
+}
+
+fn finalize_singlesig_input(input: &mut bitcoin::psbt::Input) -> Result<(), Error> {
+    if input.final_script_witness.is_some() {
+        return Ok(());
+    }
+    if let Some(sig) = input.tap_key_sig {
+        input.final_script_witness = Some(Witness::p2tr_key_spend(&sig));
+        input.tap_key_sig = None;
+        return Ok(());
+    }
+    if input.partial_sigs.len() == 1 {
+        let (pk, sig) = input.partial_sigs.iter().next().expect("len == 1");
+        input.final_script_witness = Some(Witness::p2wpkh(sig, &pk.inner));
+        input.partial_sigs.clear();
+        return Ok(());
+    }
+    if input.partial_sigs.is_empty() && input.tap_key_sig.is_none() {
+        return Err(Error::msg(
+            "missing signature (Blue must sign this input and not broadcast yet)",
+        ));
+    }
+    Err(Error::msg(
+        "cannot finalize: more than one partial signature on a singlesig input",
+    ))
+}

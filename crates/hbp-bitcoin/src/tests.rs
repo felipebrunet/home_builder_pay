@@ -1,7 +1,13 @@
+use std::str::FromStr;
+
 use bitcoin::absolute::LockTime;
+use bitcoin::bip32::{Xpriv, Xpub};
+use bitcoin::consensus::encode::serialize_hex;
 use bitcoin::hashes::Hash;
-use bitcoin::secp256k1::{rand::rngs::OsRng, PublicKey, Secp256k1, SecretKey};
-use bitcoin::{Amount, Network, OutPoint, ScriptBuf, Transaction, TxIn, TxOut, Txid};
+use bitcoin::key::CompressedPublicKey;
+use bitcoin::secp256k1::{rand::rngs::OsRng, Message, PublicKey, Secp256k1, SecretKey};
+use bitcoin::sighash::{EcdsaSighashType, SighashCache};
+use bitcoin::{Address, Amount, Network, OutPoint, ScriptBuf, Transaction, TxIn, TxOut, Txid};
 use hbp_core::{NonceJournal, Unit};
 
 use crate::musig::{consume_nonce_seed, finish_coop_signature, verify_aggregated};
@@ -667,4 +673,198 @@ fn file_musig_matches_in_process() {
     .unwrap();
     assert_eq!(combined, in_proc);
     verify_aggregated(&m_pk, &c_pk, &escrow, &combined, &sighash).unwrap();
+}
+
+fn account_tpub() -> String {
+    let secp = Secp256k1::new();
+    let seed = [7u8; 64];
+    let master = Xpriv::new_master(Network::Testnet, &seed).unwrap();
+    let path = bitcoin::bip32::DerivationPath::from_str("m/84h/1h/0h").unwrap();
+    let acct = master.derive_priv(&secp, &path).unwrap();
+    Xpub::from_priv(&secp, &acct).to_string()
+}
+
+#[test]
+fn watch_vpub_roundtrip_matches_tpub() {
+    let tpub = account_tpub();
+    let decoded = bitcoin::base58::decode_check(&tpub).unwrap();
+    let mut v = decoded.clone();
+    v[0..4].copy_from_slice(&0x045F_1CF6u32.to_be_bytes());
+    let vpub = bitcoin::base58::encode_check(&v);
+    let (back, kind) = crate::slip132_to_xpub(&vpub).unwrap();
+    assert_eq!(back, tpub);
+    assert_eq!(kind, Some(crate::WatchKind::Wpkh));
+}
+
+#[test]
+fn watch_import_xpub_derives_same_address_twice() {
+    let tpub = account_tpub();
+    let acc = crate::import_watch(
+        &tpub,
+        Some(crate::WatchKind::Wpkh),
+        hbp_core::Network::Signet,
+        20,
+    )
+    .unwrap();
+    assert!(acc.receive_descriptor.contains("/0/*"));
+    assert!(acc.change_descriptor.contains("/1/*"));
+    let a = crate::address_at(&acc.receive_descriptor, 0, hbp_core::Network::Signet).unwrap();
+    let b = crate::address_at(&acc.receive_descriptor, 0, hbp_core::Network::Signet).unwrap();
+    assert_eq!(a, b);
+    assert_ne!(
+        a.to_string(),
+        crate::address_at(&acc.change_descriptor, 0, hbp_core::Network::Signet)
+            .unwrap()
+            .to_string()
+    );
+    // xpub never belongs on the offered coin.
+    let coin = crate::OfferedCoin {
+        role: hbp_core::Role::Contratista,
+        outpoint: dummy_outpoint().to_string(),
+        sats: 10_000,
+        address: a.to_string(),
+        change: crate::address_at(&acc.change_descriptor, 0, hbp_core::Network::Signet)
+            .unwrap()
+            .to_string(),
+        prev_tx_hex: None,
+    };
+    let json = serde_json::to_string(&coin).unwrap();
+    assert!(!json.contains("tpub"));
+    assert!(!json.contains("xpub"));
+    assert!(!json.contains("descriptor"));
+}
+
+#[test]
+fn watch_scan_stops_at_gap_and_picks_change() {
+    let tpub = account_tpub();
+    let acc = crate::import_watch(
+        &tpub,
+        Some(crate::WatchKind::Wpkh),
+        hbp_core::Network::Signet,
+        3,
+    )
+    .unwrap();
+    let funded = crate::address_at(&acc.receive_descriptor, 0, hbp_core::Network::Signet).unwrap();
+    let mut lookups = 0u32;
+    let scan = crate::scan_watch(&acc, |addr| {
+        lookups += 1;
+        if addr == &funded {
+            Ok(vec![(dummy_outpoint(), 50_000, true)])
+        } else {
+            Ok(vec![])
+        }
+    })
+    .unwrap();
+    assert_eq!(scan.utxos.len(), 1);
+    assert_eq!(scan.utxos[0].sats, 50_000);
+    assert_eq!(
+        scan.change,
+        crate::address_at(&acc.change_descriptor, 0, hbp_core::Network::Signet)
+            .unwrap()
+            .to_string()
+    );
+    // receive: index 0 used + 3 unused; change: 3 unused
+    assert_eq!(lookups, 1 + 3 + 3);
+}
+
+#[test]
+fn watch_rejects_mainnet_xpub_on_signet() {
+    let secp = Secp256k1::new();
+    let master = Xpriv::new_master(Network::Bitcoin, &[3u8; 64]).unwrap();
+    let xpub = Xpub::from_priv(&secp, &master).to_string();
+    let err = crate::import_watch(&xpub, None, hbp_core::Network::Signet, 20)
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("network"), "{err}");
+}
+
+#[test]
+fn offered_coin_to_funding_coin() {
+    let tpub = account_tpub();
+    let acc = crate::import_watch(&tpub, None, hbp_core::Network::Regtest, 5).unwrap();
+    let addr = crate::address_at(&acc.receive_descriptor, 1, hbp_core::Network::Regtest).unwrap();
+    let chg = crate::address_at(&acc.change_descriptor, 0, hbp_core::Network::Regtest).unwrap();
+    let coin = crate::OfferedCoin {
+        role: hbp_core::Role::Mandante,
+        outpoint: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:2".into(),
+        sats: 12_345,
+        address: addr.to_string(),
+        change: chg.to_string(),
+        prev_tx_hex: None,
+    };
+    let fc = coin.funding_coin(hbp_core::Network::Regtest).unwrap();
+    assert_eq!(fc.sats, 12_345);
+    assert_eq!(fc.script_pubkey, addr.script_pubkey());
+    assert_eq!(fc.outpoint.vout, 2);
+}
+
+fn p2wpkh_pair() -> (SecretKey, Address, SecretKey, Address) {
+    let secp = Secp256k1::new();
+    let s1 = SecretKey::new(&mut OsRng);
+    let s2 = SecretKey::new(&mut OsRng);
+    let p1 = PublicKey::from_secret_key(&secp, &s1);
+    let p2 = PublicKey::from_secret_key(&secp, &s2);
+    let a1 = Address::p2wpkh(&CompressedPublicKey(p1), Network::Regtest);
+    let a2 = Address::p2wpkh(&CompressedPublicKey(p2), Network::Regtest);
+    (s1, a1, s2, a2)
+}
+
+fn sign_p2wpkh_input(psbt: &mut bitcoin::psbt::Psbt, index: usize, sk: &SecretKey) {
+    let secp = Secp256k1::new();
+    let pk = PublicKey::from_secret_key(&secp, sk);
+    let utxo = psbt.inputs[index].witness_utxo.clone().unwrap();
+    let mut cache = SighashCache::new(&psbt.unsigned_tx);
+    let sighash = cache
+        .p2wpkh_signature_hash(
+            index,
+            &utxo.script_pubkey,
+            utxo.value,
+            EcdsaSighashType::All,
+        )
+        .unwrap();
+    let msg = Message::from_digest(sighash.to_byte_array());
+    let sig = secp.sign_ecdsa(&msg, sk);
+    psbt.inputs[index].partial_sigs.insert(
+        bitcoin::PublicKey::new(pk),
+        bitcoin::ecdsa::Signature::sighash_all(sig),
+    );
+}
+
+#[test]
+fn combine_two_blue_style_partial_psbts() {
+    let (s1, a1, s2, a2) = p2wpkh_pair();
+    let (_ms, mp, _cs, cp) = pair();
+    let bond = bond_descriptor(&mp, &cp, 1_800_000_000).unwrap();
+    let part = partida_descriptor(&mp, &cp, 1_700_000_000).unwrap();
+    let req = crate::FundingRequest {
+        bond: Some((bond.script_pubkey(), 20_000)),
+        partida: (part.script_pubkey(), 30_000),
+        mad: None,
+        fee: 200,
+        mandante: crate::FundingCoin {
+            outpoint: dummy_outpoint(),
+            sats: 100_000,
+            script_pubkey: a1.script_pubkey(),
+        },
+        mandante_change: a1.clone(),
+        contratista: Some(crate::FundingCoin {
+            outpoint: OutPoint {
+                txid: Txid::from_byte_array([8u8; 32]),
+                vout: 1,
+            },
+            sats: 80_000,
+            script_pubkey: a2.script_pubkey(),
+        }),
+        contratista_change: Some(a2.clone()),
+    };
+    let unsigned = crate::build_funding_psbt(&req).unwrap();
+    let mut only_m = unsigned.clone();
+    let mut only_c = unsigned.clone();
+    sign_p2wpkh_input(&mut only_m, 0, &s1);
+    sign_p2wpkh_input(&mut only_c, 1, &s2);
+    let combined = crate::combine_psbts(&[only_m, only_c]).unwrap();
+    let tx = crate::extract_signed_funding_tx(combined).unwrap();
+    assert_eq!(tx.input.len(), 2);
+    assert!(tx.input.iter().all(|i| i.witness.len() == 2));
+    let _ = serialize_hex(&tx);
 }

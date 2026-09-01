@@ -3,7 +3,7 @@ use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
-use hbp_bitcoin::Identity;
+use hbp_bitcoin::{Identity, WatchAccount};
 use hbp_core::{
     vault_decrypt, vault_encrypt, vault_is_encrypted, ArbiterNomination, NonceJournal, Offer,
     Project, Quote, SignedContract,
@@ -207,6 +207,45 @@ impl Store {
         fs::create_dir_all(&dir)?;
         let path = dir.join("02-quote.json");
         write_json(&path, quote)?;
+        Ok(path)
+    }
+
+    pub fn watch_path(&self) -> PathBuf {
+        self.root.join("watch.json")
+    }
+
+    pub fn load_watch(&self) -> Result<WatchAccount> {
+        let raw = fs::read_to_string(self.watch_path()).context(
+            "watch.json missing; run hbp watch-import with your Blue xpub (local only, never send it)",
+        )?;
+        if vault_is_encrypted(&raw) {
+            let pass = self.unlock_passphrase()?;
+            let pt = vault_decrypt(&raw, &pass)?;
+            Ok(serde_json::from_slice(&pt)?)
+        } else {
+            Ok(serde_json::from_str(&raw)?)
+        }
+    }
+
+    pub fn save_watch(&self, w: &WatchAccount) -> Result<()> {
+        self.init_dir()?;
+        let path = self.watch_path();
+        if let Some(pass) = &self.passphrase {
+            let pt = serde_json::to_vec(w)?;
+            fs::write(&path, vault_encrypt(&pt, pass)?)?;
+        } else {
+            write_json(&path, w)?;
+        }
+        set_owner_secret(&path)?;
+        Ok(())
+    }
+
+    pub fn save_offered_coin(&self, coin: &hbp_bitcoin::OfferedCoin) -> Result<PathBuf> {
+        let id = self.current_id()?;
+        let dir = self.contract_dir(&id);
+        fs::create_dir_all(&dir)?;
+        let path = dir.join("05-coin.json");
+        write_json(&path, coin)?;
         Ok(path)
     }
 }
