@@ -6,7 +6,7 @@ Este archivo es la fuente de verdad de producto, protocolo, arquitectura, roadma
 
 **Si retomas en una sesión nueva: lee la sección 0 y el checklist de “listo / no listo”. El código en `crates/` es la implementación de MVP-0.**
 
-Última actualización: 2026-08-30 (sesión cerrada: UI de pruebas + feliz vía API en regtest; fondeo “un hex doble” en pausa).
+Última actualización: 2026-09-01 (Signet feliz minado: fondeo atómico + recepción P1; boleta intacta).
 
 ---
 
@@ -16,12 +16,13 @@ Checkpoint de sesión. Actualizar **esta sección** cada vez que se cierre un hi
 
 | Campo | Valor |
 |---|---|
-| Fecha | 2026-08-30 |
+| Fecha | 2026-09-01 |
 | Rama | `master` |
-| Hito | **MVP-0 + catálogo 142 + opción C + `hbp-ui` (wizard) + feliz API/regtest** |
-| Verificar al abrir | `cargo test --workspace` (36 unitarios: `hbp-core` 17, `hbp-bitcoin` 19) y `scripts/run_catalog.sh`. UI de prueba: `cargo run -p hbp-ui` → http://127.0.0.1:3847 |
-| Nodo Bitcoin local | `/home/felipe/projects/btc_clients` — Core 31.1 regtest, RPC `:18443`. Los scripts usan `bitcoin-cli`; `hbp` no embebe el cliente. |
+| Hito | **MVP-0 + catálogo 142 + Signet feliz minado (Electrum, dos browsers)** |
+| Verificar al abrir | `cargo test --workspace` (42 unitarios: `hbp-core` 17, `hbp-bitcoin` 25) y `scripts/run_catalog.sh`. UI de prueba: `cargo run -p hbp-ui` → http://127.0.0.1:3847 |
+| Nodo Bitcoin local | `/home/felipe/projects/btc_clients` — Core 31.1 regtest, RPC `:18443`. Los scripts usan `bitcoin-cli`; `hbp` no embebe el cliente. Signet no usa este nodo. |
 | Origin | `git@github.com-hbp:felipebrunet/home_builder_pay.git` (MIT, público) |
+| Sesión Signet | Carpetas locales `.ms` / `.cs` (gitignore). Relato: [SIGNET_HAPPY_PATH.md](SIGNET_HAPPY_PATH.md). |
 
 ### Historial reciente (changelog)
 
@@ -44,6 +45,9 @@ Checkpoint de sesión. Actualizar **esta sección** cada vez que se cierre un hi
 | 2026-08-30 | Confirmación TTY (YES) en coop/unwind; `--yes` para scripts/UI. `nonces.json` se cifra con la misma passphrase. | CLI |
 | 2026-08-30 | UI de pruebas `hbp-ui`: un rol, pasos 1–5. Fondeo = **un** hex de **una** tx con boleta+P1. | `crates/hbp-ui`, `d428b93` |
 | 2026-08-30 | Feliz vía `POST /api/hbp` + wallets Core `hbp_mandante`/`hbp_contratista`: P1 paid + boleta minada. | `/tmp/hbp-ui-e2e` (no en git) |
+| 2026-08-31 | Fondeo Blue **camino 2**: xpub watch-only local (nunca al peer); Esplora lista UTXOs; `05-coin.json` = un prevout; `fund --mine/--peer`; Blue/Electrum firma el PSBT; `fund-combine`. Atomicidad 2-in intacta. | `hbp-bitcoin/watch.rs`, CLI, [BLUE_FUNDING.md](BLUE_FUNDING.md) |
+| 2026-09-01 | UI de prueba: red primero (Signet → `.ms`/`.cs`); log sticky; Esplora Blockstream + fallback mempool; paso 5 carga UTXO de `status`. | `hbp-ui` |
+| 2026-09-01 | **Signet feliz minado**: fondeo 2-in, recepción P1 (4 800 al contratista), boleta 1 000 sigue locked. Unwind boleta prefirmado, locktime 2026-09-22. | [SIGNET_HAPPY_PATH.md](SIGNET_HAPPY_PATH.md) |
 
 Default on-chain sigue siendo **`unwind`**. MAD y árbitro están minados. Catálogo: **136 PASS**, **6 NO TEST** (humano). **0 FAIL**.
 
@@ -67,10 +71,11 @@ Default on-chain sigue siendo **`unwind`**. MAD y árbitro están minados. Catá
 - MuSig2 key-path (64 B) y unwind script-path (CLTV unix, witness 3 ítems). Sparrow/Blue firman el **fondeo** (singlesig → escrow). **No** firman la recepción/unwind: eso es BIP-327 + árbol, que esas wallets no implementan.
 - `NonceJournal`: reutilizar seed aborta.
 - CLI: `init [--secret]`, `identity [--backup\|--encrypt]`, `--passphrase` / `HBP_PASSPHRASE` (cifra identity.json **y** nonces.json; 4 letras vale; sin passphrase = claro). `--yes` salta el “type YES” en TTY.
-- UI de pruebas: `cargo build -p hbp-cli -p hbp-ui && cargo run -p hbp-ui` → http://127.0.0.1:3847 (localhost; llama a `hbp --yes`). Un rol, pasos numerados. No es el producto final.
-- Resto CLI: `new --dispute unwind\|mad\|arbiter`, `propose-arbiter`, `accept-arbiter`, `add-partida`, `offer`, `accept`, `commit`, `import`, `quote`, `accept-quote`, `addresses`, `status`, `verify-funding`, `fund`, `coop-propose` / `coop-sign` / `coop-finish`, `unwind`, `coop-close --peer-dir` (atajo misma máquina), `arbiter-close --with am\|ac --arbiter-dir`.
+- UI de pruebas: `cargo build -p hbp-cli -p hbp-ui && cargo run -p hbp-ui` → http://127.0.0.1:3847 (localhost; llama a `hbp --yes`). Selector de red primero: Signet → `.ms`/`.cs`; regtest → `.m`/`.c`. Log a la derecha (`sticky`). No es el producto final.
+- Resto CLI: `new --dispute unwind\|mad\|arbiter`, `propose-arbiter`, `accept-arbiter`, `add-partida`, `offer`, `accept`, `commit`, `import`, `quote`, `accept-quote`, `addresses`, `status`, `verify-funding`, `watch-import`, `coins`, `offer-coin`, `fund` (`--mine`/`--peer` o flags viejos), `fund-combine`, `coop-propose` / `coop-sign` / `coop-finish`, `unwind`, `coop-close --peer-dir` (atajo misma máquina), `arbiter-close --with am\|ac --arbiter-dir`.
 - Identidad = **una** clave secp256k1 por punta. Lo que ve el otro es el **pubkey comprimido** (33 B hex) dentro de `00-offer.json`. No es un xpub HD. El secreto no se pega ni se manda.
-- `hbp fund`: PSBT sin firmar; salidas de escrow **exactas** (boleta + partida [+ MAD]); fee y change desde otros inputs. Dust &lt;546 se rechaza, no se pliega. stdout = PSBT en base64 para `bitcoin-cli walletprocesspsbt`. `--partida-only`: solo el mandante.
+- `hbp fund`: PSBT sin firmar; salidas de escrow **exactas** (boleta + partida [+ MAD]); fee y change desde otros inputs. Dust &lt;546 se rechaza, no se pliega. stdout = PSBT en base64. `--partida-only`: solo el mandante. Camino Blue: `--mine` / `--peer` (archivos `05-coin.json`). Flags `--m-outpoint` siguen para Core/scripts.
+- Watch-only **local**: `watch-import` (xpub/zpub/vpub o descriptor `wpkh`/`tr`) escribe `watch.json` (0600; se cifra si hay passphrase). `coins` pregunta a Esplora (default **blockstream.info**, fallback mempool.space; `--esplora` / `HBP_ESPLORA`). Gap 20+20. `offer-coin` emite un prevout. El peer **no** recibe el xpub. `fund-combine` junta las firmas y imprime hex. Blue/Electrum no firman MuSig2 ni el unwind.
 - MuSig2 por archivos: `04-coop.json` (pubnonces + parciales, no el seed). El seed queda en `NonceJournal.pending[sighash]`. `coop-close --peer-dir` sigue para el demo en una máquina.
 - `DisputePolicy::Arbiter { window_secs }` en el body; pubkey en `ArbiterNomination` (`03-arbiter.json`). Sin las dos firmas `hbp-arbiter` no hay addresses.
 - MAD: tercera salida `2 * mad_sats`; key path coop split; tras T solo `pk(NUMS)&&after(T)`.
@@ -82,20 +87,22 @@ Default on-chain sigue siendo **`unwind`**. MAD y árbitro están minados. Catá
 
 ### No listo / en pausa
 
-- **Fondeo para Blue Wallet (el usuario piensa):** el hex de una tx con boleta+P1 es difícil. Alternativa propuesta: dos envíos normales en orden (QR/BIP21: primero boleta, después partida) + `verify-funding` de la boleta sola. Relaja el fondeo atómico, **no** el árbol MuSig2. Sparrow/PSBT queda como avanzado. **No implementar hasta que decida.**
+- Signet **unhappy** (timeout partida, timeout boleta con plazo corto, cancel coop). El feliz ya está. Plazos de demo: **2–3 h** de CLTV, carpetas **nuevas** (no `.ms`/`.cs`).
+- GUI de **producto** (ejecutable nativo, no web): lista de obras con nombre, **una clave secp256k1 por obra**, import/export de archivos, tablero de partidas. Acordado; no empezar hasta los unhappy. `hbp-ui` localhost no es eso.
 - `hbp listen` / `connect`, Tor, DHT.
-- GUI de producto, Android, mainnet, boleta que rueda. BIP39 no hace falta (backup = hex 256 bits / 64 chars).
+- Android, mainnet, boleta que rueda. BIP39 no hace falta para `hbp` (backup = hex 256 bits / 64 chars). Electrum/Blue sí usan BIP39 para la hot wallet.
 - 6 ítems del catálogo humano: [SCENARIOS.md](SCENARIOS.md).
-- P2, unwind, MAD/árbitro **desde la UI**; clic en el browser (el feliz se corrió por `POST /api/hbp`, no por clics).
+- P2, unwind de boleta, MAD/árbitro **desde la UI de prueba**.
+- No se cedió atomicidad del fondeo P1: **no** hay camino de dos envíos sueltos a boleta+P1.
 
 ### Cómo seguir en la próxima sesión
 
-1. Leer esta sección 0, [DISPUTE.md](DISPUTE.md) y [SCENARIOS.md](SCENARIOS.md).
-2. Decisión de fondeo simple (dos transfers) vs hex atómico.
-3. Si dos transfers: `verify-funding --bond-only` + QRs en `hbp-ui`. Si no: Signet [SIGNET_TWO_PCS.md](SIGNET_TWO_PCS.md) con Sparrow.
-4. No abrir Tor ni DHT. No cambiar opción C.
+1. Leer esta sección 0, [SIGNET_HAPPY_PATH.md](SIGNET_HAPPY_PATH.md), [BLUE_FUNDING.md](BLUE_FUNDING.md).
+2. Signet unhappy con T ≈ ahora+2 h (partida) y T proyecto ≈ +3 h. Tres ensayos: unwind de partida (mandante recupera el pago, boleta intacta); unwind de boleta; cancel coop. Dirs nuevas.
+3. Recién después: ejecutable nativo (no web, no Electron). Una obra = un nombre en el offer + una identidad. Mandante con varios contratistas; contratista con varios mandantes.
+4. No abrir Tor ni DHT. No cambiar opción C. No mandar xpub al peer. No reusar `.ms`/`.cs` para plazos cortos.
 
-El usuario acordó: canal = archivos ahora; Tor p2p después; DHT solo si hay marketplace. MAD nunca a wallet del autor. Árbitro solo si ambos nombran a la misma persona antes de los UTXO. On-chain = **opción C** (MuSig2 + árbol; 142 intactos). Redeem = `hbp`, no Sparrow/Blue. Fondeo Blue Wallet: pendiente de pensar.
+El usuario acordó: canal = archivos ahora; Tor p2p después; DHT solo si hay marketplace. MAD nunca a wallet del autor. Árbitro solo si ambos nombran a la misma persona antes de los UTXO. On-chain = **opción C**. Redeem = `hbp`. Fondeo = PSBT 2-in; Electrum/Blue cofirman singlesig. xpub solo local. Identidad **por obra** en el GUI de producto (hoy el CLI es una clave por `--dir`).
 
 ---
 
@@ -381,8 +388,12 @@ hbp --dir <carpeta> <comando>
 | `accept-quote FILE` | la otra punta / reimport | quote locked |
 | `addresses` | ambos | boleta + partidas `bcrt1p`/`tb1p` |
 | `status` | ambos | JSON de estado |
+| `watch-import --xpub\|--descriptor` | cada laptop | watch-only **local** (Blue xpub). Nunca al peer |
+| `coins [--esplora]` | cada laptop | UTXOs vía Esplora (no habla con Blue) |
+| `offer-coin --outpoint` | cada laptop | `05-coin.json` shareable (un UTXO) |
 | `verify-funding --tx-hex --partida` | ambos | valida y marca funded |
-| `fund --m-outpoint … [--c-outpoint …]` | ambos (PSBT 2 wallets) | stdout PSBT base64; escrow exacto |
+| `fund --mine/--peer` o `--m-outpoint …` | ambos (PSBT 2 wallets) | stdout PSBT base64; escrow exacto |
+| `fund-combine FILE FILE` | cualquiera | junta firmas Blue; stdout hex para broadcast |
 | `coop-propose` / `coop-sign FILE` / `coop-finish FILE` | cada laptop | MuSig2 por `04-coop.json` |
 | `coop-close --kind --peer-dir …` | demo misma máquina | MuSig2 key-path (atajo) |
 | `arbiter-close --kind --with am\|ac --arbiter-dir` | A+M o A+C | script path tras T |
@@ -394,7 +405,7 @@ Claves en claro por defecto; `--passphrase` las cifra. Toy. No mainnet.
 
 ## 9. Tests actuales
 
-`cargo test --workspace`
+`cargo test --workspace` — 42 unitarios.
 
 **hbp-core** (17)
 
@@ -407,12 +418,13 @@ Claves en claro por defecto; `--passphrase` las cifra. Toy. No mainnet.
 - no se fondea partida sin boleta, ni la 2 si la 1 está abierta
 - happy path dos partidas + release de boleta; boleta se suelta si P2 nunca se fondeó
 
-**hbp-bitcoin** (19)
+**hbp-bitcoin** (25)
 
 - output key MuSig2+tweak = rust-bitcoin Taproot
 - unwind script-path; cierre cooperativo y split 80/20
 - funding con partida a 1 sat se rechaza
 - PSBT de fondeo: montos de escrow exactos; dust se rechaza; MAD 50/50; `--partida-only`
+- watch-only: vpub→tpub, gap scan, `05-coin.json` sin xpub, combine de dos PSBT parciales P2WPKH
 - identidad se restaura desde el secret hex
 - MuSig2 por archivos = mismo sig que el helper in-process
 - firmas de contrato, quote (`hbp-quote`) y nomination `hbp-arbiter` round-trip
@@ -446,11 +458,11 @@ Usar `/home/felipe/projects/btc_clients`.
 3. Test de integración: `bitcoin-cli` fondea, mina, `verify-funding`, unwind real minado, cooperative close minado. **Hecho** (catálogo + remainders; P1 usa `hbp fund`).
 4. `hbp watch` / recordatorio de T (el timeout no se broadcastea solo).
 5. Importar quote/estado sin pisar un proyecto ya avanzado.
-6. UI de pruebas (`hbp-ui`): hecha, fea a propósito. Fondeo “Sudán/Blue Wallet” no cerrado.
+6. UI de pruebas (`hbp-ui`): hecha, fea a propósito. Fondeo Blue = watch-only + PSBT atómico (paso 4, ambas puntas).
 
 ### Fase 2 — signet usable por dos humanos
 
-- Identidades: backup = secret hex (`identity --backup` / `init --secret`). No hay xpub/BIP39 del 2-de-2. Guía dos PCs: [SIGNET_TWO_PCS.md](SIGNET_TWO_PCS.md).
+- Identidades: backup = secret hex (`identity --backup` / `init --secret`). No hay xpub/BIP39 del 2-de-2. El xpub de Blue es **otra** capa, local. Guías: [BLUE_FUNDING.md](BLUE_FUNDING.md), [SIGNET_TWO_PCS.md](SIGNET_TWO_PCS.md).
 - Confirmaciones según monto (1 en signet, política en mainnet después).
 - Fee bump del unwind (RBF ya está en sequence; falta UX).
 - `extend-partida` / `renew` cooperativo si se va a pasar T.
@@ -494,18 +506,18 @@ Orden realista, cada ítem deja algo demoable.
 | 1 | CLI MuSig2 de recepción en archivos | `hbp-cli`, `hbp-bitcoin` | dos dirs cierran una partida sin bitcoind (tx hex firmada) |
 | 2 | PSBT de fondeo boleta+partida 1 | `hbp-bitcoin` | `hbp fund` imprime PSBT; `verify-funding` lo acepta |
 | 3 | Integración regtest con `btc_clients` | tests + scripts | **hecho** (escenarios 1–8, default unwind) |
-| 4 | Seed/backup y red signet | `hbp-cli` | dos máquinas, una partida de prueba |
+| 4 | Seed/backup y red signet | `hbp-cli` | **hecho** (feliz Signet minado, Electrum, [SIGNET_HAPPY_PATH.md](SIGNET_HAPPY_PATH.md)) |
 | 5 | `hbp listen` / `connect`, luego Tor p2p | crate network nuevo | mismos JSON, primero TCP, después onion conocido |
 | 6 | Árbitro / MAD opcionales | `hbp-bitcoin` taproot tree | **hecho** (E2E minado; catálogo 136 PASS) |
 | 7 | Desktop GUI / Android | TBD | no empezar hasta 4 |
 
-Criterio para no saltarse pasos: no hay DHT si el cooperative close no se minó en regtest. No hay GUI si el CLI de dos humanos en signet no cerró una partida.
+Criterio para no saltarse pasos: no hay DHT si el cooperative close no se minó en regtest. Feliz Signet **cerrado**. GUI nativo de producto: después de 2–3 unhappy en Signet (plazos de horas). No Electron / no web.
 
 Estimación grosera (una persona, no calendario de promesa):
 
 - Ítem 1–2: días
 - Ítem 3: **hecho** (unwind)
-- Ítem 4: 1–2 semanas (UX de keys y fees)
+- Ítem 4: **hecho** (Signet feliz; falta unhappy + GUI nativo)
 - Ítem 5: semanas
 - Ítem 6: **hecho** (minado)
 - Ítem 7: proyecto aparte

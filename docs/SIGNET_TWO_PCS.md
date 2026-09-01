@@ -1,5 +1,7 @@
 # Dos PCs en Signet (Sparrow + `hbp`)
 
+Si las dos puntas usan **Blue Wallet**, el fondeo atómico es watch-only local + PSBT: [BLUE_FUNDING.md](BLUE_FUNDING.md). Esta guía sigue siendo Sparrow.
+
 Signet **global** (la de Core, no un signet privado). No hace falta minar ni ASICs: los bloques los firman los operadores; los sats salen de un **faucet**.
 
 Hay **dos capas de claves**. No las mezcles.

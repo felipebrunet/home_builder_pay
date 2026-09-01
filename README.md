@@ -6,7 +6,7 @@ Peer-to-peer Bitcoin escrow for **work packages** plus a **performance bond**. T
 
 This is an MVP: desktop CLI, **regtest/signet**, files passed by hand. No Tor, no DHT. An optional arbiter exists as a Taproot leaf, jointly named by both parties before funding — not picked by the offeror in the listing.
 
-Full protocol, architecture, roadmap, and **where the last session left off**: [docs/PROJECT.md](docs/PROJECT.md) (start at section 0). That document is currently in Spanish. Two-PC Signet playbook (Sparrow + faucet): [docs/SIGNET_TWO_PCS.md](docs/SIGNET_TWO_PCS.md).
+Full protocol, architecture, roadmap, and **where the last session left off**: [docs/PROJECT.md](docs/PROJECT.md) (start at section 0). That document is currently in Spanish. Mined Signet happy path: [docs/SIGNET_HAPPY_PATH.md](docs/SIGNET_HAPPY_PATH.md). Two-PC Signet (Sparrow): [docs/SIGNET_TWO_PCS.md](docs/SIGNET_TWO_PCS.md). Watch-only + atomic PSBT (Blue/Electrum): [docs/BLUE_FUNDING.md](docs/BLUE_FUNDING.md).
 
 Current milestone: **MVP-0** plus mined catalog (**136 PASS / 6 human-only**). Dispute **policy** (unwind default; optional MAD / arbiter slot) is set by the offeror; the arbiter *person* is named later by both: [docs/DISPUTE.md](docs/DISPUTE.md). Catalog: [docs/SCENARIOS.md](docs/SCENARIOS.md). Run everything: `scripts/run_catalog.sh`. Unwind index: [docs/REGTEST_SCENARIOS.md](docs/REGTEST_SCENARIOS.md).
 
@@ -79,9 +79,16 @@ hbp --dir .m accept-quote .c/contracts/<id>/02-quote.json   # principal imports 
 hbp --dir .m addresses
 hbp --dir .c status
 
-# unsigned funding PSBT (escrow amounts exact; fee from change). Sign with Core:
+# Blue (both parties): local watch-only, then share one coin each — never the xpub
+hbp --dir .m watch-import --xpub vpub...          # YOUR Blue xpub; stays on this machine
+hbp --dir .m coins                                # Esplora (signet: blockstream, then mempool.space)
+hbp --dir .m offer-coin --outpoint TXID:VOUT      # writes 05-coin.json (send that file)
+hbp --dir .m fund --mine contracts/<id>/05-coin.json --peer 05-coin-from-peer.json
+# each Blue signs the .psbt (do not broadcast) →
+hbp --dir .m fund-combine mine-signed.psbt peer-signed.psbt   # hex; either side broadcasts
+
+# Core/Sparrow still works with explicit outpoints:
 #   bitcoin-cli -rpcwallet=hbp_mandante walletprocesspsbt <psbt>
-#   bitcoin-cli -rpcwallet=hbp_contratista walletprocesspsbt <psbt>
 hbp --dir .m fund --m-outpoint TXID:VOUT --m-sats N --m-prev ADDR --m-change ADDR \
   --c-outpoint TXID:VOUT --c-sats N --c-prev ADDR --c-change ADDR
 

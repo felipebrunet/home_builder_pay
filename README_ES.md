@@ -6,7 +6,7 @@ Custodia Bitcoin entre pares para **partidas de obra** más una **boleta de gara
 
 Esto es un MVP: CLI de escritorio, **regtest/signet**, archivos pasados a mano. Todavía no hay Tor ni DHT. El árbitro es opcional: una hoja Taproot que **ambos** nombran antes de fondear, no un amigo que el mandante pone en el aviso.
 
-Protocolo, arquitectura, hoja de ruta y **en qué quedó la última sesión**: [docs/PROJECT.md](docs/PROJECT.md) (empezar por la sección 0). Dos PCs en Signet (Sparrow + faucet): [docs/SIGNET_TWO_PCS.md](docs/SIGNET_TWO_PCS.md).
+Protocolo, arquitectura, hoja de ruta y **en qué quedó la última sesión**: [docs/PROJECT.md](docs/PROJECT.md) (empezar por la sección 0). Feliz minado en Signet: [docs/SIGNET_HAPPY_PATH.md](docs/SIGNET_HAPPY_PATH.md). Dos PCs (Sparrow): [docs/SIGNET_TWO_PCS.md](docs/SIGNET_TWO_PCS.md). Watch-only + PSBT atómico (Blue/Electrum): [docs/BLUE_FUNDING.md](docs/BLUE_FUNDING.md).
 
 Hito actual: **MVP-0** más catálogo minado (**136 PASS / 6 humano**). La **política** de disputa (default unwind; MAD / slot de árbitro) la propone el oferente; a la *persona* la nombran después los dos: [docs/DISPUTE.md](docs/DISPUTE.md). Catálogo: [docs/SCENARIOS.md](docs/SCENARIOS.md). Correr todo: `scripts/run_catalog.sh`. Unwind 1–8: [docs/REGTEST_SCENARIOS.md](docs/REGTEST_SCENARIOS.md).
 
@@ -77,7 +77,14 @@ hbp --dir .m accept-quote .c/contracts/<id>/02-quote.json   # el mandante import
 hbp --dir .m addresses
 hbp --dir .c status
 
-# PSBT de fondeo sin firmar (escrow exacto; fee desde el change). Firmar con Core:
+# Blue (las dos puntas): watch-only local, después se comparte UNA moneda — nunca el xpub
+hbp --dir .m watch-import --xpub vpub...
+hbp --dir .m coins
+hbp --dir .m offer-coin --outpoint TXID:VOUT
+hbp --dir .m fund --mine contracts/<id>/05-coin.json --peer 05-coin-del-otro.json
+hbp --dir .m fund-combine mio-firmado.psbt el-del-otro.psbt
+
+# Core/Sparrow sigue con outpoints explícitos:
 hbp --dir .m fund --m-outpoint TXID:VOUT --m-sats N --m-prev ADDR --m-change ADDR \
   --c-outpoint TXID:VOUT --c-sats N --c-prev ADDR --c-change ADDR
 
