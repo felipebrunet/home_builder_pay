@@ -8,8 +8,11 @@
 .hbp/
 .m/
 .c/
+.ms/
+.cs/
 **/identity.json
 **/nonces.json
+**/watch.json
 **/*.secnonce
 
 # Local contract working copies (not fixtures). Secrets live in identity.json;
@@ -22,8 +25,15 @@
 **/02-quote.json
 **/03-arbiter.json
 **/04-coop.json
+**/05-coin.json
+**/05-funding*
 **/state.json
 **/CURRENT
+
+# Live PSBTs / explorer junk — never commit a signed spend
+*.psbt
+*Zone.Identifier
+tx*.hex
 
 # Env / keys that must never be committed
 .env
