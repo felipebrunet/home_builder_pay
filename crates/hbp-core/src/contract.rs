@@ -58,7 +58,8 @@ impl std::str::FromStr for Role {
 pub struct PartidaSpec {
     pub id: u32,
     pub description: String,
-    /// Amount in 1/100 of [`ContractBody::unit`].
+    /// Amount in minor units of [`ContractBody::unit`].
+    /// Fiat / UF / BTC: 1/100 of the major unit. SATS: integer satoshis.
     pub amount_minor: u64,
     /// Absolute CLTV as Bitcoin-style locktime (unix if >= 500_000_000).
     pub plazo_unix: u32,
@@ -646,7 +647,11 @@ mod tests {
             contratista_pubkey: Some(pk(2)),
             dispute: DisputePolicy::fee_burn(1_700_000_000, 1_800_000_000),
         };
-        assert!(body.validate().unwrap_err().to_string().contains("t_project"));
+        assert!(body
+            .validate()
+            .unwrap_err()
+            .to_string()
+            .contains("t_project"));
         let mut ok = body.clone();
         ok.t_project = 1_800_000_000;
         ok.validate().unwrap();
@@ -677,5 +682,34 @@ mod tests {
         body.work_name = "Obra Norte".into();
         let id_named = contract_id(&body).unwrap();
         assert_ne!(id_empty, id_named);
+    }
+
+    #[test]
+    fn offer_roundtrips_extended_units() {
+        for unit in [Unit::Sats, Unit::Eur, Unit::Ars, Unit::Mxn, Unit::Brl] {
+            let offer = Offer {
+                body: ContractBody {
+                    network: Network::Signet,
+                    unit,
+                    work_name: "Casa".into(),
+                    bond_bps: 1000,
+                    t_project: 1_800_000_000,
+                    partidas: vec![PartidaSpec {
+                        id: 1,
+                        description: "Radier".into(),
+                        amount_minor: 100_000,
+                        plazo_unix: 1_700_000_000,
+                    }],
+                    mandante_pubkey: pk(1),
+                    contratista_pubkey: None,
+                    dispute: DisputePolicy::fee_burn(1_700_000_000, 1_800_000_000),
+                },
+                mandante_sig: "aa".into(),
+            };
+            let json = serde_json::to_string(&offer).unwrap();
+            assert!(json.contains(&format!("\"unit\":\"{unit}\"")));
+            let back: Offer = serde_json::from_str(&json).unwrap();
+            assert_eq!(back, offer);
+        }
     }
 }

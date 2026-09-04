@@ -22,8 +22,8 @@ use hbp_bitcoin::{
 };
 use hbp_core::{
     bond_minor, bond_warnings, equal_stage_count, fiat_minor_to_sats, minor_from_major,
-    suggest_equal_stage_minors, ArbiterNomination, ContractBody, DisputePolicy, Network, Offer,
-    PartidaQuote, PartidaSpec, Quote, Role, SignedContract, Unit, ARBITER_ENABLED,
+    parse_major_amount, suggest_equal_stage_minors, ArbiterNomination, ContractBody, DisputePolicy,
+    Network, Offer, PartidaQuote, PartidaSpec, Quote, Role, SignedContract, Unit, ARBITER_ENABLED,
     DEFAULT_ARBITER_WINDOW_SECS, DEFAULT_BOND_BPS,
 };
 
@@ -728,7 +728,11 @@ fn cmd_stage_plan(total: &str, bond_bps: u16) -> Result<()> {
     println!("bond_minor {bond}");
     println!("stages {n}");
     for (i, amt) in stages.iter().enumerate() {
-        println!("partida {} amount_minor {amt} equal_bond {}", i + 1, *amt == bond);
+        println!(
+            "partida {} amount_minor {amt} equal_bond {}",
+            i + 1,
+            *amt == bond
+        );
     }
     Ok(())
 }
@@ -773,7 +777,7 @@ fn cmd_add_partida(store: &Store, desc: String, amount: &str, plazo: u32) -> Res
     body.partidas.push(PartidaSpec {
         id,
         description: desc,
-        amount_minor: minor_from_major(amount)?,
+        amount_minor: parse_major_amount(amount, body.unit)?,
         plazo_unix: plazo,
     });
     if plazo > body.t_project {

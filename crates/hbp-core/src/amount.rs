@@ -1,25 +1,83 @@
 use serde::{Deserialize, Serialize};
 
-/// Smallest integer unit per major unit of the contract currency.
+/// Smallest integer unit per major unit of a two-decimal contract currency.
+///
+/// [`Unit::Sats`] is 1:1 (the major amount *is* the stored minor). Everything
+/// else uses this scale (cents / 1/100 BTC).
 pub const MINOR_PER_MAJOR: u64 = 100;
 
+/// Contract account unit. Serialized uppercase (`USD`, `SATS`, …).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "UPPERCASE")]
 pub enum Unit {
     Usd,
     Uf,
     Clp,
+    Eur,
+    Gbp,
+    Ars,
+    Mxn,
+    Brl,
+    Pen,
+    Cop,
+    Uyu,
     Btc,
+    Sats,
 }
 
 impl Unit {
+    /// Dropdown / parse catalog. USD first (product default).
+    pub const ALL: [Self; 13] = [
+        Self::Usd,
+        Self::Uf,
+        Self::Clp,
+        Self::Eur,
+        Self::Gbp,
+        Self::Ars,
+        Self::Mxn,
+        Self::Brl,
+        Self::Pen,
+        Self::Cop,
+        Self::Uyu,
+        Self::Btc,
+        Self::Sats,
+    ];
+
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Usd => "USD",
             Self::Uf => "UF",
             Self::Clp => "CLP",
+            Self::Eur => "EUR",
+            Self::Gbp => "GBP",
+            Self::Ars => "ARS",
+            Self::Mxn => "MXN",
+            Self::Brl => "BRL",
+            Self::Pen => "PEN",
+            Self::Cop => "COP",
+            Self::Uyu => "UYU",
             Self::Btc => "BTC",
+            Self::Sats => "SATS",
         }
+    }
+
+    /// BTC and SATS are already bitcoin denominations (no fiat FX to get sats).
+    pub fn is_bitcoin_denom(self) -> bool {
+        matches!(self, Self::Btc | Self::Sats)
+    }
+
+    /// How many stored `amount_minor` units make one typed major unit.
+    pub fn minor_per_major(self) -> u64 {
+        match self {
+            Self::Sats => 1,
+            _ => MINOR_PER_MAJOR,
+        }
+    }
+}
+
+impl std::fmt::Display for Unit {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
     }
 }
 
@@ -31,13 +89,42 @@ impl std::str::FromStr for Unit {
             "USD" => Ok(Self::Usd),
             "UF" => Ok(Self::Uf),
             "CLP" => Ok(Self::Clp),
+            "EUR" => Ok(Self::Eur),
+            "GBP" => Ok(Self::Gbp),
+            "ARS" => Ok(Self::Ars),
+            "MXN" => Ok(Self::Mxn),
+            "BRL" => Ok(Self::Brl),
+            "PEN" => Ok(Self::Pen),
+            "COP" => Ok(Self::Cop),
+            "UYU" => Ok(Self::Uyu),
             "BTC" => Ok(Self::Btc),
+            "SAT" | "SATS" => Ok(Self::Sats),
             other => Err(crate::Error::protocol(format!("unknown unit {other}"))),
         }
     }
 }
 
+/// Parse a major amount in the two-decimal (1/100) scale. Fiat / UF / BTC.
 pub fn minor_from_major(major: &str) -> crate::Result<u64> {
+    parse_major_scaled(major, MINOR_PER_MAJOR)
+}
+
+/// Parse a typed major amount in `unit` (SATS are integers; others two decimals).
+pub fn parse_major_amount(major: &str, unit: Unit) -> crate::Result<u64> {
+    parse_major_scaled(major, unit.minor_per_major())
+}
+
+/// Format stored minor units for the given contract unit.
+pub fn format_major_amount(minor: u64, unit: Unit) -> String {
+    let scale = unit.minor_per_major();
+    if scale == 1 {
+        minor.to_string()
+    } else {
+        format!("{:.2}", minor as f64 / scale as f64)
+    }
+}
+
+fn parse_major_scaled(major: &str, scale: u64) -> crate::Result<u64> {
     let major = major.trim().replace('_', "");
     if major.is_empty() {
         return Err(crate::Error::protocol("empty amount"));
@@ -46,7 +133,24 @@ pub fn minor_from_major(major: &str) -> crate::Result<u64> {
         Some((w, f)) => (w, f),
         None => (major.as_str(), ""),
     };
-    if frac.len() > 2 {
+    let max_frac = match scale {
+        1 => 0,
+        MINOR_PER_MAJOR => 2,
+        _ => {
+            return Err(crate::Error::protocol("unsupported amount scale"));
+        }
+    };
+    if scale == 1 {
+        if !frac.is_empty() && frac.chars().any(|c| c != '0') {
+            return Err(crate::Error::protocol(
+                "SATS are whole satoshis (no fractional part)",
+            ));
+        }
+        return whole
+            .parse()
+            .map_err(|_| crate::Error::protocol("invalid amount"));
+    }
+    if frac.len() > max_frac {
         return Err(crate::Error::protocol(
             "at most two decimal places (stored as 1/100 of the unit)",
         ));
@@ -55,7 +159,7 @@ pub fn minor_from_major(major: &str) -> crate::Result<u64> {
         .parse()
         .map_err(|_| crate::Error::protocol("invalid amount"))?;
     let mut frac_pad = frac.to_string();
-    while frac_pad.len() < 2 {
+    while frac_pad.len() < max_frac {
         frac_pad.push('0');
     }
     let frac: u64 = if frac_pad.is_empty() {
@@ -66,7 +170,7 @@ pub fn minor_from_major(major: &str) -> crate::Result<u64> {
             .map_err(|_| crate::Error::protocol("invalid amount"))?
     };
     whole
-        .checked_mul(MINOR_PER_MAJOR)
+        .checked_mul(scale)
         .and_then(|w| w.checked_add(frac))
         .ok_or_else(|| crate::Error::protocol("amount overflow"))
 }
@@ -178,6 +282,28 @@ mod tests {
         assert_eq!(minor_from_major("1500").unwrap(), 150_000);
         assert_eq!(minor_from_major("1500.5").unwrap(), 150_050);
         assert_eq!(minor_from_major("1500.50").unwrap(), 150_050);
+        assert_eq!(parse_major_amount("1500", Unit::Usd).unwrap(), 150_000);
+        assert_eq!(parse_major_amount("100000", Unit::Sats).unwrap(), 100_000);
+        assert_eq!(parse_major_amount("100.0", Unit::Sats).unwrap(), 100);
+        assert!(parse_major_amount("1.5", Unit::Sats).is_err());
+        assert_eq!(format_major_amount(150_000, Unit::Clp), "1500.00");
+        assert_eq!(format_major_amount(100_000, Unit::Sats), "100000");
+    }
+
+    #[test]
+    fn unit_parse_display_serde_roundtrip() {
+        for u in Unit::ALL {
+            assert_eq!(u.to_string(), u.as_str());
+            assert_eq!(u.as_str().parse::<Unit>().unwrap(), u);
+            let json = serde_json::to_string(&u).unwrap();
+            assert_eq!(json, format!("\"{}\"", u.as_str()));
+            assert_eq!(serde_json::from_str::<Unit>(&json).unwrap(), u);
+        }
+        assert_eq!("sat".parse::<Unit>().unwrap(), Unit::Sats);
+        assert!("XYZ".parse::<Unit>().is_err());
+        assert!(!Unit::Usd.is_bitcoin_denom());
+        assert!(Unit::Sats.is_bitcoin_denom());
+        assert!(Unit::Btc.is_bitcoin_denom());
     }
 
     #[test]

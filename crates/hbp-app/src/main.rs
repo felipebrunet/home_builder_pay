@@ -11,8 +11,8 @@ use hbp_app::{
 };
 use hbp_bitcoin::{sign_body, verify_body};
 use hbp_core::{
-    bond_minor, minor_from_major, Offer, Role, SignedContract, Unit, DEFAULT_BOND_BPS,
-    PRODUCT_NETWORK,
+    bond_minor, format_major_amount, parse_major_amount, Offer, Role, SignedContract, Unit,
+    DEFAULT_BOND_BPS, PRODUCT_NETWORK,
 };
 use hbp_net::{
     bring_up_tor_with_hint, parse_bootstrap_list, OverlayConfig, OverlayHandle, PeerAddr,
@@ -205,7 +205,7 @@ impl eframe::App for App {
                         self.t1 = DeadlineFields::from_unix(t1);
                         self.t2 = DeadlineFields::from_unix(t2);
                     }
-                    self.total_major = format!("{:.2}", draft.total_minor() as f64 / 100.0);
+                    self.total_major = format_major_amount(draft.total_minor(), draft.unit);
                     self.unit = draft.unit;
                 }
             }
@@ -271,11 +271,7 @@ impl eframe::App for App {
                     220.0,
                 );
                 ui.label("Tu rol");
-                ui.radio_value(
-                    &mut self.new_role,
-                    Role::Mandante,
-                    "Mandante (quien paga)",
-                );
+                ui.radio_value(&mut self.new_role, Role::Mandante, "Mandante (quien paga)");
                 ui.radio_value(
                     &mut self.new_role,
                     Role::Contratista,
@@ -310,16 +306,18 @@ impl eframe::App for App {
             .default_height(120.0)
             .show(ctx, |ui| {
                 ui.label(RichText::new("Notas").strong());
-                egui::ScrollArea::vertical().stick_to_bottom(true).show(ui, |ui| {
-                    show_multiline(
-                        ui,
-                        &mut self.log,
-                        "",
-                        self.prefs.dark,
-                        ui.available_width(),
-                        4,
-                    );
-                });
+                egui::ScrollArea::vertical()
+                    .stick_to_bottom(true)
+                    .show(ui, |ui| {
+                        show_multiline(
+                            ui,
+                            &mut self.log,
+                            "",
+                            self.prefs.dark,
+                            ui.available_width(),
+                            4,
+                        );
+                    });
                 if !self.last_error.is_empty() {
                     ui.colored_label(Color32::from_rgb(220, 80, 80), &self.last_error);
                 }
@@ -395,27 +393,20 @@ impl App {
                     egui::ComboBox::from_id_salt("contract-unit")
                         .selected_text(self.unit.as_str())
                         .show_ui(ui, |ui| {
-                            for u in [Unit::Usd, Unit::Uf, Unit::Clp, Unit::Btc] {
+                            for u in Unit::ALL {
                                 ui.selectable_value(&mut self.unit, u, u.as_str());
                             }
                         });
                 });
-                ui.label(
-                    RichText::new(
-                        "Moneda del contrato. Los sats se fijan después, al cotizar/fondear con un precio de BTC. Elegir USD no arma el PSBT.",
-                    )
-                    .small()
-                    .weak(),
-                );
-                if let Ok(total) = minor_from_major(&self.total_major) {
+                ui.label(RichText::new(unit_helper(self.unit)).small().weak());
+                if let Ok(total) = parse_major_amount(&self.total_major, self.unit) {
                     if let Ok(bond) = bond_minor(total, DEFAULT_BOND_BPS) {
                         let n = hbp_core::equal_stage_count(DEFAULT_BOND_BPS).unwrap_or(0);
+                        let bond_txt = format_major_amount(bond, self.unit);
                         ui.label(
                             RichText::new(format!(
-                                "Boleta 10% = {:.2} {}. Serán {n} partidas de {:.2} (cada una = la boleta).",
-                                bond as f64 / 100.0,
-                                self.unit.as_str(),
-                                bond as f64 / 100.0
+                                "Boleta 10% = {bond_txt} {}. Serán {n} partidas de {bond_txt} (cada una = la boleta).",
+                                self.unit
                             ))
                             .weak(),
                         );
@@ -493,9 +484,10 @@ impl App {
                 ui.label(format!("Segundo plazo: {}", format_unix_local_es(t2)));
             }
             ui.label(format!(
-                "Total {:.2} · boleta {:.2} (10%)",
-                draft.total_minor() as f64 / 100.0,
-                bond as f64 / 100.0
+                "Total {} {} · boleta {} (10%)",
+                format_major_amount(draft.total_minor(), draft.unit),
+                draft.unit,
+                format_major_amount(bond, draft.unit)
             ));
             egui::Grid::new("stages").striped(true).show(ui, |ui| {
                 ui.strong("#");
@@ -507,7 +499,7 @@ impl App {
                 for p in &draft.partidas {
                     ui.label(p.id.to_string());
                     ui.label(&p.description);
-                    ui.label(format!("{:.2}", p.amount_minor as f64 / 100.0));
+                    ui.label(format_major_amount(p.amount_minor, draft.unit));
                     ui.label(if p.amount_minor == bond { "sí" } else { "NO" });
                     ui.label(format_unix_local_es(p.plazo_unix));
                     ui.end_row();
@@ -546,7 +538,13 @@ impl App {
         ui.collapsing("Avanzado", |ui| {
             ui.label("Código / onion de la otra persona (para encontrarse)");
             ui.horizontal(|ui| {
-                show_field(ui, &mut self.bootstrap, "xxxx.onion", self.prefs.dark, 360.0);
+                show_field(
+                    ui,
+                    &mut self.bootstrap,
+                    "xxxx.onion",
+                    self.prefs.dark,
+                    360.0,
+                );
                 let net_up = self.overlay.is_some();
                 if ui
                     .add_enabled(net_up, egui::Button::new("Usar este código"))
@@ -556,11 +554,7 @@ impl App {
                 }
             });
             if self.overlay.is_none() {
-                ui.label(
-                    RichText::new("Primero pulsa Conectar red.")
-                        .small()
-                        .weak(),
-                );
+                ui.label(RichText::new("Primero pulsa Conectar red.").small().weak());
             }
             ui.horizontal(|ui| {
                 ui.label("Tu código");
@@ -574,12 +568,21 @@ impl App {
             });
             ui.horizontal(|ui| {
                 if ui
-                    .add_enabled(self.overlay.is_some(), egui::Button::new("Anunciar esta obra"))
+                    .add_enabled(
+                        self.overlay.is_some(),
+                        egui::Button::new("Anunciar esta obra"),
+                    )
                     .clicked()
                 {
                     self.announce_work(entry);
                 }
-                show_field(ui, &mut self.lookup_name, "nombre de obra", self.prefs.dark, 160.0);
+                show_field(
+                    ui,
+                    &mut self.lookup_name,
+                    "nombre de obra",
+                    self.prefs.dark,
+                    160.0,
+                );
                 if ui
                     .add_enabled(self.overlay.is_some(), egui::Button::new("Buscar"))
                     .clicked()
@@ -635,7 +638,9 @@ impl App {
 
     fn show_backup(&mut self, ui: &mut egui::Ui, slug: &str) {
         ui.collapsing("Respaldo", |ui| {
-            ui.label("Copia de seguridad de esta obra (llave en hexadecimal, no es una frase BIP39).");
+            ui.label(
+                "Copia de seguridad de esta obra (llave en hexadecimal, no es una frase BIP39).",
+            );
             show_field(
                 ui,
                 &mut self.backup_path,
@@ -653,7 +658,9 @@ impl App {
                                 std::path::PathBuf::from(self.backup_path.trim())
                             };
                             match write_backup_file(&path, &b) {
-                                Ok(()) => self.note(format!("Respaldo guardado en {}", path.display())),
+                                Ok(()) => {
+                                    self.note(format!("Respaldo guardado en {}", path.display()))
+                                }
                                 Err(e) => self.fail(e),
                             }
                         }
@@ -665,7 +672,8 @@ impl App {
                         self.fail("Indica la ruta del respaldo");
                     } else {
                         let path = std::path::PathBuf::from(self.backup_path.trim());
-                        match read_backup_file(&path).and_then(|b| import_backup(&mut self.store, &b))
+                        match read_backup_file(&path)
+                            .and_then(|b| import_backup(&mut self.store, &b))
                         {
                             Ok(e) => {
                                 self.note(format!("Obra importada: {}", e.name));
@@ -680,9 +688,15 @@ impl App {
     }
 
     fn build_draft(&mut self, slug: &str, id: &hbp_bitcoin::Identity, entry: &WorkEntry) {
-        let total = match minor_from_major(&self.total_major) {
+        let total = match parse_major_amount(&self.total_major, self.unit) {
             Ok(v) => v,
-            Err(_) => return self.fail("El total tiene que ser un número (ej. 100 o 100.50)"),
+            Err(_) => {
+                return self.fail(if self.unit == Unit::Sats {
+                    "El total en SATS tiene que ser un entero (ej. 100000)"
+                } else {
+                    "El total tiene que ser un número (ej. 100 o 100.50)"
+                })
+            }
         };
         let t1 = match self.t1.to_unix() {
             Ok(v) => v,
@@ -705,9 +719,13 @@ impl App {
         match draft_equal_stages(id, &entry.name, unit, total, t1, t2, &descs) {
             Ok(body) => match self.store.save_draft(slug, &body) {
                 Ok(()) => self.note(format!(
-                    "Partidas listas: {} de {:.2} (cada una = la boleta)",
+                    "Partidas listas: {} de {} {} (cada una = la boleta)",
                     body.partidas.len(),
-                    body.partidas.first().map(|p| p.amount_minor as f64 / 100.0).unwrap_or(0.0)
+                    body.partidas
+                        .first()
+                        .map(|p| format_major_amount(p.amount_minor, body.unit))
+                        .unwrap_or_else(|| "0".into()),
+                    body.unit
                 )),
                 Err(e) => self.fail(e),
             },
@@ -749,7 +767,10 @@ impl App {
         };
         if let Some(found) = hbp_net::discover_socks() {
             o.set_socks(Some(found.addr));
-        } else if let Ok(addr) = TorConfig::from_env().socks().parse::<std::net::SocketAddr>() {
+        } else if let Ok(addr) = TorConfig::from_env()
+            .socks()
+            .parse::<std::net::SocketAddr>()
+        {
             o.set_socks(Some(addr));
         }
         let onion = self.onion.trim();
@@ -1059,6 +1080,20 @@ fn field_single<'a>(value: &'a mut String, hint: &str, dark: bool) -> egui::Text
         .hint_text(hint.to_owned())
         .text_color(edit_fg(dark))
         .frame(false)
+}
+
+fn unit_helper(unit: Unit) -> &'static str {
+    match unit {
+        Unit::Sats => {
+            "El monto ya está en SATS (satoshis). No se convierte con un precio de BTC. El fondeo/PSBT se arma después; elegir SATS no lo crea."
+        }
+        Unit::Btc => {
+            "El monto ya está en BTC. Los sats on-chain salen de ese monto, no de un tipo de cambio fiat. El fondeo/PSBT se arma después; elegir BTC no lo crea."
+        }
+        _ => {
+            "Moneda del contrato (unidad de cuenta). Los sats on-chain se fijan después, al cotizar/fondear con un precio de BTC. Elegir una moneda no arma el PSBT."
+        }
+    }
 }
 
 fn show_field(

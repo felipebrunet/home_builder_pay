@@ -4,8 +4,8 @@ use std::path::{Path, PathBuf};
 use anyhow::{bail, Context, Result};
 use hbp_bitcoin::Identity;
 use hbp_core::{
-    bond_minor, suggest_equal_stage_minors, ContractBody, DisputePolicy, Network, Offer, PartidaSpec,
-    Role, Unit, DEFAULT_BOND_BPS, PRODUCT_NETWORK,
+    bond_minor, suggest_equal_stage_minors, ContractBody, DisputePolicy, Network, Offer,
+    PartidaSpec, Role, Unit, DEFAULT_BOND_BPS, PRODUCT_NETWORK,
 };
 use serde::{Deserialize, Serialize};
 
@@ -59,7 +59,9 @@ pub fn default_works_root() -> PathBuf {
     let home = std::env::var("USERPROFILE")
         .or_else(|_| std::env::var("HOME"))
         .unwrap_or_else(|_| ".".into());
-    PathBuf::from(home).join("Documents").join("home_builder_pay")
+    PathBuf::from(home)
+        .join("Documents")
+        .join("home_builder_pay")
 }
 
 pub fn slugify(name: &str) -> String {
@@ -154,7 +156,10 @@ impl WorkStore {
             hbp_bitcoin::generate_identity(network)?
         };
         id.role = Some(role);
-        fs::write(dir.join("identity.json"), serde_json::to_string_pretty(&id)?)?;
+        fs::write(
+            dir.join("identity.json"),
+            serde_json::to_string_pretty(&id)?,
+        )?;
         let entry = WorkEntry {
             name: name.to_string(),
             slug,
@@ -265,7 +270,11 @@ pub fn draft_equal_stages(
     if !hbp_core::stages_equal_bond(
         body.total_minor(),
         bond_bps,
-        &body.partidas.iter().map(|p| p.amount_minor).collect::<Vec<_>>(),
+        &body
+            .partidas
+            .iter()
+            .map(|p| p.amount_minor)
+            .collect::<Vec<_>>(),
     ) {
         bail!(
             "could not split total so each stage equals bond {bond}; pick a total that is N × (total × 10%)"
@@ -299,7 +308,10 @@ pub fn import_backup(store: &mut WorkStore, backup: &WorkBackup) -> Result<WorkE
         bail!("mainnet backups are not accepted");
     }
     if backup.entry.network != PRODUCT_NETWORK || backup.identity.network != PRODUCT_NETWORK {
-        bail!("product GUI is Signet-only (got {:?})", backup.entry.network);
+        bail!(
+            "product GUI is Signet-only (got {:?})",
+            backup.entry.network
+        );
     }
     let slug = backup.entry.slug.clone();
     if store.index.works.iter().any(|w| w.slug == slug) {
@@ -351,9 +363,37 @@ mod tests {
         .unwrap();
         assert_eq!(body.partidas.len(), 10);
         assert!(body.partidas.iter().all(|p| p.amount_minor == 100_000));
-        assert_eq!(bond_minor(body.total_minor(), body.bond_bps).unwrap(), 100_000);
+        assert_eq!(
+            bond_minor(body.total_minor(), body.bond_bps).unwrap(),
+            100_000
+        );
         assert!(matches!(body.dispute, DisputePolicy::FeeBurn { .. }));
         assert!(!hbp_core::ARBITER_ENABLED);
+    }
+
+    #[test]
+    fn sats_draft_stores_integer_satoshis() {
+        let mut id = hbp_bitcoin::generate_identity(Network::Regtest).unwrap();
+        id.role = Some(Role::Mandante);
+        let total = hbp_core::parse_major_amount("100000", Unit::Sats).unwrap();
+        let body = draft_equal_stages(
+            &id,
+            "Casa",
+            Unit::Sats,
+            total,
+            1_700_000_000,
+            1_800_000_000,
+            &[],
+        )
+        .unwrap();
+        assert_eq!(body.unit, Unit::Sats);
+        assert_eq!(body.total_minor(), 100_000);
+        assert!(body.partidas.iter().all(|p| p.amount_minor == 10_000));
+        let json = serde_json::to_string(&body).unwrap();
+        assert!(json.contains("\"unit\":\"SATS\""));
+        let back: ContractBody = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.unit, Unit::Sats);
+        assert_eq!(back.total_minor(), 100_000);
     }
 
     #[test]

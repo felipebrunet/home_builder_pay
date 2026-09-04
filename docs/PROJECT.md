@@ -145,7 +145,7 @@ Copiar Bisq 2-de-2 con quema simétrica no sirve: los montos son asimétricos (2
 |---|---|---|
 | 1 | Disputa | Default de producto **fee-burn t1/t2** (50%+50% a miners). Coop MuSig2 si hay acuerdo. Unwind / MAD / árbitro = legacy. Árbitro **off** en la UI. Ver [DISPUTE.md](DISPUTE.md), [FEE_BURN.md](FEE_BURN.md). |
 | 2 | Boleta | **Una, global**, `bond_bps = 1000` (10% del total). Se fondea una vez. **Una partida viva a la vez.** GUI: cada partida = boleta. |
-| 3 | Moneda | Contrato en USD / UF / CLP. Los sats se fijan **al quotear/fondear**. |
+| 3 | Moneda | Contrato en USD / UF / CLP / EUR / GBP / ARS / MXN / BRL / PEN / COP / UYU / BTC / SATS. Fiat: los sats se fijan **al quotear/fondear**. BTC/SATS: el monto ya está en esa unidad. |
 | 4 | Red | **Sin servidor propio, siempre.** Windows v1: **Tor p2p** + **DHT Kademlia TCP**. Producto: **Signet only**. Archivos = fallback. |
 | 5 | Lenguaje | **100% Rust** |
 | 6 | On-chain (opción C) | Se **conserva** Taproot + MuSig2 key-path + hojas (`after(T)`, MAD NUMS, árbitro A&&M/A&&C). Catálogo 142 no transable. No se recorta a 2-de-2 `wsh`/Electrum para ganar Sparrow/Blue en el redeem. Fondeo: hot wallet externa (Sparrow/Blue/Core). Redeem: firmante que hable MuSig2 (hoy `hbp`; después Core/Ledger/Nunchuk si calzan). |
