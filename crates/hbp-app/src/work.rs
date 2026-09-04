@@ -31,6 +31,22 @@ pub struct WorkBackup {
     pub offer: Option<Offer>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UiPrefs {
+    #[serde(default = "default_dark")]
+    pub dark: bool,
+}
+
+fn default_dark() -> bool {
+    true
+}
+
+impl Default for UiPrefs {
+    fn default() -> Self {
+        Self { dark: true }
+    }
+}
+
 pub struct WorkStore {
     pub root: PathBuf,
     pub index: WorkIndex,
@@ -88,6 +104,27 @@ impl WorkStore {
 
     pub fn work_dir(&self, slug: &str) -> PathBuf {
         self.root.join(slug)
+    }
+
+    pub fn prefs_path(&self) -> PathBuf {
+        self.root.join("ui.json")
+    }
+
+    pub fn load_prefs(&self) -> UiPrefs {
+        let p = self.prefs_path();
+        if !p.exists() {
+            return UiPrefs::default();
+        }
+        fs::read_to_string(&p)
+            .ok()
+            .and_then(|s| serde_json::from_str(&s).ok())
+            .unwrap_or_default()
+    }
+
+    pub fn save_prefs(&self, prefs: &UiPrefs) -> Result<()> {
+        fs::create_dir_all(&self.root)?;
+        fs::write(self.prefs_path(), serde_json::to_string_pretty(prefs)?)?;
+        Ok(())
     }
 
     pub fn create_work(
@@ -389,6 +426,17 @@ mod tests {
             other.load_identity(&entry.slug).unwrap().public_key,
             id.public_key
         );
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn ui_prefs_roundtrip() {
+        let tmp = std::env::temp_dir().join(format!("hbp-app-prefs-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&tmp);
+        let store = WorkStore::open(tmp.join("a")).unwrap();
+        assert!(store.load_prefs().dark);
+        store.save_prefs(&UiPrefs { dark: false }).unwrap();
+        assert!(!store.load_prefs().dark);
         let _ = fs::remove_dir_all(&tmp);
     }
 }

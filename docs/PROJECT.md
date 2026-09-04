@@ -6,7 +6,7 @@ Este archivo es la fuente de verdad de producto, protocolo, arquitectura, roadma
 
 **Si retomas en una sesión nueva: lee la sección 0 y el checklist de “listo / no listo”. El código en `crates/` es la implementación de MVP-0.**
 
-Última actualización: 2026-09-04 (Signet-only GUI + Tor + TCP Kademlia DHT).
+Última actualización: 2026-09-04 (GUI: fechas locales, un botón Tor+DHT, 9150 Tor Browser, tema).
 
 ---
 
@@ -63,6 +63,7 @@ Checkpoint de sesión. Actualizar **esta sección** cada vez que se cierre un hi
 | 2026-09-01 | **Signet feliz minado**: fondeo 2-in, recepción P1 (4 800 al contratista), boleta 1 000 sigue locked. Unwind boleta prefirmado, locktime 2026-09-22. | [SIGNET_HAPPY_PATH.md](SIGNET_HAPPY_PATH.md) |
 | 2026-09-04 | **Fee-burn t1/t2** + GUI nativa + Tor SOCKS + DHT **local** (primer PR). | [FEE_BURN.md](FEE_BURN.md) |
 | 2026-09-04 | GUI **Signet-only**. DHT **Kademlia TCP** (2/3 nodos localhost). Tor spawn/`ADD_ONION` + torrc Windows. Sin bootstrap público; e2e Tor vivo no corrido en esta VM. | [NETWORK.md](NETWORK.md), [WINDOWS.md](WINDOWS.md) |
+| 2026-09-04 | UX: plazos en fecha/hora local (no unix). Un botón **Conectar red**. SOCKS 9050 **y** 9150 (Tor Browser). Tema claro/oscuro. Contraste de campos. Flujo obra vs técnico. | `hbp-app`, [WINDOWS.md](WINDOWS.md) |
 
 Default de **producto** = **`fee_burn`**. JSON viejo sin campo `dispute` sigue siendo `unwind` (catálogo). MAD y árbitro minados como legacy. Catálogo: **136 PASS**, **6 NO TEST** (humano). **0 FAIL**.
 

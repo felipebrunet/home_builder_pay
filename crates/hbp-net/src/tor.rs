@@ -5,8 +5,9 @@
 //! 1. Ship or document the **Tor Expert Bundle** (`tor.exe` + `geoip`).
 //!    The GUI looks next to `home_builder_pay.exe`, then
 //!    `%LOCALAPPDATA%\Tor\tor.exe`, then `TOR_BINARY`.
-//! 2. The process talks **only** through SOCKS5 (`127.0.0.1:9050` by default,
-//!    override `HBP_TOR_SOCKS` / [`TorConfig::socks`]).
+//! 2. The process talks **only** through SOCKS5. It probes **9050** (Expert
+//!    Bundle / system Tor) and **9150** (Tor Browser). Override with
+//!    `HBP_TOR_SOCKS` / [`TorConfig::socks`].
 //! 3. Each work may publish a `.onion` hostname *in the offer / announce*
 //!    (already-known contact). This crate connects to that onion via SOCKS;
 //!    it does not yet spawn `HiddenServiceDir` for you.
@@ -78,6 +79,66 @@ pub fn default_socks_addr() -> SocketAddr {
     "127.0.0.1:9050".parse().expect("static")
 }
 
+/// Expert Bundle (9050) then Tor Browser (9150).
+pub const SOCKS_CANDIDATE_PORTS: &[u16] = &[9050, 9150];
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DiscoveredSocks {
+    pub addr: SocketAddr,
+    /// Short English label for logs (`Tor`, `Tor Browser`).
+    pub label: &'static str,
+}
+
+pub fn socks_label(port: u16) -> &'static str {
+    match port {
+        9150 => "Tor Browser",
+        _ => "Tor",
+    }
+}
+
+pub fn probe_socks_port(host: &str, port: u16) -> bool {
+    let Ok(addr) = format!("{host}:{port}").parse::<SocketAddr>() else {
+        return false;
+    };
+    TcpStream::connect_timeout(&addr, Duration::from_millis(400)).is_ok()
+}
+
+/// First reachable SOCKS: explicit env, then 9050, then 9150 (Tor Browser).
+pub fn discover_socks() -> Option<DiscoveredSocks> {
+    let mut cands: Vec<(SocketAddr, &'static str)> = Vec::new();
+    if let Ok(s) = std::env::var("HBP_TOR_SOCKS") {
+        if let Ok(addr) = s.parse::<SocketAddr>() {
+            cands.push((addr, socks_label(addr.port())));
+        } else if let Some(addr) = s.to_socket_addrs().ok().and_then(|mut it| it.next()) {
+            cands.push((addr, socks_label(addr.port())));
+        }
+    }
+    for port in SOCKS_CANDIDATE_PORTS {
+        let addr = SocketAddr::from(([127, 0, 0, 1], *port));
+        if !cands.iter().any(|(a, _)| a == &addr) {
+            cands.push((addr, socks_label(*port)));
+        }
+    }
+    for (addr, label) in cands {
+        if probe_socks_port(&addr.ip().to_string(), addr.port()) {
+            return Some(DiscoveredSocks { addr, label });
+        }
+    }
+    None
+}
+
+fn control_ports_for(socks_port: u16) -> Vec<u16> {
+    if let Ok(s) = std::env::var("HBP_TOR_CONTROL") {
+        if let Ok(p) = s.parse() {
+            return vec![p];
+        }
+    }
+    match socks_port {
+        9150 => vec![9151, 9051],
+        _ => vec![9051, 9151],
+    }
+}
+
 /// Places a Windows build should look for a local `tor.exe`.
 pub fn default_windows_tor_paths() -> Vec<PathBuf> {
     let mut out = Vec::new();
@@ -91,7 +152,27 @@ pub fn default_windows_tor_paths() -> Vec<PathBuf> {
         out.push(PathBuf::from(bin));
     }
     if let Ok(local) = std::env::var("LOCALAPPDATA") {
-        out.push(PathBuf::from(local).join("Tor").join("tor.exe"));
+        let local = PathBuf::from(local);
+        out.push(local.join("Tor").join("tor.exe"));
+        out.push(
+            local
+                .join("Tor Browser")
+                .join("Browser")
+                .join("TorBrowser")
+                .join("Tor")
+                .join("tor.exe"),
+        );
+    }
+    for home_key in ["USERPROFILE", "HOME"] {
+        if let Ok(home) = std::env::var(home_key) {
+            let home = PathBuf::from(home);
+            for rel in [
+                "Desktop/Tor Browser/Browser/TorBrowser/Tor/tor.exe",
+                "OneDrive/Desktop/Tor Browser/Browser/TorBrowser/Tor/tor.exe",
+            ] {
+                out.push(home.join(rel));
+            }
+        }
     }
     out
 }
@@ -219,6 +300,14 @@ mod tests {
     }
 
     #[test]
+    fn socks_candidates_include_tor_browser() {
+        assert!(SOCKS_CANDIDATE_PORTS.contains(&9050));
+        assert!(SOCKS_CANDIDATE_PORTS.contains(&9150));
+        assert_eq!(socks_label(9150), "Tor Browser");
+        assert!(!probe_socks_port("127.0.0.1", 1));
+    }
+
+    #[test]
     fn writes_windows_style_torrc_with_hidden_service() {
         let dir = std::env::temp_dir().join(format!("hbp-torrc-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
@@ -314,6 +403,8 @@ pub struct TorRuntime {
     pub onion: Option<String>,
     pub socks: SocketAddr,
     pub detail: String,
+    /// One-line Spanish status for the product GUI (no env-var jargon).
+    pub hint_es: String,
 }
 
 impl Drop for TorRuntime {
@@ -326,53 +417,66 @@ impl Drop for TorRuntime {
 
 /// Bring up Tor for the product DHT listen port.
 ///
-/// 1. If `tor`/`tor.exe` is found, spawn it with a dedicated `torrc`
+/// 1. Attach if SOCKS is already up on **9050** (Expert Bundle) or **9150**
+///    (Tor Browser). Try `ADD_ONION` on the matching control port.
+/// 2. Else spawn `tor`/`tor.exe` with a dedicated `torrc`
 ///    (`HiddenServicePort 80 → 127.0.0.1:app_port`) and wait for `hostname`.
-/// 2. Else if SOCKS is already up, try the control port `ADD_ONION`.
-/// 3. Else return a runtime with `onion = None` and an honest error detail.
+/// 3. Else return a runtime with `onion = None` and an honest hint.
 pub fn bring_up_tor(root: &Path, app_port: u16) -> crate::Result<TorRuntime> {
-    let cfg = TorConfig::from_env();
-    let socks: SocketAddr = cfg
-        .socks()
-        .to_socket_addrs()?
-        .next()
-        .ok_or_else(|| crate::Error::msg("socks did not resolve"))?;
-    let control_port = std::env::var("HBP_TOR_CONTROL")
-        .ok()
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(9051);
-
-    let st = tor_status(&cfg);
     let existing_hs = read_onion_hostname(&root.join("tor").join("hidden_service"));
 
-    // Prefer an already-running Expert Bundle. Spawning a second tor.exe on
-    // the same SocksPort just fails and wastes the 45s hostname wait.
-    if st.reachable {
-        if let Some(onion) = try_add_onion_via_control(control_port, app_port) {
-            return Ok(TorRuntime {
-                child: None,
-                onion: Some(onion),
-                socks,
-                detail: "attached to running Tor via control-port ADD_ONION".into(),
-            });
+    if let Some(found) = discover_socks() {
+        let socks = found.addr;
+        for control_port in control_ports_for(socks.port()) {
+            if let Some(onion) = try_add_onion_via_control(control_port, app_port) {
+                return Ok(TorRuntime {
+                    child: None,
+                    onion: Some(onion),
+                    socks,
+                    detail: format!("attached to {} via ADD_ONION", found.label),
+                    hint_es: "Conectado. Ya puedes compartir tu código con la otra persona."
+                        .into(),
+                });
+            }
         }
         if let Some(onion) = existing_hs {
             return Ok(TorRuntime {
                 child: None,
                 onion: Some(onion),
                 socks,
-                detail: "SOCKS is up; reused existing hidden_service/hostname".into(),
+                detail: format!("{} SOCKS up; reused hidden_service/hostname", found.label),
+                hint_es: "Conectado. Reusé tu dirección anterior.".into(),
             });
         }
+        let hint_es = if found.addr.port() == 9150 {
+            "Conectado a Tor Browser. Puedes hablar con otros; para que te encuentren, instala el Expert Bundle o pega un código en Avanzado."
+                .into()
+        } else {
+            "Tor está abierto, pero aún no hay una dirección propia. Abre Avanzado o vuelve a conectar.".into()
+        };
         return Ok(TorRuntime {
             child: None,
             onion: None,
             socks,
             detail: format!(
-                "SOCKS is up but no onion yet — add HiddenServicePort 80 127.0.0.1:{app_port} to torrc or set HBP_TOR_CONTROL / HBP_TOR_COOKIE for ADD_ONION"
+                "{} SOCKS {} up; no onion yet (app_port {app_port})",
+                found.label,
+                socks
             ),
+            hint_es,
         });
     }
+
+    let cfg = TorConfig::from_env();
+    let socks: SocketAddr = cfg
+        .socks()
+        .to_socket_addrs()?
+        .next()
+        .ok_or_else(|| crate::Error::msg("socks did not resolve"))?;
+    let control_port = control_ports_for(cfg.socks_port)
+        .into_iter()
+        .next()
+        .unwrap_or(9051);
 
     if let Some(bin) = find_tor_binary() {
         let tor_root = root.join("tor");
@@ -381,13 +485,20 @@ pub fn bring_up_tor(root: &Path, app_port: u16) -> crate::Result<TorRuntime> {
             Ok(child) => {
                 let hs = tor_root.join("hidden_service");
                 let onion = wait_for_onion_hostname(&hs, Duration::from_secs(45));
-                let detail = if onion.is_some() {
-                    format!("spawned {} — hidden service ready", bin.display())
+                let (detail, hint_es) = if onion.is_some() {
+                    (
+                        format!("spawned {} — hidden service ready", bin.display()),
+                        "Conectado. Ya puedes compartir tu código con la otra persona.".into(),
+                    )
                 } else {
-                    format!(
-                        "spawned {} but hostname not yet in {}; Tor may still be bootstrapping",
-                        bin.display(),
-                        hs.display()
+                    (
+                        format!(
+                            "spawned {} but hostname not yet in {}; Tor may still be bootstrapping",
+                            bin.display(),
+                            hs.display()
+                        ),
+                        "Tor está arrancando. Espera un momento y pulsa otra vez Conectar red."
+                            .into(),
                     )
                 };
                 return Ok(TorRuntime {
@@ -395,6 +506,7 @@ pub fn bring_up_tor(root: &Path, app_port: u16) -> crate::Result<TorRuntime> {
                     onion,
                     socks,
                     detail,
+                    hint_es,
                 });
             }
             Err(e) => {
@@ -402,10 +514,8 @@ pub fn bring_up_tor(root: &Path, app_port: u16) -> crate::Result<TorRuntime> {
                     child: None,
                     onion: None,
                     socks,
-                    detail: format!(
-                        "could not spawn {}: {e}. Start the Expert Bundle yourself (SOCKS 9050) or set TOR_BINARY.",
-                        bin.display()
-                    ),
+                    detail: format!("could not spawn {}: {e}", bin.display()),
+                    hint_es: "No pude arrancar Tor. Abre Tor Browser o pon tor.exe junto a esta aplicación.".into(),
                 });
             }
         }
@@ -415,10 +525,8 @@ pub fn bring_up_tor(root: &Path, app_port: u16) -> crate::Result<TorRuntime> {
         child: None,
         onion: None,
         socks,
-        detail: format!(
-            "Tor not running ({}). Install the Expert Bundle (docs/WINDOWS.md) or put tor.exe next to the app. DHT still works on localhost for tests.",
-            st.detail
-        ),
+        detail: "no SOCKS on 9050/9150 and no tor.exe".into(),
+        hint_es: "No encontré Tor. Abre Tor Browser (suele usar el puerto 9150) o instala el Expert Bundle junto a esta aplicación.".into(),
     })
 }
 
@@ -453,7 +561,17 @@ fn control_cookie_bytes() -> Option<Vec<u8>> {
         cands.push(PathBuf::from(home).join(".tor").join("control_auth_cookie"));
     }
     if let Ok(local) = std::env::var("LOCALAPPDATA") {
-        cands.push(PathBuf::from(local).join("Tor").join("control_auth_cookie"));
+        let local = PathBuf::from(local);
+        cands.push(local.join("Tor").join("control_auth_cookie"));
+        cands.push(
+            local
+                .join("Tor Browser")
+                .join("Browser")
+                .join("TorBrowser")
+                .join("Data")
+                .join("Tor")
+                .join("control_auth_cookie"),
+        );
     }
     for p in cands {
         if let Ok(b) = std::fs::read(&p) {

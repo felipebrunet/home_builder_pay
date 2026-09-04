@@ -25,9 +25,8 @@ There is **no public HBP bootstrap cloud** yet. That is the honest limitation.
 1. Each app listens on `127.0.0.1:3848` (or the next free port).
 2. Tor maps `HiddenServicePort 80 → 127.0.0.1:<that port>` so the peer address is `xxx.onion:80`.
 3. Share **one** bootstrap address with the other laptop (the onion, or `127.0.0.1:port` on a LAN/dev box):
-   - GUI field “bootstrap”, or
-   - `HBP_DHT_BOOTSTRAP=abcd.onion:80`
-4. **Bootstrap** → `PING` + iterative `FIND_NODE`.
+   - GUI **Avanzado** → “código / onion de la otra persona”
+4. **Usar este código** → `PING` + iterative `FIND_NODE`.
 5. **Anunciar esta obra** → local `STORE` + `STORE` to the k closest peers.
 6. The other side **Buscar** by work name (`hbp-work:{name}` SHA-256). Iterative `FIND_VALUE` walks the overlay.
 
@@ -40,9 +39,10 @@ Three or more nodes work the same way: you only need a path of bootstraps (A kno
 Documented in [WINDOWS.md](WINDOWS.md). Short version:
 
 - Expert Bundle `tor.exe` next to `home_builder_pay.exe`, or `TOR_BINARY`, or PATH.
-- GUI **Tor + onion** attaches first if SOCKS is already up (`ADD_ONION`, or reuse `{works}/tor/hidden_service/hostname`). It only spawns `tor.exe` when nothing is listening.
+- GUI **Conectar red (Tor + DHT)** probes SOCKS **9050** (Expert Bundle) then **9150** (Tor Browser). Attaches if either is up (`ADD_ONION`, or reuse `{works}/tor/hidden_service/hostname`). Spawns `tor.exe` only when nothing is listening.
+- Tor Browser on 9150 is enough for outbound. Publishing your own onion still wants Expert Bundle / control port.
 - Spawn path writes `{works}/tor/torrc` with `HiddenServiceDir` + `HiddenServicePort 80 → 127.0.0.1:<DHT port>`.
-- Env: SOCKS `HBP_TOR_SOCKS` (default `127.0.0.1:9050`), control `HBP_TOR_CONTROL` / `HBP_TOR_COOKIE`.
+- Env (advanced): SOCKS `HBP_TOR_SOCKS`, control `HBP_TOR_CONTROL` / `HBP_TOR_COOKIE`.
 - Without Tor the DHT still speaks on localhost (how the unit tests run). That is **not** the product WAN path.
 
 ## Messages

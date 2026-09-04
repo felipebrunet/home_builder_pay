@@ -1,26 +1,29 @@
 //! Native product window (egui/eframe). Not the throwaway `hbp-ui` localhost.
 
 use std::str::FromStr;
+use std::sync::mpsc;
+use std::thread;
 
 use eframe::egui::{self, Color32, RichText};
 use hbp_app::{
-    default_works_root, draft_equal_stages, export_backup, import_backup, read_backup_file,
-    write_backup_file, WorkEntry, WorkStore,
+    default_works_root, draft_equal_stages, export_backup, format_unix_local_es, import_backup,
+    read_backup_file, validate_deadline_order, write_backup_file, DeadlineFields, UiPrefs,
+    WorkEntry, WorkStore, MONTHS_ES,
 };
 use hbp_bitcoin::{sign_body, verify_body};
 use hbp_core::{
-    bond_minor, minor_from_major, Offer, Role, SignedContract, Unit, ARBITER_ENABLED,
-    DEFAULT_BOND_BPS, PRODUCT_NETWORK,
+    bond_minor, minor_from_major, Offer, Role, SignedContract, Unit, DEFAULT_BOND_BPS,
+    PRODUCT_NETWORK,
 };
 use hbp_net::{
-    bring_up_tor, parse_bootstrap_list, tor_status, OverlayConfig, OverlayHandle, PeerAddr,
-    TorConfig, TorRuntime, WorkAnnounce, FILE_FALLBACK,
+    bring_up_tor, parse_bootstrap_list, OverlayConfig, OverlayHandle, PeerAddr, TorConfig,
+    TorRuntime, WorkAnnounce,
 };
 
 fn main() -> eframe::Result<()> {
     let opts = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_inner_size([1100.0, 720.0])
+            .with_inner_size([1120.0, 760.0])
             .with_title("home_builder_pay"),
         ..Default::default()
     };
@@ -31,15 +34,26 @@ fn main() -> eframe::Result<()> {
     )
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum NetLight {
+    Off,
+    Connecting,
+    Ok,
+    Partial,
+    Err,
+}
+
 struct App {
     store: WorkStore,
+    prefs: UiPrefs,
     selected: Option<String>,
+    last_slug: Option<String>,
     new_name: String,
     new_role: Role,
     total_major: String,
     unit: String,
-    t1: String,
-    t2: String,
+    t1: DeadlineFields,
+    t2: DeadlineFields,
     stage_descs: String,
     accept_path: String,
     backup_path: String,
@@ -50,6 +64,9 @@ struct App {
     bootstrap: String,
     lookup_name: String,
     last_error: String,
+    net_light: NetLight,
+    net_line: String,
+    connect_rx: Option<mpsc::Receiver<Result<TorRuntime, String>>>,
 }
 
 impl App {
@@ -58,25 +75,33 @@ impl App {
             root: default_works_root(),
             index: Default::default(),
         });
+        let prefs = store.load_prefs();
         Self {
             store,
+            prefs,
             selected: None,
+            last_slug: None,
             new_name: String::new(),
             new_role: Role::Mandante,
             total_major: "100".into(),
             unit: "USD".into(),
-            t1: String::new(),
-            t2: String::new(),
+            t1: DeadlineFields::days_from_now(7),
+            t2: DeadlineFields::days_from_now(14),
             stage_descs: String::new(),
             accept_path: String::new(),
             backup_path: String::new(),
-            log: "Producto nativo (Windows). Red: Signet only. Árbitro: off. Disputa: fee-burn t1/t2. Tor+DHT.\n".into(),
+            log: "Signet. Árbitro apagado. Si no hay acuerdo, se quema el dinero en dos plazos.\n"
+                .into(),
             overlay: None,
             tor_rt: None,
             onion: String::new(),
-            bootstrap: std::env::var("HBP_DHT_BOOTSTRAP").unwrap_or_default(),
+            bootstrap: String::new(),
             lookup_name: String::new(),
             last_error: String::new(),
+            net_light: NetLight::Off,
+            net_line: "Red apagada. Pulsa Conectar red cuando quieras hablar con la otra persona."
+                .into(),
+            connect_rx: None,
         }
     }
 
@@ -98,28 +123,110 @@ impl App {
         let slug = self.selected.as_deref()?;
         self.store.index.works.iter().find(|w| w.slug == slug)
     }
+
+    fn has_draft(&self, slug: &str) -> bool {
+        matches!(self.store.load_draft(slug), Ok(Some(_)))
+    }
+
+    fn has_offer(&self, slug: &str) -> bool {
+        matches!(self.store.load_offer(slug), Ok(Some(_)))
+    }
+
+    fn poll_connect(&mut self, ctx: &egui::Context) {
+        let Some(rx) = self.connect_rx.take() else {
+            return;
+        };
+        match rx.try_recv() {
+            Ok(Ok(rt)) => {
+                let hint = rt.hint_es.clone();
+                let onion = rt.onion.clone();
+                let socks = rt.socks;
+                if let Some(o) = &self.overlay {
+                    o.set_socks(Some(socks));
+                    if let Some(ref onion) = onion {
+                        o.set_advertised(PeerAddr::new(onion.clone(), 80));
+                    }
+                }
+                self.net_light = if onion.is_some() {
+                    NetLight::Ok
+                } else {
+                    NetLight::Partial
+                };
+                self.net_line = hint.clone();
+                self.note(hint);
+                if let Some(onion) = onion {
+                    self.onion = onion;
+                }
+                self.tor_rt = Some(rt);
+            }
+            Ok(Err(e)) => {
+                self.net_light = NetLight::Err;
+                self.net_line = e.clone();
+                self.fail(e);
+            }
+            Err(mpsc::TryRecvError::Empty) => {
+                self.connect_rx = Some(rx);
+                ctx.request_repaint_after(std::time::Duration::from_millis(200));
+            }
+            Err(mpsc::TryRecvError::Disconnected) => {
+                self.net_light = NetLight::Err;
+                self.net_line =
+                    "Se cortó la conexión al arrancar Tor. Vuelve a pulsar Conectar red.".into();
+            }
+        }
+    }
 }
 
 impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        apply_theme(ctx, self.prefs.dark);
+        self.poll_connect(ctx);
+        if self.selected != self.last_slug {
+            if let Some(slug) = self.selected.clone() {
+                if let Ok(Some(draft)) = self.store.load_draft(&slug) {
+                    if let Some((t1, t2)) = draft.dispute.fee_burn_deadlines() {
+                        self.t1 = DeadlineFields::from_unix(t1);
+                        self.t2 = DeadlineFields::from_unix(t2);
+                    }
+                    self.total_major = format!("{:.2}", draft.total_minor() as f64 / 100.0);
+                    self.unit = format!("{:?}", draft.unit).to_uppercase();
+                    if self.unit == "USD" {
+                        self.unit = "USD".into();
+                    }
+                }
+            }
+            self.last_slug = self.selected.clone();
+        }
+
         egui::TopBottomPanel::top("top").show(ctx, |ui| {
+            ui.add_space(4.0);
             ui.horizontal(|ui| {
                 ui.heading("home_builder_pay");
                 ui.separator();
-                ui.label(RichText::new("Signet  ·  obra + boleta 10%  ·  fee-burn t1/t2  ·  Tor + DHT").weak());
-                if !ARBITER_ENABLED {
-                    ui.label(RichText::new("árbitro off").color(Color32::from_rgb(180, 140, 80)));
-                }
+                ui.label(RichText::new("Signet · boleta 10% · sin árbitro").weak());
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    let label = if self.prefs.dark {
+                        "Tema: oscuro"
+                    } else {
+                        "Tema: claro"
+                    };
+                    if ui.button(label).clicked() {
+                        self.prefs.dark = !self.prefs.dark;
+                        let _ = self.store.save_prefs(&self.prefs);
+                    }
+                    net_badge(ui, self.net_light, &self.net_line);
+                });
             });
+            ui.add_space(4.0);
         });
 
         egui::SidePanel::left("works")
             .resizable(true)
-            .default_width(240.0)
+            .default_width(260.0)
             .show(ctx, |ui| {
-                ui.heading("Obras");
+                ui.heading("Tus obras");
                 ui.label(
-                    RichText::new("Una clave secp256k1 por obra")
+                    RichText::new("Cada obra es un contrato aparte, con su propia llave.")
                         .small()
                         .weak(),
                 );
@@ -129,7 +236,7 @@ impl eframe::App for App {
                     .index
                     .works
                     .iter()
-                    .map(|w| (w.slug.clone(), format!("{} ({:?})", w.name, w.role)))
+                    .map(|w| (w.slug.clone(), format!("{} — {}", w.name, role_es(w.role))))
                     .collect();
                 for (slug, label) in slugs {
                     if ui
@@ -140,45 +247,58 @@ impl eframe::App for App {
                     }
                 }
                 ui.separator();
-                ui.label("Nueva obra");
-                ui.text_edit_singleline(&mut self.new_name);
-                ui.horizontal(|ui| {
-                    ui.radio_value(&mut self.new_role, Role::Mandante, "mandante");
-                    ui.radio_value(&mut self.new_role, Role::Contratista, "contratista");
-                });
+                ui.label(RichText::new("Nueva obra").strong());
+                ui.label("Nombre de la obra (como lo dirías en la faena)");
+                ui.add(
+                    egui::TextEdit::singleline(&mut self.new_name)
+                        .hint_text("ej. Casa Norte, radier y muro"),
+                );
+                ui.label("Tu rol");
+                ui.radio_value(
+                    &mut self.new_role,
+                    Role::Mandante,
+                    "Mandante (quien paga)",
+                );
+                ui.radio_value(
+                    &mut self.new_role,
+                    Role::Contratista,
+                    "Contratista (quien construye)",
+                );
                 ui.label(
-                    RichText::new("red: Signet (única — no mainnet, no selector)")
+                    RichText::new("Red: Signet (única). No hay mainnet.")
                         .small()
                         .weak(),
                 );
-                if ui.button("Crear obra + identidad").clicked() {
-                    match self
-                        .store
-                        .create_product_work(&self.new_name, self.new_role, None)
-                    {
-                        Ok(e) => {
-                            self.note(format!(
-                                "obra '{}' ({}) — identidad Signet",
-                                e.name, e.slug
-                            ));
-                            self.selected = Some(e.slug);
-                            self.new_name.clear();
+                if ui.button("Crear obra").clicked() {
+                    if self.new_name.trim().is_empty() {
+                        self.fail("Escribe el nombre de la obra primero");
+                    } else {
+                        match self
+                            .store
+                            .create_product_work(&self.new_name, self.new_role, None)
+                        {
+                            Ok(e) => {
+                                self.note(format!("Obra creada: {}", e.name));
+                                self.selected = Some(e.slug);
+                                self.new_name.clear();
+                            }
+                            Err(e) => self.fail(friendly_store_err(&e.to_string())),
                         }
-                        Err(e) => self.fail(e),
                     }
                 }
             });
 
         egui::TopBottomPanel::bottom("log")
             .resizable(true)
-            .default_height(140.0)
+            .default_height(120.0)
             .show(ctx, |ui| {
-                ui.label("Registro");
-                egui::ScrollArea::vertical().show(ui, |ui| {
+                ui.label(RichText::new("Notas").strong());
+                egui::ScrollArea::vertical().stick_to_bottom(true).show(ui, |ui| {
                     ui.add(
                         egui::TextEdit::multiline(&mut self.log)
                             .desired_width(f32::INFINITY)
-                            .font(egui::TextStyle::Monospace),
+                            .desired_rows(4)
+                            .font(egui::TextStyle::Small),
                     );
                 });
                 if !self.last_error.is_empty() {
@@ -188,8 +308,10 @@ impl eframe::App for App {
 
         egui::CentralPanel::default().show(ctx, |ui| {
             let Some(slug) = self.selected.clone() else {
-                ui.label("Elige o crea una obra. Cada obra tiene su propia identidad (no un xpub).");
-                ui.label("Red de producto: Signet. No hay mainnet. hbp-ui localhost no es este producto.");
+                ui.add_space(8.0);
+                ui.heading("Empieza por una obra");
+                ui.label("Crea una obra a la izquierda. Ahí van el nombre, las partidas, la boleta y los plazos.");
+                ui.label("La red (Tor) se conecta con un solo botón cuando quieras hablar con la otra persona.");
                 return;
             };
             self.show_work(ui, &slug);
@@ -210,155 +332,286 @@ impl App {
                 return;
             }
         };
+        let has_draft = self.has_draft(slug);
+        let has_offer = self.has_offer(slug);
+
         ui.heading(&entry.name);
-        ui.horizontal(|ui| {
-            ui.label(format!("rol {:?}", entry.role));
-            ui.separator();
-            ui.label(format!("red {:?}", entry.network));
-            ui.separator();
-            ui.monospace(&id.public_key);
-        });
+        ui.label(format!("{} · Signet", role_es(entry.role)));
         ui.separator();
 
         egui::ScrollArea::vertical().show(ui, |ui| {
-            ui.collapsing("Oferta (mandante) — partidas = boleta", |ui| {
-                ui.label(format!(
-                    "Boleta fija {} bps (10%). El total se parte en {} partidas iguales a la boleta.",
-                    DEFAULT_BOND_BPS,
-                    hbp_core::equal_stage_count(DEFAULT_BOND_BPS).unwrap_or(0)
-                ));
+            self.show_construction(ui, slug, &id, &entry, has_draft, has_offer);
+            ui.add_space(12.0);
+            self.show_network(ui, slug, &entry, has_offer);
+            ui.add_space(12.0);
+            self.show_backup(ui, slug);
+        });
+    }
+
+    fn show_construction(
+        &mut self,
+        ui: &mut egui::Ui,
+        slug: &str,
+        id: &hbp_bitcoin::Identity,
+        entry: &WorkEntry,
+        has_draft: bool,
+        has_offer: bool,
+    ) {
+        ui.heading("Construcción / obra");
+        ui.label(
+            "El total se parte en partidas. El 10% queda como boleta de garantía (la misma plata en cada partida: si el total es 100, la boleta es 10 y hay 10 partidas de 10).",
+        );
+        ui.label(
+            "Si ambos están de acuerdo, se paga normal. Si no hay acuerdo, en el primer plazo se quema la mitad (va a mineros; nadie se la queda) y en el segundo plazo se quema el resto. No hay árbitro.",
+        );
+        ui.add_space(6.0);
+
+        match entry.role {
+            Role::Mandante => {
+                ui.label(RichText::new("Paso 1 — Monto y plazos").strong());
                 ui.horizontal(|ui| {
-                    ui.label("total");
-                    ui.text_edit_singleline(&mut self.total_major);
+                    ui.label("Total de la obra");
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.total_major)
+                            .desired_width(80.0)
+                            .hint_text("100"),
+                    );
                     ui.label("unidad");
-                    ui.text_edit_singleline(&mut self.unit);
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.unit)
+                            .desired_width(60.0)
+                            .hint_text("USD"),
+                    );
                 });
-                ui.horizontal(|ui| {
-                    ui.label("t1 (unix)");
-                    ui.text_edit_singleline(&mut self.t1);
-                    ui.label("t2 (unix)");
-                    ui.text_edit_singleline(&mut self.t2);
-                });
-                ui.label("descripciones (una por línea, opcional; si vacío: Partida 1…N)");
+                if let Ok(total) = minor_from_major(&self.total_major) {
+                    if let Ok(bond) = bond_minor(total, DEFAULT_BOND_BPS) {
+                        let n = hbp_core::equal_stage_count(DEFAULT_BOND_BPS).unwrap_or(0);
+                        ui.label(
+                            RichText::new(format!(
+                                "Boleta 10% = {:.2} {}. Serán {n} partidas de {:.2} (cada una = la boleta).",
+                                bond as f64 / 100.0,
+                                self.unit,
+                                bond as f64 / 100.0
+                            ))
+                            .weak(),
+                        );
+                    }
+                }
+
+                ui.add_space(4.0);
+                ui.label("Primer plazo (si no hay acuerdo, se quema la mitad)");
+                deadline_editor(ui, "t1", &mut self.t1);
+                ui.label("Segundo plazo (se quema el resto)");
+                deadline_editor(ui, "t2", &mut self.t2);
+
+                ui.add_space(4.0);
+                ui.label("Nombres de las partidas (una por línea, opcional)");
                 ui.add(
                     egui::TextEdit::multiline(&mut self.stage_descs)
-                        .desired_rows(4)
-                        .desired_width(480.0),
+                        .desired_rows(3)
+                        .desired_width(520.0)
+                        .hint_text("Radier\nMuros\nTechumbre"),
                 );
-                if ui.button("Armar draft fee-burn (stage = bond)").clicked() {
-                    self.build_draft(slug, &id, &entry);
-                }
-                if ui.button("Firmar y escribir 00-offer.json").clicked() {
-                    self.emit_offer(slug, &id);
-                }
-            });
 
-            ui.collapsing("Aceptar oferta (contratista) / importar archivo", |ui| {
-                ui.label("Ruta a 00-offer.json (fallback de archivos; Tor cuando el onion esté listo)");
-                ui.text_edit_singleline(&mut self.accept_path);
-                if ui.button("Aceptar oferta").clicked() {
-                    self.accept_offer(slug, &id);
+                ui.add_space(6.0);
+                ui.label(RichText::new("Paso 2 — Preparar partidas").strong());
+                if ui.button("Preparar partidas").clicked() {
+                    self.build_draft(slug, id, entry);
                 }
-            });
 
-            if let Ok(Some(draft)) = self.store.load_draft(slug) {
-                ui.separator();
-                ui.heading("Tablero de partidas");
-                let bond = bond_minor(draft.total_minor(), draft.bond_bps).unwrap_or(0);
-                ui.label(format!(
-                    "total_minor={}  boleta={}  policy={:?}",
-                    draft.total_minor(),
-                    bond,
-                    draft.dispute
-                ));
-                egui::Grid::new("stages").striped(true).show(ui, |ui| {
-                    ui.strong("#");
-                    ui.strong("descripción");
-                    ui.strong("monto");
-                    ui.strong("= boleta");
-                    ui.strong("plazo");
-                    ui.end_row();
-                    for p in &draft.partidas {
-                        ui.label(p.id.to_string());
-                        ui.label(&p.description);
-                        ui.label(p.amount_minor.to_string());
-                        ui.label(if p.amount_minor == bond { "sí" } else { "NO" });
-                        ui.label(p.plazo_unix.to_string());
-                        ui.end_row();
+                ui.add_space(4.0);
+                ui.label(RichText::new("Paso 3 — Firmar la oferta").strong());
+                if has_draft {
+                    if ui.button("Firmar y guardar oferta").clicked() {
+                        self.emit_offer(slug, id);
                     }
-                });
+                    if has_offer {
+                        ui.label(
+                            RichText::new("Oferta lista. Puedes enviarla por red o por archivo.")
+                                .color(Color32::from_rgb(80, 160, 100)),
+                        );
+                    }
+                } else {
+                    ui.add_enabled(false, egui::Button::new("Firmar y guardar oferta"));
+                    ui.label(
+                        RichText::new("Primero prepara las partidas (paso 2).")
+                            .small()
+                            .weak(),
+                    );
+                }
             }
+            Role::Contratista => {
+                ui.label(RichText::new("Paso 1 — Recibir la oferta del mandante").strong());
+                ui.label(
+                    "Pide el archivo de oferta o conéctate a la red y lee el buzón. Luego acéptala aquí.",
+                );
+                ui.add(
+                    egui::TextEdit::singleline(&mut self.accept_path)
+                        .desired_width(420.0)
+                        .hint_text("ruta al archivo de oferta"),
+                );
+                if ui.button("Aceptar oferta").clicked() {
+                    self.accept_offer(slug, id);
+                }
+            }
+        }
 
+        if let Ok(Some(draft)) = self.store.load_draft(slug) {
             ui.separator();
-            ui.heading("Red: Tor + DHT (Signet)");
-            ui.label(format!(
-                "Kademlia TCP. .onion via SOCKS5. Fallback/dev: {FILE_FALLBACK}. Sin bootstrap público — pega un peer host:port."
-            ));
-            if let Some(o) = &self.overlay {
-                ui.label(format!(
-                    "listen {}  advertised {}  peers {}  records {}  node {}",
-                    o.local_addr(),
-                    o.advertised(),
-                    o.peer_count(),
-                    o.store_len(),
-                    &o.node_id_hex()[..12]
-                ));
-            } else {
-                ui.label("DHT apagado.");
+            ui.heading("Tablero de partidas");
+            let bond = bond_minor(draft.total_minor(), draft.bond_bps).unwrap_or(0);
+            if let Some((t1, t2)) = draft.dispute.fee_burn_deadlines() {
+                ui.label(format!("Primer plazo: {}", format_unix_local_es(t1)));
+                ui.label(format!("Segundo plazo: {}", format_unix_local_es(t2)));
             }
-            ui.horizontal(|ui| {
-                if ui.button("Arrancar DHT").clicked() {
-                    self.start_overlay();
-                }
-                if ui.button("Tor + onion").clicked() {
-                    self.start_tor();
-                }
-                if ui.button("Probar SOCKS").clicked() {
-                    let st = tor_status(&TorConfig::from_env());
-                    self.note(format!(
-                        "tor socks={} reachable={} — {}",
-                        st.socks, st.reachable, st.detail
-                    ));
+            ui.label(format!(
+                "Total {:.2} · boleta {:.2} (10%)",
+                draft.total_minor() as f64 / 100.0,
+                bond as f64 / 100.0
+            ));
+            egui::Grid::new("stages").striped(true).show(ui, |ui| {
+                ui.strong("#");
+                ui.strong("descripción");
+                ui.strong("monto");
+                ui.strong("= boleta");
+                ui.strong("plazo");
+                ui.end_row();
+                for p in &draft.partidas {
+                    ui.label(p.id.to_string());
+                    ui.label(&p.description);
+                    ui.label(format!("{:.2}", p.amount_minor as f64 / 100.0));
+                    ui.label(if p.amount_minor == bond { "sí" } else { "NO" });
+                    ui.label(format_unix_local_es(p.plazo_unix));
+                    ui.end_row();
                 }
             });
+        }
+    }
+
+    fn show_network(&mut self, ui: &mut egui::Ui, slug: &str, entry: &WorkEntry, has_offer: bool) {
+        ui.heading("Red");
+        ui.label("Un botón. Busca Tor (Expert Bundle o Tor Browser) y enciende el descubrimiento.");
+        ui.horizontal(|ui| {
+            let busy = self.net_light == NetLight::Connecting;
+            let label = if busy {
+                "Conectando…"
+            } else {
+                "Conectar red (Tor + DHT)"
+            };
+            if ui.add_enabled(!busy, egui::Button::new(label)).clicked() {
+                self.connect_network();
+            }
+            net_badge(ui, self.net_light, &self.net_line);
+        });
+        ui.label(RichText::new(&self.net_line).italics());
+
+        ui.add_space(4.0);
+        ui.collapsing("Avanzado", |ui| {
+            ui.label("Código / onion de la otra persona (para encontrarse)");
             ui.horizontal(|ui| {
-                ui.label("onion propio");
-                ui.text_edit_singleline(&mut self.onion);
-            });
-            ui.horizontal(|ui| {
-                ui.label("bootstrap (host:port, …)");
-                ui.text_edit_singleline(&mut self.bootstrap);
-                if ui.button("Bootstrap").clicked() {
+                ui.add(
+                    egui::TextEdit::singleline(&mut self.bootstrap)
+                        .desired_width(360.0)
+                        .hint_text("xxxx.onion"),
+                );
+                let net_up = self.overlay.is_some();
+                if ui
+                    .add_enabled(net_up, egui::Button::new("Usar este código"))
+                    .clicked()
+                {
                     self.do_bootstrap();
                 }
             });
+            if self.overlay.is_none() {
+                ui.label(
+                    RichText::new("Primero pulsa Conectar red.")
+                        .small()
+                        .weak(),
+                );
+            }
             ui.horizontal(|ui| {
-                if ui.button("Anunciar esta obra").clicked() {
-                    self.announce_work(&entry);
+                ui.label("Tu código");
+                ui.add(
+                    egui::TextEdit::singleline(&mut self.onion)
+                        .desired_width(360.0)
+                        .hint_text("aparece al conectar"),
+                );
+            });
+            ui.horizontal(|ui| {
+                if ui
+                    .add_enabled(self.overlay.is_some(), egui::Button::new("Anunciar esta obra"))
+                    .clicked()
+                {
+                    self.announce_work(entry);
                 }
-                ui.label("lookup");
-                ui.text_edit_singleline(&mut self.lookup_name);
-                if ui.button("Buscar").clicked() {
+                ui.add(
+                    egui::TextEdit::singleline(&mut self.lookup_name)
+                        .desired_width(160.0)
+                        .hint_text("nombre de obra"),
+                );
+                if ui
+                    .add_enabled(self.overlay.is_some(), egui::Button::new("Buscar"))
+                    .clicked()
+                {
                     self.lookup_work();
                 }
             });
-            if ui.button("Enviar offer al publisher (último lookup / onion)").clicked() {
-                self.send_offer_over_net(slug);
+            if has_offer {
+                if ui
+                    .add_enabled(
+                        self.overlay.is_some() && !self.onion.trim().is_empty(),
+                        egui::Button::new("Enviar oferta por red"),
+                    )
+                    .clicked()
+                {
+                    self.send_offer_over_net(slug);
+                }
+            } else if entry.role == Role::Mandante {
+                ui.label(
+                    RichText::new("Para enviar por red, primero firma la oferta (paso 3).")
+                        .small()
+                        .weak(),
+                );
             }
-            if ui.button("Leer inbox").clicked() {
+            if ui
+                .add_enabled(self.overlay.is_some(), egui::Button::new("Leer buzón"))
+                .clicked()
+            {
                 if let Some(o) = &self.overlay {
-                    for m in o.take_inbox() {
-                        self.note(format!("inbox {}", m.kind()));
+                    let inbox = o.take_inbox();
+                    if inbox.is_empty() {
+                        self.note("Buzón vacío");
+                    } else {
+                        for m in inbox {
+                            self.note(format!("Llegó: {}", m.kind()));
+                        }
                     }
                 }
             }
+            if let Some(o) = &self.overlay {
+                ui.label(
+                    RichText::new(format!(
+                        "escucha {} · contactos {}",
+                        o.local_addr(),
+                        o.peer_count()
+                    ))
+                    .small()
+                    .weak(),
+                );
+            }
+        });
+    }
 
-            ui.separator();
-            ui.heading("Respaldo");
-            ui.label("Exporta identidad (hex 256 bit) + draft/offer. No es BIP39.");
-            ui.text_edit_singleline(&mut self.backup_path);
+    fn show_backup(&mut self, ui: &mut egui::Ui, slug: &str) {
+        ui.collapsing("Respaldo", |ui| {
+            ui.label("Copia de seguridad de esta obra (llave en hexadecimal, no es una frase BIP39).");
+            ui.add(
+                egui::TextEdit::singleline(&mut self.backup_path)
+                    .desired_width(420.0)
+                    .hint_text("ruta del archivo (opcional)"),
+            );
             ui.horizontal(|ui| {
-                if ui.button("Exportar backup").clicked() {
+                if ui.button("Exportar respaldo").clicked() {
                     match export_backup(&self.store, slug) {
                         Ok(b) => {
                             let path = if self.backup_path.trim().is_empty() {
@@ -367,21 +620,26 @@ impl App {
                                 std::path::PathBuf::from(self.backup_path.trim())
                             };
                             match write_backup_file(&path, &b) {
-                                Ok(()) => self.note(format!("backup {}", path.display())),
+                                Ok(()) => self.note(format!("Respaldo guardado en {}", path.display())),
                                 Err(e) => self.fail(e),
                             }
                         }
                         Err(e) => self.fail(e),
                     }
                 }
-                if ui.button("Importar backup").clicked() {
-                    let path = std::path::PathBuf::from(self.backup_path.trim());
-                    match read_backup_file(&path).and_then(|b| import_backup(&mut self.store, &b)) {
-                        Ok(e) => {
-                            self.note(format!("importada obra '{}'", e.name));
-                            self.selected = Some(e.slug);
+                if ui.button("Importar respaldo").clicked() {
+                    if self.backup_path.trim().is_empty() {
+                        self.fail("Indica la ruta del respaldo");
+                    } else {
+                        let path = std::path::PathBuf::from(self.backup_path.trim());
+                        match read_backup_file(&path).and_then(|b| import_backup(&mut self.store, &b))
+                        {
+                            Ok(e) => {
+                                self.note(format!("Obra importada: {}", e.name));
+                                self.selected = Some(e.slug);
+                            }
+                            Err(e) => self.fail(friendly_store_err(&e.to_string())),
                         }
-                        Err(e) => self.fail(e),
                     }
                 }
             });
@@ -391,19 +649,22 @@ impl App {
     fn build_draft(&mut self, slug: &str, id: &hbp_bitcoin::Identity, entry: &WorkEntry) {
         let total = match minor_from_major(&self.total_major) {
             Ok(v) => v,
-            Err(e) => return self.fail(e),
+            Err(_) => return self.fail("El total tiene que ser un número (ej. 100 o 100.50)"),
         };
-        let t1: u32 = match self.t1.trim().parse() {
+        let t1 = match self.t1.to_unix() {
             Ok(v) => v,
-            Err(_) => return self.fail("t1 debe ser unix time"),
+            Err(e) => return self.fail(format!("Primer plazo: {e}")),
         };
-        let t2: u32 = match self.t2.trim().parse() {
+        let t2 = match self.t2.to_unix() {
             Ok(v) => v,
-            Err(_) => return self.fail("t2 debe ser unix time"),
+            Err(e) => return self.fail(format!("Segundo plazo: {e}")),
         };
+        if let Err(e) = validate_deadline_order(t1, t2) {
+            return self.fail(e);
+        }
         let unit = match Unit::from_str(&self.unit) {
             Ok(u) => u,
-            Err(e) => return self.fail(e),
+            Err(_) => return self.fail("Unidad no reconocida. Prueba USD, CLP o UF."),
         };
         let descs: Vec<String> = self
             .stage_descs
@@ -414,13 +675,13 @@ impl App {
         match draft_equal_stages(id, &entry.name, unit, total, t1, t2, &descs) {
             Ok(body) => match self.store.save_draft(slug, &body) {
                 Ok(()) => self.note(format!(
-                    "draft {} partidas × {} (boleta = partida)",
+                    "Partidas listas: {} de {:.2} (cada una = la boleta)",
                     body.partidas.len(),
-                    body.partidas.first().map(|p| p.amount_minor).unwrap_or(0)
+                    body.partidas.first().map(|p| p.amount_minor as f64 / 100.0).unwrap_or(0.0)
                 )),
                 Err(e) => self.fail(e),
             },
-            Err(e) => self.fail(e),
+            Err(e) => self.fail(friendly_store_err(&e.to_string())),
         }
     }
 
@@ -429,7 +690,7 @@ impl App {
             Ok(b) => b,
             Err(e) => return self.fail(e),
         }) else {
-            return self.fail("no hay draft");
+            return self.fail("Primero prepara las partidas (paso 2)");
         };
         if let Err(e) = body.validate() {
             return self.fail(e);
@@ -447,7 +708,7 @@ impl App {
             mandante_sig: sig,
         };
         match self.store.save_offer(slug, &offer) {
-            Ok(p) => self.note(format!("offer {}", p.display())),
+            Ok(_) => self.note("Oferta firmada y guardada. Ya puedes enviarla."),
             Err(e) => self.fail(e),
         }
     }
@@ -456,8 +717,9 @@ impl App {
         let Some(o) = &self.overlay else {
             return;
         };
-        let socks = TorConfig::from_env().socks();
-        if let Ok(addr) = socks.parse::<std::net::SocketAddr>() {
+        if let Some(found) = hbp_net::discover_socks() {
+            o.set_socks(Some(found.addr));
+        } else if let Ok(addr) = TorConfig::from_env().socks().parse::<std::net::SocketAddr>() {
             o.set_socks(Some(addr));
         }
         let onion = self.onion.trim();
@@ -470,11 +732,10 @@ impl App {
         }
     }
 
-    fn start_overlay(&mut self) {
+    fn start_overlay(&mut self) -> bool {
         if self.overlay.is_some() {
             self.apply_overlay_hints();
-            self.note("DHT already listening");
-            return;
+            return true;
         }
         let mut cfg = OverlayConfig::default();
         cfg.listen = "127.0.0.1:3848".parse().expect("static");
@@ -484,65 +745,79 @@ impl App {
                 cfg.listen = "127.0.0.1:0".parse().expect("static");
                 match OverlayHandle::bind(cfg) {
                     Ok(h) => h,
-                    Err(e) => return self.fail(e),
+                    Err(e) => {
+                        self.fail(format!("No pude abrir la red local: {e}"));
+                        return false;
+                    }
                 }
             }
         };
-        self.note(format!("DHT listen {}", handle.local_addr()));
         self.overlay = Some(handle);
         self.apply_overlay_hints();
+        true
     }
 
-    fn start_tor(&mut self) {
-        if self.overlay.is_none() {
-            self.start_overlay();
+    fn connect_network(&mut self) {
+        if self.net_light == NetLight::Connecting {
+            return;
+        }
+        if !self.start_overlay() {
+            self.net_light = NetLight::Err;
+            self.net_line = "No pude abrir el descubrimiento local.".into();
+            return;
         }
         let port = match &self.overlay {
             Some(o) => o.local_addr().port(),
             None => return,
         };
-        match bring_up_tor(&self.store.root, port) {
-            Ok(rt) => {
-                let detail = rt.detail.clone();
-                let onion = rt.onion.clone();
-                let socks = rt.socks;
-                if let Some(o) = &self.overlay {
-                    o.set_socks(Some(socks));
-                    if let Some(ref onion) = onion {
-                        o.set_advertised(PeerAddr::new(onion.clone(), 80));
-                    }
-                }
-                self.tor_rt = Some(rt);
-                self.note(detail);
-                if let Some(onion) = onion {
-                    self.onion = onion.clone();
-                    self.note(format!("advertised {onion}:80 via {socks}"));
-                }
-            }
-            Err(e) => self.fail(e),
-        }
+        let root = self.store.root.clone();
+        let (tx, rx) = mpsc::channel();
+        thread::Builder::new()
+            .name("hbp-tor".into())
+            .spawn(move || {
+                let _ = tx.send(bring_up_tor(&root, port).map_err(|e| {
+                    format!("No pude conectar Tor. Abre Tor Browser o pon tor.exe junto a la app. ({e})")
+                }));
+            })
+            .ok();
+        self.connect_rx = Some(rx);
+        self.net_light = NetLight::Connecting;
+        self.net_line = "Buscando Tor (Expert Bundle en 9050 o Tor Browser en 9150)…".into();
+        self.note("Conectando red…");
     }
 
     fn do_bootstrap(&mut self) {
         let Some(o) = &self.overlay else {
-            return self.fail("arranca el DHT primero");
+            return self.fail("Primero pulsa Conectar red");
         };
-        let peers = match parse_bootstrap_list(&self.bootstrap) {
+        let raw = self.bootstrap.trim();
+        if raw.is_empty() {
+            return self.fail("Pega el código de la otra persona (termina en .onion)");
+        }
+        let normalized = if raw.contains(':') {
+            raw.to_string()
+        } else {
+            format!("{raw}:80")
+        };
+        let peers = match parse_bootstrap_list(&normalized) {
             Ok(p) => p,
-            Err(e) => return self.fail(e),
+            Err(_) => {
+                return self.fail("Ese código no se entiende. Debe verse como xxxx.onion");
+            }
         };
         if peers.is_empty() {
-            return self.fail("HBP_DHT_BOOTSTRAP o el campo bootstrap: host:port (onion o 127.0.0.1)");
+            return self.fail("Pega el código de la otra persona (termina en .onion)");
         }
         match o.bootstrap(&peers) {
-            Ok(n) => self.note(format!("bootstrap ok {n}/{} peers now {}", peers.len(), o.peer_count())),
-            Err(e) => self.fail(e),
+            Ok(n) if n > 0 => self.note("Encontré a la otra persona"),
+            Ok(_) => self.fail("No respondió. ¿Está conectada y el código es el de ella?"),
+            Err(e) => self.fail(format!("No pude llegar a la otra persona ({e})")),
         }
     }
 
     fn announce_work(&mut self, entry: &WorkEntry) {
         let Some(o) = &self.overlay else {
-            return self.fail("arranca el DHT primero");
+            return self.fail("Primero pulsa Conectar red");
         };
         let onion = if self.onion.trim().is_empty() {
             o.advertised().display()
@@ -556,81 +831,73 @@ impl App {
             role: format!("{:?}", entry.role).to_lowercase(),
         };
         match o.announce_work(&ann) {
-            Ok(k) => self.note(format!(
-                "DHT STORE {} → {} peers",
-                hex::encode(k),
-                o.peer_count()
-            )),
+            Ok(_) => self.note("Obra anunciada. La otra persona puede buscarla por nombre."),
             Err(e) => self.fail(e),
         }
     }
 
     fn lookup_work(&mut self) {
         let Some(o) = &self.overlay else {
-            return self.fail("arranca el DHT primero");
+            return self.fail("Primero pulsa Conectar red");
         };
         let name = if self.lookup_name.trim().is_empty() {
-            return self.fail("nombre de obra a buscar");
+            return self.fail("Escribe el nombre de la obra a buscar");
         } else {
             self.lookup_name.trim().to_string()
         };
         match o.lookup_work(&name) {
             Ok(Some(ann)) => {
-                self.note(format!(
-                    "found '{}' onion={} role={}",
-                    ann.work_name, ann.onion, ann.role
-                ));
+                self.note(format!("Encontré «{}»", ann.work_name));
                 if ann.onion.contains(".onion") || ann.onion.contains(':') {
                     self.onion = ann.onion;
                 }
             }
-            Ok(None) => self.note("DHT miss (comparte un bootstrap con la otra máquina)"),
+            Ok(None) => self.fail("No aparece. Comparte el código (Avanzado) con la otra persona."),
             Err(e) => self.fail(e),
         }
     }
 
     fn send_offer_over_net(&mut self, slug: &str) {
         let Some(o) = &self.overlay else {
-            return self.fail("arranca el DHT primero");
+            return self.fail("Primero pulsa Conectar red");
         };
         let offer = match self.store.load_offer(slug) {
             Ok(Some(off)) => off,
-            Ok(None) => return self.fail("no hay 00-offer.json"),
+            Ok(None) => return self.fail("Primero firma la oferta (paso 3)"),
             Err(e) => return self.fail(e),
         };
         if offer.body.network != PRODUCT_NETWORK {
-            return self.fail("offer is not Signet");
+            return self.fail("Esta oferta no es de Signet");
         }
         let dest = match PeerAddr::parse(&self.onion) {
             Ok(p) => p,
-            Err(_) => {
-                // onion without port → :80
-                match PeerAddr::parse(&format!("{}:80", self.onion.trim())) {
-                    Ok(p) => p,
-                    Err(e) => return self.fail(e),
+            Err(_) => match PeerAddr::parse(&format!("{}:80", self.onion.trim())) {
+                Ok(p) => p,
+                Err(_) => {
+                    return self.fail("Falta el código de la otra persona (Avanzado)");
                 }
-            }
+            },
         };
         match o.deliver(&dest, &hbp_net::NetMessage::Offer { offer }) {
-            Ok(()) => self.note(format!("offer delivered to {dest}")),
-            Err(e) => self.fail(e),
+            Ok(()) => self.note("Oferta enviada"),
+            Err(e) => self.fail(format!("No pude enviar la oferta ({e})")),
         }
     }
 
     fn accept_offer(&mut self, slug: &str, id: &hbp_bitcoin::Identity) {
         let path = self.accept_path.trim();
         if path.is_empty() {
-            return self.fail("indica la ruta del offer");
+            return self.fail("Indica la ruta del archivo de oferta");
         }
         let offer: Offer = match std::fs::read_to_string(path)
             .ok()
             .and_then(|s| serde_json::from_str(&s).ok())
         {
             Some(o) => o,
-            None => return self.fail("no pude leer el offer"),
+            None => return self.fail("No pude leer esa oferta. ¿La ruta es correcta?"),
         };
         if offer.body.network != PRODUCT_NETWORK {
-            return self.fail("product GUI is Signet-only; this offer is not Signet");
+            return self.fail("Esta oferta no es de Signet");
         }
         if let Err(e) = verify_body(
             &offer.body.mandante_pubkey,
@@ -660,13 +927,112 @@ impl App {
         let out = self.store.work_dir(slug).join("01-accepted.pending.json");
         match serde_json::to_string_pretty(&signed) {
             Ok(j) => match std::fs::write(&out, j) {
-                Ok(()) => self.note(format!(
-                    "pending {} — pásalo al mandante (archivo o Tor)",
-                    out.display()
-                )),
+                Ok(()) => self.note("Oferta aceptada. Pásasela al mandante (archivo o red)."),
                 Err(e) => self.fail(e),
             },
             Err(e) => self.fail(e),
         }
     }
+}
+
+fn role_es(role: Role) -> &'static str {
+    match role {
+        Role::Mandante => "Mandante (quien paga)",
+        Role::Contratista => "Contratista (quien construye)",
+    }
+}
+
+fn friendly_store_err(e: &str) -> String {
+    if e.contains("mainnet") {
+        "Esta app no usa mainnet. Solo Signet.".into()
+    } else if e.contains("already exists") {
+        "Ya existe una obra con ese nombre.".into()
+    } else if e.contains("work name") {
+        "Escribe el nombre de la obra primero".into()
+    } else {
+        e.to_string()
+    }
+}
+
+fn deadline_editor(ui: &mut egui::Ui, id: &str, fields: &mut DeadlineFields) {
+    ui.horizontal(|ui| {
+        ui.add(
+            egui::DragValue::new(&mut fields.day)
+                .range(1..=31)
+                .prefix("día "),
+        );
+        let month_label = MONTHS_ES
+            .get(fields.month.saturating_sub(1) as usize)
+            .copied()
+            .unwrap_or("mes");
+        egui::ComboBox::from_id_salt(format!("{id}-month"))
+            .selected_text(month_label)
+            .show_ui(ui, |ui| {
+                for (i, name) in MONTHS_ES.iter().enumerate() {
+                    ui.selectable_value(&mut fields.month, i as u32 + 1, *name);
+                }
+            });
+        ui.add(
+            egui::DragValue::new(&mut fields.year)
+                .range(2024..=2100)
+                .prefix("año "),
+        );
+        ui.label("  ");
+        ui.add(
+            egui::DragValue::new(&mut fields.hour)
+                .range(0..=23)
+                .suffix(" h"),
+        );
+        ui.add(
+            egui::DragValue::new(&mut fields.minute)
+                .range(0..=59)
+                .suffix(" min"),
+        );
+    });
+    ui.label(RichText::new(fields.preview_es()).italics().small());
+}
+
+fn net_badge(ui: &mut egui::Ui, light: NetLight, _line: &str) {
+    let (color, text) = match light {
+        NetLight::Off => (Color32::from_rgb(140, 140, 140), "Apagado"),
+        NetLight::Connecting => (Color32::from_rgb(220, 170, 40), "Conectando"),
+        NetLight::Ok => (Color32::from_rgb(70, 180, 90), "Conectado"),
+        NetLight::Partial => (Color32::from_rgb(70, 180, 90), "Conectado"),
+        NetLight::Err => (Color32::from_rgb(210, 70, 70), "Error"),
+    };
+    ui.colored_label(color, format!("● {text}"));
+}
+
+fn apply_theme(ctx: &egui::Context, dark: bool) {
+    let mut v = if dark {
+        egui::Visuals::dark()
+    } else {
+        egui::Visuals::light()
+    };
+    if dark {
+        v.override_text_color = Some(Color32::from_rgb(236, 239, 244));
+        v.extreme_bg_color = Color32::from_rgb(14, 16, 20);
+        v.faint_bg_color = Color32::from_rgb(28, 32, 40);
+        v.widgets.inactive.bg_fill = Color32::from_rgb(40, 45, 56);
+        v.widgets.hovered.bg_fill = Color32::from_rgb(54, 60, 74);
+        v.widgets.active.bg_fill = Color32::from_rgb(54, 60, 74);
+        v.widgets.inactive.fg_stroke.color = Color32::from_rgb(236, 239, 244);
+        v.widgets.hovered.fg_stroke.color = Color32::WHITE;
+        v.widgets.noninteractive.fg_stroke.color = Color32::from_rgb(200, 206, 216);
+        v.window_fill = Color32::from_rgb(20, 22, 28);
+        v.panel_fill = Color32::from_rgb(20, 22, 28);
+    } else {
+        v.override_text_color = Some(Color32::from_rgb(16, 18, 22));
+        v.extreme_bg_color = Color32::WHITE;
+        v.faint_bg_color = Color32::from_rgb(236, 238, 242);
+        v.widgets.inactive.bg_fill = Color32::from_rgb(242, 244, 247);
+        v.widgets.hovered.bg_fill = Color32::from_rgb(226, 230, 238);
+        v.widgets.active.bg_fill = Color32::from_rgb(226, 230, 238);
+        v.widgets.inactive.fg_stroke.color = Color32::from_rgb(16, 18, 22);
+        v.widgets.hovered.fg_stroke.color = Color32::BLACK;
+        v.widgets.noninteractive.fg_stroke.color = Color32::from_rgb(50, 56, 66);
+        v.window_fill = Color32::from_rgb(248, 249, 251);
+        v.panel_fill = Color32::from_rgb(248, 249, 251);
+    }
+    ctx.set_visuals(v);
 }

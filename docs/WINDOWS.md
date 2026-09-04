@@ -39,7 +39,7 @@ Point-to-point and DHT RPCs to `.onion` go through SOCKS5. The crate does not ve
 
 1. Download the [Tor Expert Bundle](https://www.torproject.org/download/tor/) (Windows). Unzip `tor.exe` + `geoip`.
 2. Place them either next to `home_builder_pay.exe`, or `%LOCALAPPDATA%\Tor\tor.exe`, or set `TOR_BINARY`.
-3. In the GUI: **Arrancar DHT**, then **Tor + onion**. The app writes `%USERPROFILE%\Documents\home_builder_pay\tor\torrc`:
+3. In the GUI: one button, **Conectar red (Tor + DHT)**. The app probes SOCKS **9050** (Expert Bundle) and **9150** (Tor Browser). If nothing is listening it writes `%USERPROFILE%\Documents\home_builder_pay\tor\torrc`:
 
 ```
 SocksPort 127.0.0.1:9050
@@ -50,8 +50,8 @@ HiddenServicePort 80 127.0.0.1:3848
 ```
 
    and tries to spawn `tor.exe -f torrc`. When `hidden_service\hostname` appears, that onion is the advertised DHT address (`xxx.onion:80`).
-4. If you already run the Expert Bundle yourself, keep SOCKS on `9050` (`HBP_TOR_SOCKS`) and either add the same `HiddenServicePort` line or let the app `ADD_ONION` via the control port (`HBP_TOR_CONTROL` / `HBP_TOR_COOKIE`).
-5. Give the other laptop your onion as **bootstrap** (`HBP_DHT_BOOTSTRAP=xxx.onion:80`). There is no public bootstrap list yet.
+4. **Tor Browser** is enough for outbound (Felipe’s case: Browser up on 9150, app used to time out on 9050). Publishing your own onion still wants the Expert Bundle or a control-port `ADD_ONION`. Advanced: paste the other laptop’s `.onion`.
+5. If you already run the Expert Bundle yourself, keep SOCKS on `9050` or let the app find 9150. Optional control-port `ADD_ONION` (`HBP_TOR_CONTROL` / `HBP_TOR_COOKIE`). There is no public bootstrap list yet.
 
 Manual torrc (if you refuse the spawn):
 
@@ -73,7 +73,9 @@ File-passing remains fallback if Tor is down. See [NETWORK.md](NETWORK.md).
 - Accept an offer from a file path
 - Stage board
 - Signet locked (no mainnet, no network picker)
-- Tor spawn / attach + TCP Kademlia DHT (bootstrap, announce, lookup, deliver)
+- One-button Tor + DHT (9050 Expert Bundle **or** 9150 Tor Browser); advanced onion/bootstrap collapsed
+- Human local date/time for t1/t2 (no raw unix)
+- Dark / light theme toggle (saved in `ui.json`)
 - Import / export backup JSON (secret hex, not BIP39; Signet only)
 - Arbiter hidden (`ARBITER_ENABLED = false`)
 

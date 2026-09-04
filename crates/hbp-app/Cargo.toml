@@ -19,6 +19,7 @@ hbp-core.workspace = true
 hbp-bitcoin.workspace = true
 hbp-net = { path = "../hbp-net" }
 anyhow.workspace = true
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 eframe = "0.29"
 egui = "0.29"
 hex.workspace = true
