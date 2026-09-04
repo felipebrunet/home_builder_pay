@@ -249,9 +249,12 @@ impl eframe::App for App {
                 ui.separator();
                 ui.label(RichText::new("Nueva obra").strong());
                 ui.label("Nombre de la obra (como lo dirías en la faena)");
-                ui.add(
-                    egui::TextEdit::singleline(&mut self.new_name)
-                        .hint_text("ej. Casa Norte, radier y muro"),
+                show_field(
+                    ui,
+                    &mut self.new_name,
+                    "ej. Casa Norte, radier y muro",
+                    self.prefs.dark,
+                    220.0,
                 );
                 ui.label("Tu rol");
                 ui.radio_value(
@@ -294,11 +297,13 @@ impl eframe::App for App {
             .show(ctx, |ui| {
                 ui.label(RichText::new("Notas").strong());
                 egui::ScrollArea::vertical().stick_to_bottom(true).show(ui, |ui| {
-                    ui.add(
-                        egui::TextEdit::multiline(&mut self.log)
-                            .desired_width(f32::INFINITY)
-                            .desired_rows(4)
-                            .font(egui::TextStyle::Small),
+                    show_multiline(
+                        ui,
+                        &mut self.log,
+                        "",
+                        self.prefs.dark,
+                        ui.available_width(),
+                        4,
                     );
                 });
                 if !self.last_error.is_empty() {
@@ -371,17 +376,9 @@ impl App {
                 ui.label(RichText::new("Paso 1 — Monto y plazos").strong());
                 ui.horizontal(|ui| {
                     ui.label("Total de la obra");
-                    ui.add(
-                        egui::TextEdit::singleline(&mut self.total_major)
-                            .desired_width(80.0)
-                            .hint_text("100"),
-                    );
+                    show_field(ui, &mut self.total_major, "100", self.prefs.dark, 80.0);
                     ui.label("unidad");
-                    ui.add(
-                        egui::TextEdit::singleline(&mut self.unit)
-                            .desired_width(60.0)
-                            .hint_text("USD"),
-                    );
+                    show_field(ui, &mut self.unit, "USD", self.prefs.dark, 60.0);
                 });
                 if let Ok(total) = minor_from_major(&self.total_major) {
                     if let Ok(bond) = bond_minor(total, DEFAULT_BOND_BPS) {
@@ -406,11 +403,13 @@ impl App {
 
                 ui.add_space(4.0);
                 ui.label("Nombres de las partidas (una por línea, opcional)");
-                ui.add(
-                    egui::TextEdit::multiline(&mut self.stage_descs)
-                        .desired_rows(3)
-                        .desired_width(520.0)
-                        .hint_text("Radier\nMuros\nTechumbre"),
+                show_multiline(
+                    ui,
+                    &mut self.stage_descs,
+                    "Radier\nMuros\nTechumbre",
+                    self.prefs.dark,
+                    520.0,
+                    3,
                 );
 
                 ui.add_space(6.0);
@@ -445,10 +444,12 @@ impl App {
                 ui.label(
                     "Pide el archivo de oferta o conéctate a la red y lee el buzón. Luego acéptala aquí.",
                 );
-                ui.add(
-                    egui::TextEdit::singleline(&mut self.accept_path)
-                        .desired_width(420.0)
-                        .hint_text("ruta al archivo de oferta"),
+                show_field(
+                    ui,
+                    &mut self.accept_path,
+                    "ruta al archivo de oferta",
+                    self.prefs.dark,
+                    420.0,
                 );
                 if ui.button("Aceptar oferta").clicked() {
                     self.accept_offer(slug, id);
@@ -509,11 +510,7 @@ impl App {
         ui.collapsing("Avanzado", |ui| {
             ui.label("Código / onion de la otra persona (para encontrarse)");
             ui.horizontal(|ui| {
-                ui.add(
-                    egui::TextEdit::singleline(&mut self.bootstrap)
-                        .desired_width(360.0)
-                        .hint_text("xxxx.onion"),
-                );
+                show_field(ui, &mut self.bootstrap, "xxxx.onion", self.prefs.dark, 360.0);
                 let net_up = self.overlay.is_some();
                 if ui
                     .add_enabled(net_up, egui::Button::new("Usar este código"))
@@ -531,10 +528,12 @@ impl App {
             }
             ui.horizontal(|ui| {
                 ui.label("Tu código");
-                ui.add(
-                    egui::TextEdit::singleline(&mut self.onion)
-                        .desired_width(360.0)
-                        .hint_text("aparece al conectar"),
+                show_field(
+                    ui,
+                    &mut self.onion,
+                    "aparece al conectar",
+                    self.prefs.dark,
+                    360.0,
                 );
             });
             ui.horizontal(|ui| {
@@ -544,11 +543,7 @@ impl App {
                 {
                     self.announce_work(entry);
                 }
-                ui.add(
-                    egui::TextEdit::singleline(&mut self.lookup_name)
-                        .desired_width(160.0)
-                        .hint_text("nombre de obra"),
-                );
+                show_field(ui, &mut self.lookup_name, "nombre de obra", self.prefs.dark, 160.0);
                 if ui
                     .add_enabled(self.overlay.is_some(), egui::Button::new("Buscar"))
                     .clicked()
@@ -605,10 +600,12 @@ impl App {
     fn show_backup(&mut self, ui: &mut egui::Ui, slug: &str) {
         ui.collapsing("Respaldo", |ui| {
             ui.label("Copia de seguridad de esta obra (llave en hexadecimal, no es una frase BIP39).");
-            ui.add(
-                egui::TextEdit::singleline(&mut self.backup_path)
-                    .desired_width(420.0)
-                    .hint_text("ruta del archivo (opcional)"),
+            show_field(
+                ui,
+                &mut self.backup_path,
+                "ruta del archivo (opcional)",
+                self.prefs.dark,
+                420.0,
             );
             ui.horizontal(|ui| {
                 if ui.button("Exportar respaldo").clicked() {
@@ -1003,36 +1000,122 @@ fn net_badge(ui: &mut egui::Ui, light: NetLight, _line: &str) {
     ui.colored_label(color, format!("● {text}"));
 }
 
+fn edit_fg(dark: bool) -> Color32 {
+    if dark {
+        Color32::WHITE
+    } else {
+        Color32::from_rgb(12, 14, 18)
+    }
+}
+
+fn edit_bg(dark: bool) -> Color32 {
+    if dark {
+        Color32::from_rgb(72, 78, 94)
+    } else {
+        Color32::WHITE
+    }
+}
+
+fn field_single<'a>(value: &'a mut String, hint: &str, dark: bool) -> egui::TextEdit<'a> {
+    egui::TextEdit::singleline(value)
+        .hint_text(hint.to_owned())
+        .text_color(edit_fg(dark))
+        .frame(false)
+}
+
+fn show_field(
+    ui: &mut egui::Ui,
+    value: &mut String,
+    hint: &str,
+    dark: bool,
+    width: f32,
+) -> egui::Response {
+    let stroke = if dark {
+        Color32::from_rgb(170, 176, 190)
+    } else {
+        Color32::from_rgb(90, 96, 108)
+    };
+    egui::Frame::none()
+        .fill(edit_bg(dark))
+        .stroke(egui::Stroke::new(1.0, stroke))
+        .inner_margin(4.0)
+        .rounding(4.0)
+        .show(ui, |ui| {
+            ui.add(field_single(value, hint, dark).desired_width(width))
+        })
+        .inner
+}
+
+fn show_multiline(
+    ui: &mut egui::Ui,
+    value: &mut String,
+    hint: &str,
+    dark: bool,
+    width: f32,
+    rows: usize,
+) -> egui::Response {
+    let stroke = if dark {
+        Color32::from_rgb(170, 176, 190)
+    } else {
+        Color32::from_rgb(90, 96, 108)
+    };
+    egui::Frame::none()
+        .fill(edit_bg(dark))
+        .stroke(egui::Stroke::new(1.0, stroke))
+        .inner_margin(4.0)
+        .rounding(4.0)
+        .show(ui, |ui| {
+            ui.add(
+                egui::TextEdit::multiline(value)
+                    .hint_text(hint.to_owned())
+                    .text_color(edit_fg(dark))
+                    .frame(false)
+                    .desired_width(width)
+                    .desired_rows(rows),
+            )
+        })
+        .inner
+}
+
+fn paint_widgets(v: &mut egui::Visuals, fg: Color32) {
+    v.widgets.noninteractive.fg_stroke.color = fg;
+    v.widgets.inactive.fg_stroke.color = fg;
+    v.widgets.hovered.fg_stroke.color = fg;
+    v.widgets.active.fg_stroke.color = fg;
+    v.widgets.open.fg_stroke.color = fg;
+}
+
 fn apply_theme(ctx: &egui::Context, dark: bool) {
     let mut v = if dark {
         egui::Visuals::dark()
     } else {
         egui::Visuals::light()
     };
+    let fg = edit_fg(dark);
+    v.override_text_color = Some(fg);
+    paint_widgets(&mut v, fg);
     if dark {
-        v.override_text_color = Some(Color32::from_rgb(236, 239, 244));
-        v.extreme_bg_color = Color32::from_rgb(14, 16, 20);
+        v.extreme_bg_color = Color32::from_rgb(72, 78, 94);
         v.faint_bg_color = Color32::from_rgb(28, 32, 40);
-        v.widgets.inactive.bg_fill = Color32::from_rgb(40, 45, 56);
-        v.widgets.hovered.bg_fill = Color32::from_rgb(54, 60, 74);
-        v.widgets.active.bg_fill = Color32::from_rgb(54, 60, 74);
-        v.widgets.inactive.fg_stroke.color = Color32::from_rgb(236, 239, 244);
-        v.widgets.hovered.fg_stroke.color = Color32::WHITE;
-        v.widgets.noninteractive.fg_stroke.color = Color32::from_rgb(200, 206, 216);
+        v.widgets.inactive.bg_fill = Color32::from_rgb(36, 40, 50);
+        v.widgets.hovered.bg_fill = Color32::from_rgb(50, 56, 70);
+        v.widgets.active.bg_fill = Color32::from_rgb(50, 56, 70);
+        v.widgets.open.bg_fill = Color32::from_rgb(50, 56, 70);
         v.window_fill = Color32::from_rgb(20, 22, 28);
         v.panel_fill = Color32::from_rgb(20, 22, 28);
+        v.selection.bg_fill = Color32::from_rgb(50, 90, 160);
+        v.selection.stroke.color = fg;
     } else {
-        v.override_text_color = Some(Color32::from_rgb(16, 18, 22));
         v.extreme_bg_color = Color32::WHITE;
         v.faint_bg_color = Color32::from_rgb(236, 238, 242);
         v.widgets.inactive.bg_fill = Color32::from_rgb(242, 244, 247);
         v.widgets.hovered.bg_fill = Color32::from_rgb(226, 230, 238);
         v.widgets.active.bg_fill = Color32::from_rgb(226, 230, 238);
-        v.widgets.inactive.fg_stroke.color = Color32::from_rgb(16, 18, 22);
-        v.widgets.hovered.fg_stroke.color = Color32::BLACK;
-        v.widgets.noninteractive.fg_stroke.color = Color32::from_rgb(50, 56, 66);
+        v.widgets.open.bg_fill = Color32::from_rgb(226, 230, 238);
         v.window_fill = Color32::from_rgb(248, 249, 251);
         v.panel_fill = Color32::from_rgb(248, 249, 251);
+        v.selection.bg_fill = Color32::from_rgb(180, 205, 245);
+        v.selection.stroke.color = fg;
     }
     ctx.set_visuals(v);
 }
