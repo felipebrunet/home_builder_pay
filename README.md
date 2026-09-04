@@ -4,11 +4,11 @@
 
 Peer-to-peer Bitcoin escrow for **work packages** plus a **performance bond**. Two parties — the principal (`mandante`) and the contractor (`contratista`) — lock funds in a Taproot 2-of-2 (MuSig2). There is no server.
 
-This is an MVP: desktop CLI + **native product GUI** (Windows-first, egui). Regtest/signet. The throwaway localhost `hbp-ui` is **not** the product.
+This is an MVP: desktop CLI + **native product GUI** (Windows-first, egui). The product GUI is **Signet only** (no mainnet, no network picker). Regtest remains for CLI/tests. The throwaway localhost `hbp-ui` is **not** the product.
 
 Full protocol, architecture, roadmap, and **where the last session left off**: [docs/PROJECT.md](docs/PROJECT.md) (start at section 0). Fee-burn shapes: [docs/FEE_BURN.md](docs/FEE_BURN.md). Windows exe + Tor: [docs/WINDOWS.md](docs/WINDOWS.md). Tor/DHT: [docs/NETWORK.md](docs/NETWORK.md). Mined Signet happy path: [docs/SIGNET_HAPPY_PATH.md](docs/SIGNET_HAPPY_PATH.md).
 
-Current milestone: **fee-burn t1/t2 foundation + native GUI + Tor/DHT scaffolding**, on top of MVP-0 and the mined catalog (**136 PASS / 6 human-only**). Product dispute path is **fee-burn** (50% then 50% as miner fees). Cooperative MuSig2 stays. Arbiter UI is hard-off. Legacy unwind/MAD/arbiter remain for the catalog: [docs/DISPUTE.md](docs/DISPUTE.md).
+Current milestone: **fee-burn t1/t2 foundation + Signet-only native GUI + Tor + TCP Kademlia DHT**, on top of MVP-0 and the mined catalog (**136 PASS / 6 human-only**). Product dispute path is **fee-burn** (50% then 50% as miner fees). Cooperative MuSig2 stays. Arbiter UI is hard-off. Legacy unwind/MAD/arbiter remain for the catalog: [docs/DISPUTE.md](docs/DISPUTE.md).
 
 ## Protocol (short)
 
@@ -115,7 +115,7 @@ Keys default to **plaintext** in `.hbp/identity.json`. Pass `--passphrase` (or `
 | `hbp-core` | contract JSON, state machine, nonce journal, stage=bond helpers |
 | `hbp-bitcoin` | Taproot descriptors, MuSig2 key-path, fee-burn t1/t2 txs, CLTV unwind, funding checks |
 | `hbp-cli` | file protocol (`hbp`) |
-| `hbp-net` | Tor SOCKS + DHT scaffolding (same JSON as files) |
+| `hbp-net` | Tor SOCKS5 + TCP Kademlia DHT (same JSON as files) |
 | `hbp-app` | native product GUI (`home_builder_pay`) |
 | `hbp-ui` | throwaway localhost test wizard |
 
@@ -125,4 +125,4 @@ Keys default to **plaintext** in `.hbp/identity.json`. Pass `--passphrase` (or `
 
 ## Not in this MVP
 
-Android APK, mainnet, arbiter UX, WAN DHT, in-process Tor hidden service, mined fee-burn E2E, Felipe’s local Signet unhappy tests. Tor + DHT are **scaffolded** (see [docs/NETWORK.md](docs/NETWORK.md)), not a finished overlay.
+Android APK, mainnet product path, arbiter UX, a public DHT bootstrap cloud, mined fee-burn E2E, Felipe’s local Signet unhappy tests. Product networking is Tor SOCKS5 + a TCP Kademlia overlay (see [docs/NETWORK.md](docs/NETWORK.md)). Two-PC live Tor was **not** run in the Linux VM that landed this; localhost 2/3-node DHT tests were.

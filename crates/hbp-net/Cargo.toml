@@ -4,10 +4,11 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
-description = "Tor point-to-point and DHT discovery scaffolding for home_builder_pay"
+description = "Tor point-to-point and TCP Kademlia DHT for home_builder_pay"
 
 [dependencies]
 hbp-core.workspace = true
+getrandom.workspace = true
 hex.workspace = true
 serde.workspace = true
 serde_json.workspace = true

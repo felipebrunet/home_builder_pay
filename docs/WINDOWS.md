@@ -19,6 +19,8 @@ cargo build -p hbp-cli --release
 
 Works directory default: `%USERPROFILE%\Documents\home_builder_pay` (override `HBP_WORKS`).
 
+**Product network is Signet only.** The GUI has no network picker and will not create or import mainnet works. Regtest remains for the CLI, catalog scripts, and unit tests — not the product window.
+
 ## Cross-compile from Linux (optional)
 
 ```bash
@@ -31,21 +33,38 @@ This environment did **not** produce a tested `.exe`. Treat the GNU target as a 
 
 ## Tor (required for Windows v1 networking)
 
-Point-to-point traffic goes through SOCKS5. The app does not ship Tor inside the Rust crate; it expects a local `tor.exe`.
+Point-to-point and DHT RPCs to `.onion` go through SOCKS5. The crate does not vendor Tor; it drives a local `tor.exe`.
 
-**Workable approach**
+**Workable approach (Expert Bundle)**
 
-1. Download the [Tor Expert Bundle](https://www.torproject.org/download/tor/) (Windows).
-2. Place `tor.exe` (and `geoip`) either:
-   - next to `home_builder_pay.exe`, or
-   - in `%LOCALAPPDATA%\Tor\tor.exe`, or
-   - set `TOR_BINARY` to the full path.
-3. Run Tor so it listens on `127.0.0.1:9050` (default). Override with `HBP_TOR_SOCKS=127.0.0.1:9050`.
-4. In the GUI: “Probar SOCKS Tor”. Green means something accepted TCP on that port — not that a hidden service exists.
+1. Download the [Tor Expert Bundle](https://www.torproject.org/download/tor/) (Windows). Unzip `tor.exe` + `geoip`.
+2. Place them either next to `home_builder_pay.exe`, or `%LOCALAPPDATA%\Tor\tor.exe`, or set `TOR_BINARY`.
+3. In the GUI: **Arrancar DHT**, then **Tor + onion**. The app writes `%USERPROFILE%\Documents\home_builder_pay\tor\torrc`:
 
-The app **connects** to a peer `.onion` already written in the offer / DHT announce. It does **not** yet spawn `HiddenServiceDir` for you. File-passing remains the fallback.
+```
+SocksPort 127.0.0.1:9050
+ControlPort 127.0.0.1:9051
+CookieAuthentication 1
+HiddenServiceDir …\tor\hidden_service
+HiddenServicePort 80 127.0.0.1:3848
+```
 
-See [NETWORK.md](NETWORK.md).
+   and tries to spawn `tor.exe -f torrc`. When `hidden_service\hostname` appears, that onion is the advertised DHT address (`xxx.onion:80`).
+4. If you already run the Expert Bundle yourself, keep SOCKS on `9050` (`HBP_TOR_SOCKS`) and either add the same `HiddenServicePort` line or let the app `ADD_ONION` via the control port (`HBP_TOR_CONTROL` / `HBP_TOR_COOKIE`).
+5. Give the other laptop your onion as **bootstrap** (`HBP_DHT_BOOTSTRAP=xxx.onion:80`). There is no public bootstrap list yet.
+
+Manual torrc (if you refuse the spawn):
+
+```
+# hbp-product.torrc
+SocksPort 9050
+HiddenServiceDir C:\Users\YOU\AppData\Local\Tor\hbp_hs
+HiddenServicePort 80 127.0.0.1:3848
+```
+
+Then paste the hostname into the GUI “onion propio” field.
+
+File-passing remains fallback if Tor is down. See [NETWORK.md](NETWORK.md).
 
 ## What the GUI does in this PR
 
@@ -53,10 +72,13 @@ See [NETWORK.md](NETWORK.md).
 - Create fee-burn offer with t1/t2 and **stage amount = bond** (10% → N equal stages)
 - Accept an offer from a file path
 - Stage board
-- Tor status + local DHT announce
-- Import / export backup JSON (secret hex, not BIP39)
+- Signet locked (no mainnet, no network picker)
+- Tor spawn / attach + TCP Kademlia DHT (bootstrap, announce, lookup, deliver)
+- Import / export backup JSON (secret hex, not BIP39; Signet only)
 - Arbiter hidden (`ARBITER_ENABLED = false`)
 
-**Not in the window yet:** PSBT funding, MuSig2 reception, signed fee-burn arming, WAN DHT.
+**Not in the window yet:** PSBT funding, MuSig2 reception, signed fee-burn arming.
+
+**Not verified here:** two Windows PCs over a live Tor circuit (this VM has no Expert Bundle / no Signet laptops). The overlay is verified with 2- and 3-node localhost tests.
 
 `cargo run -p hbp-ui` (http://127.0.0.1:3847) is the throwaway test wizard. Do not ship it as the product.

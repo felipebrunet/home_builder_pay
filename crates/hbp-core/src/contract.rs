@@ -17,6 +17,10 @@ pub enum Network {
     Bitcoin,
 }
 
+/// Product GUI and product-path contracts: Signet only. No mainnet.
+/// Regtest stays for CLI / catalog / unit tests.
+pub const PRODUCT_NETWORK: Network = Network::Signet;
+
 impl std::str::FromStr for Network {
     type Err = Error;
 

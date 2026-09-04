@@ -10,9 +10,12 @@ use hbp_app::{
 use hbp_bitcoin::{sign_body, verify_body};
 use hbp_core::{
     bond_minor, minor_from_major, Offer, Role, SignedContract, Unit, ARBITER_ENABLED,
-    DEFAULT_BOND_BPS,
+    DEFAULT_BOND_BPS, PRODUCT_NETWORK,
 };
-use hbp_net::{tor_status, DhtNode, TorConfig, WorkAnnounce, FILE_FALLBACK};
+use hbp_net::{
+    bring_up_tor, parse_bootstrap_list, tor_status, OverlayConfig, OverlayHandle, PeerAddr,
+    TorConfig, TorRuntime, WorkAnnounce, FILE_FALLBACK,
+};
 
 fn main() -> eframe::Result<()> {
     let opts = eframe::NativeOptions {
@@ -33,7 +36,6 @@ struct App {
     selected: Option<String>,
     new_name: String,
     new_role: Role,
-    new_network: String,
     total_major: String,
     unit: String,
     t1: String,
@@ -42,8 +44,11 @@ struct App {
     accept_path: String,
     backup_path: String,
     log: String,
-    dht: DhtNode,
+    overlay: Option<OverlayHandle>,
+    tor_rt: Option<TorRuntime>,
     onion: String,
+    bootstrap: String,
+    lookup_name: String,
     last_error: String,
 }
 
@@ -58,7 +63,6 @@ impl App {
             selected: None,
             new_name: String::new(),
             new_role: Role::Mandante,
-            new_network: "signet".into(),
             total_major: "100".into(),
             unit: "USD".into(),
             t1: String::new(),
@@ -66,9 +70,12 @@ impl App {
             stage_descs: String::new(),
             accept_path: String::new(),
             backup_path: String::new(),
-            log: "Producto nativo (Windows). Árbitro: off. Disputa: fee-burn t1/t2.\n".into(),
-            dht: DhtNode::new([0x68, 0x62, 0x70, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1]),
+            log: "Producto nativo (Windows). Red: Signet only. Árbitro: off. Disputa: fee-burn t1/t2. Tor+DHT.\n".into(),
+            overlay: None,
+            tor_rt: None,
             onion: String::new(),
+            bootstrap: std::env::var("HBP_DHT_BOOTSTRAP").unwrap_or_default(),
+            lookup_name: String::new(),
             last_error: String::new(),
         }
     }
@@ -99,7 +106,7 @@ impl eframe::App for App {
             ui.horizontal(|ui| {
                 ui.heading("home_builder_pay");
                 ui.separator();
-                ui.label(RichText::new("obra + boleta 10%  ·  fee-burn t1/t2  ·  Tor + DHT").weak());
+                ui.label(RichText::new("Signet  ·  obra + boleta 10%  ·  fee-burn t1/t2  ·  Tor + DHT").weak());
                 if !ARBITER_ENABLED {
                     ui.label(RichText::new("árbitro off").color(Color32::from_rgb(180, 140, 80)));
                 }
@@ -139,28 +146,24 @@ impl eframe::App for App {
                     ui.radio_value(&mut self.new_role, Role::Mandante, "mandante");
                     ui.radio_value(&mut self.new_role, Role::Contratista, "contratista");
                 });
-                ui.horizontal(|ui| {
-                    ui.label("red");
-                    ui.text_edit_singleline(&mut self.new_network);
-                });
+                ui.label(
+                    RichText::new("red: Signet (única — no mainnet, no selector)")
+                        .small()
+                        .weak(),
+                );
                 if ui.button("Crear obra + identidad").clicked() {
-                    match hbp_core::Network::from_str(&self.new_network) {
-                        Ok(net) => match self.store.create_work(
-                            &self.new_name,
-                            self.new_role,
-                            net,
-                            None,
-                        ) {
-                            Ok(e) => {
-                                self.note(format!(
-                                    "obra '{}' ({}) — identidad nueva",
-                                    e.name, e.slug
-                                ));
-                                self.selected = Some(e.slug);
-                                self.new_name.clear();
-                            }
-                            Err(e) => self.fail(e),
-                        },
+                    match self
+                        .store
+                        .create_product_work(&self.new_name, self.new_role, None)
+                    {
+                        Ok(e) => {
+                            self.note(format!(
+                                "obra '{}' ({}) — identidad Signet",
+                                e.name, e.slug
+                            ));
+                            self.selected = Some(e.slug);
+                            self.new_name.clear();
+                        }
                         Err(e) => self.fail(e),
                     }
                 }
@@ -186,9 +189,7 @@ impl eframe::App for App {
         egui::CentralPanel::default().show(ctx, |ui| {
             let Some(slug) = self.selected.clone() else {
                 ui.label("Elige o crea una obra. Cada obra tiene su propia identidad (no un xpub).");
-                ui.label(
-                    "hbp-ui (localhost:3847) no es este producto — es un wizard de prueba.",
-                );
+                ui.label("Red de producto: Signet. No hay mainnet. hbp-ui localhost no es este producto.");
                 return;
             };
             self.show_work(ui, &slug);
@@ -289,41 +290,68 @@ impl App {
             }
 
             ui.separator();
-            ui.heading("Red: Tor + DHT");
+            ui.heading("Red: Tor + DHT (Signet)");
             ui.label(format!(
-                "Canal de contrato: mismos JSON que el CLI. Fallback: {FILE_FALLBACK}."
+                "Kademlia TCP. .onion via SOCKS5. Fallback/dev: {FILE_FALLBACK}. Sin bootstrap público — pega un peer host:port."
             ));
+            if let Some(o) = &self.overlay {
+                ui.label(format!(
+                    "listen {}  advertised {}  peers {}  records {}  node {}",
+                    o.local_addr(),
+                    o.advertised(),
+                    o.peer_count(),
+                    o.store_len(),
+                    &o.node_id_hex()[..12]
+                ));
+            } else {
+                ui.label("DHT apagado.");
+            }
             ui.horizontal(|ui| {
-                ui.label("onion propio (conocido, va en el anuncio)");
+                if ui.button("Arrancar DHT").clicked() {
+                    self.start_overlay();
+                }
+                if ui.button("Tor + onion").clicked() {
+                    self.start_tor();
+                }
+                if ui.button("Probar SOCKS").clicked() {
+                    let st = tor_status(&TorConfig::from_env());
+                    self.note(format!(
+                        "tor socks={} reachable={} — {}",
+                        st.socks, st.reachable, st.detail
+                    ));
+                }
+            });
+            ui.horizontal(|ui| {
+                ui.label("onion propio");
                 ui.text_edit_singleline(&mut self.onion);
             });
-            if ui.button("Probar SOCKS Tor").clicked() {
-                let st = tor_status(&TorConfig::from_env());
-                self.note(format!(
-                    "tor socks={} reachable={} — {}",
-                    st.socks, st.reachable, st.detail
-                ));
-                if let Some(p) = st.suggested_tor_binary {
-                    self.note(format!("tor.exe encontrado: {p}"));
-                } else {
-                    self.note(
-                        "no hay tor.exe al lado del exe; ver docs/WINDOWS.md (Tor Expert Bundle)",
-                    );
+            ui.horizontal(|ui| {
+                ui.label("bootstrap (host:port, …)");
+                ui.text_edit_singleline(&mut self.bootstrap);
+                if ui.button("Bootstrap").clicked() {
+                    self.do_bootstrap();
+                }
+            });
+            ui.horizontal(|ui| {
+                if ui.button("Anunciar esta obra").clicked() {
+                    self.announce_work(&entry);
+                }
+                ui.label("lookup");
+                ui.text_edit_singleline(&mut self.lookup_name);
+                if ui.button("Buscar").clicked() {
+                    self.lookup_work();
+                }
+            });
+            if ui.button("Enviar offer al publisher (último lookup / onion)").clicked() {
+                self.send_offer_over_net(slug);
+            }
+            if ui.button("Leer inbox").clicked() {
+                if let Some(o) = &self.overlay {
+                    for m in o.take_inbox() {
+                        self.note(format!("inbox {}", m.kind()));
+                    }
                 }
             }
-            if ui.button("Anunciar obra en DHT local").clicked() {
-                let ann = WorkAnnounce {
-                    work_name: entry.name.clone(),
-                    onion: self.onion.clone(),
-                    offer_id: None,
-                    role: format!("{:?}", entry.role).to_lowercase(),
-                };
-                match self.dht.announce_work(&ann) {
-                    Ok(k) => self.note(format!("dht put {} (local; WAN aún no)", hex::encode(k))),
-                    Err(e) => self.fail(e),
-                }
-            }
-            ui.label(format!("registros DHT en este proceso: {}", self.dht.len()));
 
             ui.separator();
             ui.heading("Respaldo");
@@ -424,6 +452,171 @@ impl App {
         }
     }
 
+    fn apply_overlay_hints(&self) {
+        let Some(o) = &self.overlay else {
+            return;
+        };
+        let socks = TorConfig::from_env().socks();
+        if let Ok(addr) = socks.parse::<std::net::SocketAddr>() {
+            o.set_socks(Some(addr));
+        }
+        let onion = self.onion.trim();
+        if onion.is_empty() {
+            return;
+        }
+        let parsed = PeerAddr::parse(onion).or_else(|_| PeerAddr::parse(&format!("{onion}:80")));
+        if let Ok(p) = parsed {
+            o.set_advertised(p);
+        }
+    }
+
+    fn start_overlay(&mut self) {
+        if self.overlay.is_some() {
+            self.apply_overlay_hints();
+            self.note("DHT already listening");
+            return;
+        }
+        let mut cfg = OverlayConfig::default();
+        cfg.listen = "127.0.0.1:3848".parse().expect("static");
+        let handle = match OverlayHandle::bind(cfg.clone()) {
+            Ok(h) => h,
+            Err(_) => {
+                cfg.listen = "127.0.0.1:0".parse().expect("static");
+                match OverlayHandle::bind(cfg) {
+                    Ok(h) => h,
+                    Err(e) => return self.fail(e),
+                }
+            }
+        };
+        self.note(format!("DHT listen {}", handle.local_addr()));
+        self.overlay = Some(handle);
+        self.apply_overlay_hints();
+    }
+
+    fn start_tor(&mut self) {
+        if self.overlay.is_none() {
+            self.start_overlay();
+        }
+        let port = match &self.overlay {
+            Some(o) => o.local_addr().port(),
+            None => return,
+        };
+        match bring_up_tor(&self.store.root, port) {
+            Ok(rt) => {
+                let detail = rt.detail.clone();
+                let onion = rt.onion.clone();
+                let socks = rt.socks;
+                if let Some(o) = &self.overlay {
+                    o.set_socks(Some(socks));
+                    if let Some(ref onion) = onion {
+                        o.set_advertised(PeerAddr::new(onion.clone(), 80));
+                    }
+                }
+                self.tor_rt = Some(rt);
+                self.note(detail);
+                if let Some(onion) = onion {
+                    self.onion = onion.clone();
+                    self.note(format!("advertised {onion}:80 via {socks}"));
+                }
+            }
+            Err(e) => self.fail(e),
+        }
+    }
+
+    fn do_bootstrap(&mut self) {
+        let Some(o) = &self.overlay else {
+            return self.fail("arranca el DHT primero");
+        };
+        let peers = match parse_bootstrap_list(&self.bootstrap) {
+            Ok(p) => p,
+            Err(e) => return self.fail(e),
+        };
+        if peers.is_empty() {
+            return self.fail("HBP_DHT_BOOTSTRAP o el campo bootstrap: host:port (onion o 127.0.0.1)");
+        }
+        match o.bootstrap(&peers) {
+            Ok(n) => self.note(format!("bootstrap ok {n}/{} peers now {}", peers.len(), o.peer_count())),
+            Err(e) => self.fail(e),
+        }
+    }
+
+    fn announce_work(&mut self, entry: &WorkEntry) {
+        let Some(o) = &self.overlay else {
+            return self.fail("arranca el DHT primero");
+        };
+        let onion = if self.onion.trim().is_empty() {
+            o.advertised().display()
+        } else {
+            self.onion.trim().to_string()
+        };
+        let ann = WorkAnnounce {
+            work_name: entry.name.clone(),
+            onion,
+            offer_id: None,
+            role: format!("{:?}", entry.role).to_lowercase(),
+        };
+        match o.announce_work(&ann) {
+            Ok(k) => self.note(format!(
+                "DHT STORE {} → {} peers",
+                hex::encode(k),
+                o.peer_count()
+            )),
+            Err(e) => self.fail(e),
+        }
+    }
+
+    fn lookup_work(&mut self) {
+        let Some(o) = &self.overlay else {
+            return self.fail("arranca el DHT primero");
+        };
+        let name = if self.lookup_name.trim().is_empty() {
+            return self.fail("nombre de obra a buscar");
+        } else {
+            self.lookup_name.trim().to_string()
+        };
+        match o.lookup_work(&name) {
+            Ok(Some(ann)) => {
+                self.note(format!(
+                    "found '{}' onion={} role={}",
+                    ann.work_name, ann.onion, ann.role
+                ));
+                if ann.onion.contains(".onion") || ann.onion.contains(':') {
+                    self.onion = ann.onion;
+                }
+            }
+            Ok(None) => self.note("DHT miss (comparte un bootstrap con la otra máquina)"),
+            Err(e) => self.fail(e),
+        }
+    }
+
+    fn send_offer_over_net(&mut self, slug: &str) {
+        let Some(o) = &self.overlay else {
+            return self.fail("arranca el DHT primero");
+        };
+        let offer = match self.store.load_offer(slug) {
+            Ok(Some(off)) => off,
+            Ok(None) => return self.fail("no hay 00-offer.json"),
+            Err(e) => return self.fail(e),
+        };
+        if offer.body.network != PRODUCT_NETWORK {
+            return self.fail("offer is not Signet");
+        }
+        let dest = match PeerAddr::parse(&self.onion) {
+            Ok(p) => p,
+            Err(_) => {
+                // onion without port → :80
+                match PeerAddr::parse(&format!("{}:80", self.onion.trim())) {
+                    Ok(p) => p,
+                    Err(e) => return self.fail(e),
+                }
+            }
+        };
+        match o.deliver(&dest, &hbp_net::NetMessage::Offer { offer }) {
+            Ok(()) => self.note(format!("offer delivered to {dest}")),
+            Err(e) => self.fail(e),
+        }
+    }
+
     fn accept_offer(&mut self, slug: &str, id: &hbp_bitcoin::Identity) {
         let path = self.accept_path.trim();
         if path.is_empty() {
@@ -436,6 +629,9 @@ impl App {
             Some(o) => o,
             None => return self.fail("no pude leer el offer"),
         };
+        if offer.body.network != PRODUCT_NETWORK {
+            return self.fail("product GUI is Signet-only; this offer is not Signet");
+        }
         if let Err(e) = verify_body(
             &offer.body.mandante_pubkey,
             &offer.mandante_sig,

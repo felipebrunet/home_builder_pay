@@ -1804,6 +1804,7 @@ dependencies = [
 name = "hbp-net"
 version = "0.1.0"
 dependencies = [
+ "getrandom 0.2.17",
  "hbp-core",
  "hex",
  "serde",

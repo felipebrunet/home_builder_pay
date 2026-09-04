@@ -5,7 +5,7 @@ use anyhow::{bail, Context, Result};
 use hbp_bitcoin::Identity;
 use hbp_core::{
     bond_minor, suggest_equal_stage_minors, ContractBody, DisputePolicy, Network, Offer, PartidaSpec,
-    Role, Unit, DEFAULT_BOND_BPS,
+    Role, Unit, DEFAULT_BOND_BPS, PRODUCT_NETWORK,
 };
 use serde::{Deserialize, Serialize};
 
@@ -102,6 +102,9 @@ impl WorkStore {
             bail!("work name is required");
         }
         let slug = slugify(name);
+        if network == Network::Bitcoin {
+            bail!("mainnet is not offered; the product network is Signet");
+        }
         if self.index.works.iter().any(|w| w.slug == slug) {
             bail!("a work named '{name}' already exists");
         }
@@ -124,6 +127,16 @@ impl WorkStore {
         self.index.works.push(entry.clone());
         self.save_index()?;
         Ok(entry)
+    }
+
+    /// Product GUI: always Signet. No network picker.
+    pub fn create_product_work(
+        &mut self,
+        name: &str,
+        role: Role,
+        secret_hex: Option<&str>,
+    ) -> Result<WorkEntry> {
+        self.create_work(name, role, PRODUCT_NETWORK, secret_hex)
     }
 
     pub fn load_identity(&self, slug: &str) -> Result<Identity> {
@@ -245,6 +258,12 @@ pub fn import_backup(store: &mut WorkStore, backup: &WorkBackup) -> Result<WorkE
     if backup.version != 1 {
         bail!("unsupported backup version");
     }
+    if backup.entry.network == Network::Bitcoin || backup.identity.network == Network::Bitcoin {
+        bail!("mainnet backups are not accepted");
+    }
+    if backup.entry.network != PRODUCT_NETWORK || backup.identity.network != PRODUCT_NETWORK {
+        bail!("product GUI is Signet-only (got {:?})", backup.entry.network);
+    }
     let slug = backup.entry.slug.clone();
     if store.index.works.iter().any(|w| w.slug == slug) {
         bail!("work '{}' already exists", backup.entry.name);
@@ -301,13 +320,54 @@ mod tests {
     }
 
     #[test]
+    fn product_rejects_mainnet() {
+        let tmp = std::env::temp_dir().join(format!("hbp-app-mainnet-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&tmp);
+        let mut store = WorkStore::open(tmp.join("a")).unwrap();
+        let err = store
+            .create_work("X", Role::Mandante, Network::Bitcoin, None)
+            .unwrap_err();
+        assert!(err.to_string().contains("mainnet"));
+        let reg = store
+            .create_work("Reg", Role::Mandante, Network::Regtest, None)
+            .unwrap();
+        assert_eq!(reg.network, Network::Regtest);
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn import_rejects_mainnet_and_regtest_backups() {
+        let tmp = std::env::temp_dir().join(format!("hbp-app-bak-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&tmp);
+        let mut store = WorkStore::open(tmp.join("a")).unwrap();
+        let mut id = hbp_bitcoin::generate_identity(Network::Bitcoin).unwrap();
+        id.role = Some(Role::Mandante);
+        let bak = WorkBackup {
+            version: 1,
+            entry: WorkEntry {
+                name: "X".into(),
+                slug: "x".into(),
+                role: Role::Mandante,
+                network: Network::Bitcoin,
+            },
+            identity: id,
+            draft: None,
+            offer: None,
+        };
+        let err = import_backup(&mut store, &bak).unwrap_err();
+        assert!(err.to_string().contains("mainnet"));
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
     fn work_store_create_export_import() {
         let tmp = std::env::temp_dir().join(format!("hbp-app-test-{}", std::process::id()));
         let _ = fs::remove_dir_all(&tmp);
         let mut store = WorkStore::open(tmp.join("a")).unwrap();
         let entry = store
-            .create_work("Obra Norte", Role::Mandante, Network::Signet, None)
+            .create_product_work("Obra Norte", Role::Mandante, None)
             .unwrap();
+        assert_eq!(entry.network, PRODUCT_NETWORK);
         assert_eq!(entry.slug, "obra-norte");
         let id = store.load_identity(&entry.slug).unwrap();
         let draft = draft_equal_stages(

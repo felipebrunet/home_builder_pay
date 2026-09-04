@@ -6,7 +6,7 @@ Este archivo es la fuente de verdad de producto, protocolo, arquitectura, roadma
 
 **Si retomas en una sesión nueva: lee la sección 0 y el checklist de “listo / no listo”. El código en `crates/` es la implementación de MVP-0.**
 
-Última actualización: 2026-09-04 (fee-burn t1/t2 + GUI nativa Windows + Tor/DHT scaffolding).
+Última actualización: 2026-09-04 (Signet-only GUI + Tor + TCP Kademlia DHT).
 
 ---
 
@@ -21,8 +21,9 @@ Checkpoint de sesión. Actualizar **esta sección** cada vez que se cierre un hi
 3. **Boleta:** 10% del principal total (`bond_bps = 1000`). Principal y boleta siguen la misma regla de quema.
 4. **Partidas en la GUI:** el total se parte de modo que **cada partida = la boleta** (ej. 100 → boleta 10 → 10 partidas de 10).
 5. **Árbitro:** apagado (`ARBITER_ENABLED = false`). Sin nominación ni UI. El CLI legacy del catálogo todavía acepta `--dispute arbiter`.
-6. **Red Windows v1:** Tor (punto a punto) + DHT (descubrimiento). Archivos = fallback/dev. Enfoque Tor: [WINDOWS.md](WINDOWS.md), [NETWORK.md](NETWORK.md).
+6. **Red Windows v1:** Tor (punto a punto, SOCKS5 / onion) + **DHT Kademlia TCP** (descubrimiento real entre peers). Archivos = fallback/dev. No hay bootstrap público: se comparte un onion. [WINDOWS.md](WINDOWS.md), [NETWORK.md](NETWORK.md).
 7. Redeem = MuSig2 vía `hbp`. Fondeo = wallet externa / PSBT.
+8. **Red de producto: Signet.** La GUI no ofrece mainnet ni un selector que salga de Signet. Regtest queda para CLI / tests / catálogo.
 
 `hbp-ui` (localhost:3847) **no** es el producto. El producto es `home_builder_pay` (egui). Android APK = fase posterior; no bloquea este hito.
 
@@ -30,7 +31,7 @@ Checkpoint de sesión. Actualizar **esta sección** cada vez que se cierre un hi
 |---|---|
 | Fecha | 2026-09-04 |
 | Rama | `cursor/fee-burn-windows-gui-6be3` (PR sobre `master`) |
-| Hito | **Producto: fee-burn t1/t2 + GUI nativa + Tor/DHT scaffolding** (catálogo unwind/MAD/árbitro sigue minado como legacy) |
+| Hito | **Producto: fee-burn t1/t2 + GUI Signet-only + Tor + DHT Kademlia TCP** (catálogo unwind/MAD/árbitro legacy) |
 | Verificar al abrir | `cargo test --workspace`. GUI: `cargo run -p hbp-app`. UI de prueba (no producto): `cargo run -p hbp-ui` → http://127.0.0.1:3847 |
 | Nodo Bitcoin local | `/home/felipe/projects/btc_clients` — Core 31.1 regtest, RPC `:18443`. Los scripts usan `bitcoin-cli`; `hbp` no embebe el cliente. Signet no usa este nodo. |
 | Origin | `git@github.com-hbp:felipebrunet/home_builder_pay.git` (MIT, público) |
@@ -60,7 +61,8 @@ Checkpoint de sesión. Actualizar **esta sección** cada vez que se cierre un hi
 | 2026-08-31 | Fondeo Blue **camino 2**: xpub watch-only local (nunca al peer); Esplora lista UTXOs; `05-coin.json` = un prevout; `fund --mine/--peer`; Blue/Electrum firma el PSBT; `fund-combine`. Atomicidad 2-in intacta. | `hbp-bitcoin/watch.rs`, CLI, [BLUE_FUNDING.md](BLUE_FUNDING.md) |
 | 2026-09-01 | UI de prueba: red primero (Signet → `.ms`/`.cs`); log sticky; Esplora Blockstream + fallback mempool; paso 5 carga UTXO de `status`. | `hbp-ui` |
 | 2026-09-01 | **Signet feliz minado**: fondeo 2-in, recepción P1 (4 800 al contratista), boleta 1 000 sigue locked. Unwind boleta prefirmado, locktime 2026-09-22. | [SIGNET_HAPPY_PATH.md](SIGNET_HAPPY_PATH.md) |
-| 2026-09-04 | **Fee-burn t1/t2** (presigned MuSig2, 50%+50% a miners), boleta 10%, stage=bond, árbitro off, crate `hbp-net` (Tor SOCKS + DHT local), GUI nativa `hbp-app` / `home_builder_pay`. | [FEE_BURN.md](FEE_BURN.md), [WINDOWS.md](WINDOWS.md), [NETWORK.md](NETWORK.md) |
+| 2026-09-04 | **Fee-burn t1/t2** + GUI nativa + Tor SOCKS + DHT **local** (primer PR). | [FEE_BURN.md](FEE_BURN.md) |
+| 2026-09-04 | GUI **Signet-only**. DHT **Kademlia TCP** (2/3 nodos localhost). Tor spawn/`ADD_ONION` + torrc Windows. Sin bootstrap público; e2e Tor vivo no corrido en esta VM. | [NETWORK.md](NETWORK.md), [WINDOWS.md](WINDOWS.md) |
 
 Default de **producto** = **`fee_burn`**. JSON viejo sin campo `dispute` sigue siendo `unwind` (catálogo). MAD y árbitro minados como legacy. Catálogo: **136 PASS**, **6 NO TEST** (humano). **0 FAIL**.
 
@@ -71,7 +73,7 @@ Default de **producto** = **`fee_burn`**. JSON viejo sin campo `dispute` sigue s
 - Disputa default de producto = **fee-burn t1/t2** (50% + 50% a miners). Coop MuSig2 si hay acuerdo. Unwind/MAD/árbitro = legacy del catálogo.
 - Boleta **global** (`bond_bps = 1000` = 10%). Una partida viva a la vez. Bond **antes** de cualquier partida. GUI: cada partida = boleta.
 - Montos en fiat/UF; sats al quote/fondeo.
-- Red Windows v1: **Tor** p2p + **DHT** discovery (scaffolding en `hbp-net`). Archivos = fallback. Sin servidor.
+- Red Windows v1: **Tor** p2p + **DHT Kademlia TCP** (`hbp-net`). Archivos = fallback. Sin servidor. GUI **Signet only**.
 - Árbitro: **off** (`ARBITER_ENABLED = false`). Sin UI.
 - GUI nativa: crate `hbp-app`, binario `home_builder_pay`. `hbp-ui` localhost no es el producto.
 
@@ -101,9 +103,9 @@ Default de **producto** = **`fee_burn`**. JSON viejo sin campo `dispute` sigue s
 ### No listo / en pausa
 
 - Signet **unhappy** (timeout partida, timeout boleta con plazo corto, cancel coop). El feliz ya está. Plazos de demo: **2–3 h** de CLTV, carpetas **nuevas** (no `.ms`/`.cs`).
-- GUI nativa: **scaffolding usable** (obras con nombre, identidad por obra, offer/accept, t1/t2, tablero stage=bond, Tor/DHT status, backup). Falta: fondeo PSBT desde la GUI, MuSig2 de recepción, armado fee-burn firmado, unhappy Signet.
-- Tor SOCKS5 + DHT **local** listos; no hay overlay WAN ni hidden-service publisher embebido. Ver [NETWORK.md](NETWORK.md).
-- Android, mainnet, boleta que rueda. BIP39 no hace falta para `hbp` (backup = hex 256 bits / 64 chars). Electrum/Blue sí usan BIP39 para la hot wallet.
+- GUI nativa: obras, identidad por obra, offer/accept, t1/t2, tablero stage=bond, **Signet locked**, Tor+DHT overlay, backup. Falta: fondeo PSBT en la GUI, MuSig2 de recepción, armado fee-burn firmado, unhappy Signet.
+- Overlay DHT verificado en localhost (2 y 3 nodos). **No** se corrió Tor vivo entre dos PCs en esta VM. No hay lista pública de bootstrap.
+- Android, mainnet (producto), boleta que rueda. BIP39 no hace falta para `hbp` (backup = hex 256 bits / 64 chars). Electrum/Blue sí usan BIP39 para la hot wallet.
 - 6 ítems del catálogo humano: [SCENARIOS.md](SCENARIOS.md).
 - P2, unwind de boleta, MAD/árbitro **desde la UI de prueba**.
 - No se cedió atomicidad del fondeo P1: **no** hay camino de dos envíos sueltos a boleta+P1.
@@ -113,7 +115,7 @@ Default de **producto** = **`fee_burn`**. JSON viejo sin campo `dispute` sigue s
 1. Leer esta sección 0, [FEE_BURN.md](FEE_BURN.md), [WINDOWS.md](WINDOWS.md).
 2. Armar fee-burn: `hbp fee-burn-plan` produce txs **sin firmar**; falta el flujo MuSig2 de armado (`06-feeburn.json` firmado) y un E2E regtest que *mine* t1/t2.
 3. Cruzar `home_builder_pay.exe` en una máquina Windows con Tor Expert Bundle (docs ya escritos; no corrido aquí).
-4. DHT WAN / listen-connect por onion: el API está; no hay daemon.
+4. Probar dos PCs Windows + Tor Expert Bundle + Signet (bootstrap = onion del otro). Esta VM no lo corrió.
 5. Signet unhappy **no** es de este PR. No reusar `.ms`/`.cs` para plazos cortos. No cambiar opción C (Taproot + MuSig2 key-path). No mandar xpub al peer.
 
 On-chain = **opción C** + fee-burn presigned (no covenant). Redeem = `hbp`. Fondeo = PSBT 2-in. Identidad **por obra** en la GUI.
@@ -142,7 +144,7 @@ Copiar Bisq 2-de-2 con quema simétrica no sirve: los montos son asimétricos (2
 | 1 | Disputa | Default de producto **fee-burn t1/t2** (50%+50% a miners). Coop MuSig2 si hay acuerdo. Unwind / MAD / árbitro = legacy. Árbitro **off** en la UI. Ver [DISPUTE.md](DISPUTE.md), [FEE_BURN.md](FEE_BURN.md). |
 | 2 | Boleta | **Una, global**, `bond_bps = 1000` (10% del total). Se fondea una vez. **Una partida viva a la vez.** GUI: cada partida = boleta. |
 | 3 | Moneda | Contrato en USD / UF / CLP. Los sats se fijan **al quotear/fondear**. |
-| 4 | Red | **Sin servidor propio, siempre.** Windows v1: **Tor p2p** + **DHT** (scaffolding). Archivos = fallback. |
+| 4 | Red | **Sin servidor propio, siempre.** Windows v1: **Tor p2p** + **DHT Kademlia TCP**. Producto: **Signet only**. Archivos = fallback. |
 | 5 | Lenguaje | **100% Rust** |
 | 6 | On-chain (opción C) | Se **conserva** Taproot + MuSig2 key-path + hojas (`after(T)`, MAD NUMS, árbitro A&&M/A&&C). Catálogo 142 no transable. No se recorta a 2-de-2 `wsh`/Electrum para ganar Sparrow/Blue en el redeem. Fondeo: hot wallet externa (Sparrow/Blue/Core). Redeem: firmante que hable MuSig2 (hoy `hbp`; después Core/Ledger/Nunchuk si calzan). |
 
@@ -335,7 +337,7 @@ home_builder_pay/
     hbp-core/       # cero Bitcoin: tipos, estado, nonces, montos
     hbp-bitcoin/    # Taproot, MuSig2, fee-burn, PSBT/tx, verify-everything
     hbp-cli/        # binario `hbp`
-    hbp-net/        # Tor SOCKS + DHT (scaffolding)
+    hbp-net/        # Tor SOCKS + TCP Kademlia DHT
     hbp-app/        # GUI nativa `home_builder_pay` (egui)
     hbp-ui/         # wizard localhost (no es el producto)
   docs/PROJECT.md
@@ -452,7 +454,7 @@ Claves en claro por defecto; `--passphrase` las cifra. Toy. No mainnet.
 - witness A+M de 4 ítems (script path árbitro)
 - fee-burn: split 50/50, t1 continuación + fee, t2 OP_RETURN, coop key-path en escrow sin hojas
 
-**hbp-net** (4) — mensajes core, DHT local, SOCKS status
+**hbp-net** — mensajes core, Kademlia 2/3 nodos, SOCKS/torrc
 
 **hbp-app** (2) — stage=bond draft, backup import/export
 

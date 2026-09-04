@@ -20,6 +20,7 @@ pub use contract::{
     canonical_json, contract_id, decode_compressed_pubkey, sha256_bytes, validate_fee_burn_deadlines,
     ArbiterNomination, ContractBody, ContractId, DisputePolicy, Network, Offer, PartidaQuote,
     PartidaSpec, Quote, Role, SignedContract, Terms, ARBITER_ENABLED, DEFAULT_ARBITER_WINDOW_SECS,
+    PRODUCT_NETWORK,
 };
 pub use error::Error;
 pub use nonce::NonceJournal;

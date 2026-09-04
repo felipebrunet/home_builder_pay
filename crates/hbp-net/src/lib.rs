@@ -1,24 +1,28 @@
-//! Transport for the same JSON the file protocol already speaks.
+//! Tor point-to-point and a **TCP Kademlia DHT** for Windows v1.
 //!
-//! Windows v1 needs **Tor** (point-to-point once the onion is known) and a
-//! **DHT** (discovery). This crate is the shared message vocabulary plus
-//! scaffolding: a real SOCKS5 client, a local Kademlia-shaped store, and
-//! documented Windows Tor layout. It is **not** yet a production overlay —
-//! no mainline UDP DHT, no onion service publisher inside the process.
+//! Same JSON the file protocol already speaks ([`NetMessage`]). Transport is
+//! SOCKS5 to `.onion` (or direct TCP for localhost tests). There is no
+//! application server.
 //!
-//! The contract bytes are [`hbp_core`] types (offer / accept / quote). Bitcoin
-//! redeem artifacts (`04-coop.json`, `06-feeburn.json`) travel as tagged JSON
-//! blobs so this crate does not depend on `hbp-bitcoin`.
+//! Mainline DHT is UDP and cannot ride Tor SOCKS. This crate speaks its own
+//! Kademlia (`PING` / `FIND_NODE` / `FIND_VALUE` / `STORE` / `DELIVER`) on
+//! TCP. Two machines that share a bootstrap address can find each other.
+//! There is not yet a public HBP bootstrap cloud — see [docs/NETWORK.md].
 
 mod dht;
 mod message;
+mod overlay;
 mod tor;
+mod wire;
 
-pub use dht::{dht_key, DhtNode, DhtRecord, WorkAnnounce};
+pub use dht::{dht_key, work_topic_key, DhtRecord, PeerInfo, WorkAnnounce};
 pub use message::{NetMessage, FILE_FALLBACK};
+pub use overlay::{OverlayConfig, OverlayHandle};
 pub use tor::{
-    default_socks_addr, default_windows_tor_paths, socks5_connect, tor_status, TorConfig, TorStatus,
+    bring_up_tor, default_socks_addr, default_windows_tor_paths, find_tor_binary, read_onion_hostname,
+    socks5_connect, spawn_tor, tor_status, write_product_torrc, TorConfig, TorRuntime, TorStatus,
 };
+pub use wire::{parse_bootstrap_list, PeerAddr};
 
 pub type Result<T> = std::result::Result<T, Error>;
 
@@ -30,6 +34,8 @@ pub enum Error {
     Io(#[from] std::io::Error),
     #[error("json: {0}")]
     Json(#[from] serde_json::Error),
+    #[error("hex: {0}")]
+    Hex(#[from] hex::FromHexError),
     #[error(transparent)]
     Core(#[from] hbp_core::Error),
 }
