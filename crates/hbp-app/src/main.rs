@@ -1,6 +1,5 @@
 //! Native product window (egui/eframe). Not the throwaway `hbp-ui` localhost.
 
-use std::str::FromStr;
 use std::sync::mpsc;
 use std::thread;
 
@@ -56,7 +55,7 @@ struct App {
     new_name: String,
     new_role: Role,
     total_major: String,
-    unit: String,
+    unit: Unit,
     t1: DeadlineFields,
     t2: DeadlineFields,
     stage_descs: String,
@@ -89,7 +88,7 @@ impl App {
             new_name: String::new(),
             new_role: Role::Mandante,
             total_major: "100".into(),
-            unit: "USD".into(),
+            unit: Unit::Usd,
             t1: DeadlineFields::days_from_now(7),
             t2: DeadlineFields::days_from_now(14),
             stage_descs: String::new(),
@@ -207,10 +206,7 @@ impl eframe::App for App {
                         self.t2 = DeadlineFields::from_unix(t2);
                     }
                     self.total_major = format!("{:.2}", draft.total_minor() as f64 / 100.0);
-                    self.unit = format!("{:?}", draft.unit).to_uppercase();
-                    if self.unit == "USD" {
-                        self.unit = "USD".into();
-                    }
+                    self.unit = draft.unit;
                 }
             }
             self.last_slug = self.selected.clone();
@@ -395,9 +391,22 @@ impl App {
                 ui.horizontal(|ui| {
                     ui.label("Total de la obra");
                     show_field(ui, &mut self.total_major, "100", self.prefs.dark, 80.0);
-                    ui.label("unidad");
-                    show_field(ui, &mut self.unit, "USD", self.prefs.dark, 60.0);
+                    ui.label("moneda");
+                    egui::ComboBox::from_id_salt("contract-unit")
+                        .selected_text(self.unit.as_str())
+                        .show_ui(ui, |ui| {
+                            for u in [Unit::Usd, Unit::Uf, Unit::Clp, Unit::Btc] {
+                                ui.selectable_value(&mut self.unit, u, u.as_str());
+                            }
+                        });
                 });
+                ui.label(
+                    RichText::new(
+                        "Moneda del contrato. Los sats se fijan después, al cotizar/fondear con un precio de BTC. Elegir USD no arma el PSBT.",
+                    )
+                    .small()
+                    .weak(),
+                );
                 if let Ok(total) = minor_from_major(&self.total_major) {
                     if let Ok(bond) = bond_minor(total, DEFAULT_BOND_BPS) {
                         let n = hbp_core::equal_stage_count(DEFAULT_BOND_BPS).unwrap_or(0);
@@ -405,7 +414,7 @@ impl App {
                             RichText::new(format!(
                                 "Boleta 10% = {:.2} {}. Serán {n} partidas de {:.2} (cada una = la boleta).",
                                 bond as f64 / 100.0,
-                                self.unit,
+                                self.unit.as_str(),
                                 bond as f64 / 100.0
                             ))
                             .weak(),
@@ -686,10 +695,7 @@ impl App {
         if let Err(e) = validate_deadline_order(t1, t2) {
             return self.fail(e);
         }
-        let unit = match Unit::from_str(&self.unit) {
-            Ok(u) => u,
-            Err(_) => return self.fail("Unidad no reconocida. Prueba USD, CLP o UF."),
-        };
+        let unit = self.unit;
         let descs: Vec<String> = self
             .stage_descs
             .lines()
