@@ -128,7 +128,9 @@ pub fn download_expert_bundle(
         return Ok(existing);
     }
     if std::env::var("HBP_SKIP_TOR_DOWNLOAD").ok().as_deref() == Some("1") {
-        return Err(crate::Error::msg("Tor download skipped (HBP_SKIP_TOR_DOWNLOAD)"));
+        return Err(crate::Error::msg(
+            "Tor download skipped (HBP_SKIP_TOR_DOWNLOAD)",
+        ));
     }
     fs::create_dir_all(dest_dir)?;
     let url = expert_bundle_url();
@@ -181,7 +183,8 @@ mod tests {
             header.set_size(3);
             header.set_cksum();
             header.set_mode(0o755);
-            b.append_data(&mut header, "tor/tor.exe", &b"tor"[..]).unwrap();
+            b.append_data(&mut header, "tor/tor.exe", &b"tor"[..])
+                .unwrap();
             b.finish().unwrap();
         }
         let unpacked = dir.join("out");

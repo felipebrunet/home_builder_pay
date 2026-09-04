@@ -26,6 +26,14 @@ impl PeerAddr {
         }
     }
 
+    pub fn parse_flexible(s: &str) -> crate::Result<Self> {
+        let s = s.trim();
+        if s.ends_with(".onion") && !s.contains(':') {
+            return Self::parse(&format!("{s}:80"));
+        }
+        Self::parse(s)
+    }
+
     pub fn parse(s: &str) -> crate::Result<Self> {
         let s = s.trim();
         let (host, port) = s
@@ -65,37 +73,19 @@ impl std::fmt::Display for PeerAddr {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case")]
 pub enum Op {
-    Ping {
-        node_id: String,
-        listen: PeerAddr,
-    },
-    FindNode {
-        target: String,
-    },
-    FindValue {
-        key: String,
-    },
-    Store {
-        record: DhtRecord,
-    },
-    Deliver {
-        msg: NetMessage,
-    },
+    Ping { node_id: String, listen: PeerAddr },
+    FindNode { target: String },
+    FindValue { key: String },
+    Store { record: DhtRecord },
+    Deliver { msg: NetMessage },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ResBody {
-    Pong {
-        node_id: String,
-        listen: PeerAddr,
-    },
-    Nodes {
-        nodes: Vec<PeerInfo>,
-    },
-    Value {
-        record: DhtRecord,
-    },
+    Pong { node_id: String, listen: PeerAddr },
+    Nodes { nodes: Vec<PeerInfo> },
+    Value { record: DhtRecord },
     Stored,
     Delivered,
 }
@@ -167,6 +157,13 @@ pub fn parse_bootstrap_list(s: &str) -> crate::Result<Vec<PeerAddr>> {
         out.push(PeerAddr::parse(part)?);
     }
     Ok(out)
+}
+
+pub fn env_bootstrap_peers() -> Vec<PeerAddr> {
+    std::env::var("HBP_DHT_BOOTSTRAP")
+        .ok()
+        .and_then(|s| parse_bootstrap_list(&s).ok())
+        .unwrap_or_default()
 }
 
 #[cfg(test)]

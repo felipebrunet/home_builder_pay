@@ -467,7 +467,9 @@ impl Project {
 
     pub fn mark_bond_fee_burn_t2(&mut self, txid: String) -> Result<()> {
         if !matches!(self.bond, BondStatus::FeeBurnT1 { .. }) {
-            return Err(Error::protocol("bond fee-burn t2 requires a t1 continuation"));
+            return Err(Error::protocol(
+                "bond fee-burn t2 requires a t1 continuation",
+            ));
         }
         self.bond = BondStatus::FeeBurnT2 { txid };
         self.status = ProjectStatus::Cancelled;

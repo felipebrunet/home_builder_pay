@@ -16,4 +16,4 @@ serde_json.workspace = true
 sha2.workspace = true
 tar = "0.4"
 thiserror.workspace = true
-ureq = "2"
+ureq = { version = "2", features = ["socks-proxy"] }

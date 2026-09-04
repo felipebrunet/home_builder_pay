@@ -31,8 +31,17 @@ pub fn dht_key(topic: &str) -> [u8; 32] {
     Sha256::digest(topic.as_bytes()).into()
 }
 
+/// Lowercase, collapse whitespace. Same string both sides of announce/lookup.
+pub fn normalize_work_name(name: &str) -> String {
+    name.split_whitespace()
+        .map(|w| w.to_lowercase())
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 pub fn work_topic_key(work_name: &str) -> [u8; 32] {
-    dht_key(&format!("hbp-work:{work_name}"))
+    let n = normalize_work_name(work_name);
+    dht_key(&format!("hbp-work:{n}"))
 }
 
 pub fn xor_distance(a: &[u8; 32], b: &[u8; 32]) -> [u8; 32] {
@@ -41,6 +50,20 @@ pub fn xor_distance(a: &[u8; 32], b: &[u8; 32]) -> [u8; 32] {
         d[i] = a[i] ^ b[i];
     }
     d
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn work_key_ignores_case_and_spaces() {
+        assert_eq!(
+            work_topic_key("Casa Norte"),
+            work_topic_key("  casa   NORTE ")
+        );
+        assert_ne!(work_topic_key("Casa Norte"), work_topic_key("Casa Sur"));
+    }
 }
 
 pub fn parse_node_id(hex_str: &str) -> crate::Result<[u8; 32]> {

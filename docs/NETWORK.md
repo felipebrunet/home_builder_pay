@@ -20,19 +20,17 @@ Framing: `u32` big-endian length + JSON. `.onion` destinations always use SOCKS5
 
 ## How two machines find each other
 
-There is **no public HBP bootstrap cloud** yet. That is the honest limitation.
+Isolated Tor hidden services are **not** a DHT by themselves. Pasting the other `.onion` into Avanzado still works (and is the fallback). The product path is **name search** after both press **Conectarme**:
 
-1. Each app listens on `127.0.0.1:3848` (or the next free port).
-2. Tor maps `HiddenServicePort 80 → 127.0.0.1:<that port>` so the peer address is `xxx.onion:80`.
-3. Share **one** bootstrap address with the other laptop (the onion, or `127.0.0.1:port` on a LAN/dev box):
-   - GUI **Avanzado** → “código / onion de la otra persona”
-4. **Usar este código** → `PING` + iterative `FIND_NODE`.
-5. **Anunciar esta obra** → local `STORE` + `STORE` to the k closest peers.
-6. The other side **Buscar** by work name (`hbp-work:{name}` SHA-256). Iterative `FIND_VALUE` walks the overlay.
+1. Each app listens on `127.0.0.1:3848` (or the next free port). Tor maps `HiddenServicePort 80 → 127.0.0.1:<that port>` → `xxx.onion:80`.
+2. **Publicar / Buscar** uses the normalized work name (`casa norte` = `Casa Norte`).
+3. The overlay `STORE`s / `FIND_VALUE`s on the TCP Kademlia graph (`hbp-work:{normalized}` SHA-256) **and** publishes the same `{name, onion, role}` JSON to a public HTTPS topic board through Tor SOCKS (**ntfy.sh**, then **ntfy.envs.net**). Topic id is a hash of the name — not a secret.
+4. On a hit, the contratista **auto-bootstraps** that onion (Kademlia `PING`) and can receive `Offer` / send `Accept` without copying files.
+5. **Avanzado → código de respaldo** is onion paste if the board or Tor is blocked. `HBP_DHT_BOOTSTRAP` and `net-peers.json` (last seen onions) are also tried after connect.
 
-After a hit you have the publisher onion and can `DELIVER` the offer over Tor.
+Onion connect timeout is **40s** (8s was too tight for a new HS circuit). Lookup / announce / send run on a background thread so the window stays usable (“Pensando…”).
 
-Three or more nodes work the same way: you only need a path of bootstraps (A knows B, C knows B → C can find a value stored on A).
+Work-name topics are public. Do not put keys there. The xpub stays local (`watch.json`); only protocol messages (`Offer` / `Accept` / `Commit`) go to the peer.
 
 ## Tor on Windows
 
@@ -55,10 +53,13 @@ Documented in [WINDOWS.md](WINDOWS.md). Short version:
 | Piece | This environment |
 |---|---|
 | Kademlia 2- and 3-node overlays on `127.0.0.1` | **tested** (`cargo test -p hbp-net`) |
+| Name key normalization + announce/lookup | **tested** |
+| Rendezvous topic + ntfy JSON parse | **unit-tested** (no live ntfy/Tor in this VM) |
 | `DELIVER` inbox | **tested** |
+| Offer → accept → commit signatures | **tested** (`hbp-app` protocol) |
 | SOCKS5 client + torrc writer + `tor.exe` search | **unit-tested** (no live Tor here) |
-| Two Windows PCs over real Tor / Signet | **not run in this VM** — use the GUI steps above |
-| Public bootstrap nodes | **none** — you share an onion |
+| Two Windows PCs, name search over live Tor | **not re-run in this Linux VM** — Felipe’s previous run needed onion paste; that path is now the fallback |
+| PSBT / broadcast wizard | **not in this slice** |
 
 ## Env
 

@@ -6,7 +6,7 @@ Este archivo es la fuente de verdad de producto, protocolo, arquitectura, roadma
 
 **Si retomas en una sesión nueva: lee la sección 0 y el checklist de “listo / no listo”. El código en `crates/` es la implementación de MVP-0.**
 
-Última actualización: 2026-09-04 (un clic: download/spawn Tor + Hidden Service, encontrable).
+Última actualización: 2026-09-04 (roles, DHT por nombre + rendezvous ntfy, oferta por red, xpub local, FX preview).
 
 ---
 
@@ -21,7 +21,7 @@ Checkpoint de sesión. Actualizar **esta sección** cada vez que se cierre un hi
 3. **Boleta:** 10% del principal total (`bond_bps = 1000`). Principal y boleta siguen la misma regla de quema.
 4. **Partidas en la GUI:** el total se parte de modo que **cada partida = la boleta** (ej. 100 → boleta 10 → 10 partidas de 10).
 5. **Árbitro:** apagado (`ARBITER_ENABLED = false`). Sin nominación ni UI. El CLI legacy del catálogo todavía acepta `--dispute arbiter`.
-6. **Red Windows v1:** Tor (punto a punto, SOCKS5 / onion) + **DHT Kademlia TCP** (descubrimiento real entre peers). Archivos = fallback/dev. No hay bootstrap público: se comparte un onion. [WINDOWS.md](WINDOWS.md), [NETWORK.md](NETWORK.md).
+6. **Red Windows v1:** Tor + **DHT Kademlia TCP**. Publicar/buscar por **nombre de obra** (rendezvous HTTPS ntfy a través de SOCKS + STORE/FIND_VALUE). Onion paste = Avanzado. Archivos = fallback. [WINDOWS.md](WINDOWS.md), [NETWORK.md](NETWORK.md).
 7. Redeem = MuSig2 vía `hbp`. Fondeo = wallet externa / PSBT.
 8. **Red de producto: Signet.** La GUI no ofrece mainnet ni un selector que salga de Signet. Regtest queda para CLI / tests / catálogo.
 
@@ -65,6 +65,7 @@ Checkpoint de sesión. Actualizar **esta sección** cada vez que se cierre un hi
 | 2026-09-04 | GUI **Signet-only**. DHT **Kademlia TCP** (2/3 nodos localhost). Tor spawn/`ADD_ONION` + torrc Windows. Sin bootstrap público; e2e Tor vivo no corrido en esta VM. | [NETWORK.md](NETWORK.md), [WINDOWS.md](WINDOWS.md) |
 | 2026-09-04 | UX: plazos en fecha/hora local (no unix). Un botón **Conectar red**. SOCKS 9050 **y** 9150 (Tor Browser). Tema claro/oscuro. Contraste de campos. Flujo obra vs técnico. | `hbp-app`, [WINDOWS.md](WINDOWS.md) |
 | 2026-09-04 | Un clic **encontrable**: descarga Expert Bundle oficial si falta, spawn HS, onion en el panel. 9150 = solo salida. | [NETWORK.md](NETWORK.md), [WINDOWS.md](WINDOWS.md) |
+| 2026-09-04 | Roles (mandante crea; contratista busca). DHT por nombre + ntfy. Oferta/aceptar/commit por Tor. xpub local. FX preview. UI no bloquea. | `hbp-app`, [NETWORK.md](NETWORK.md) |
 
 Default de **producto** = **`fee_burn`**. JSON viejo sin campo `dispute` sigue siendo `unwind` (catálogo). MAD y árbitro minados como legacy. Catálogo: **136 PASS**, **6 NO TEST** (humano). **0 FAIL**.
 
@@ -74,8 +75,9 @@ Default de **producto** = **`fee_burn`**. JSON viejo sin campo `dispute` sigue s
 
 - Disputa default de producto = **fee-burn t1/t2** (50% + 50% a miners). Coop MuSig2 si hay acuerdo. Unwind/MAD/árbitro = legacy del catálogo.
 - Boleta **global** (`bond_bps = 1000` = 10%). Una partida viva a la vez. Bond **antes** de cualquier partida. GUI: cada partida = boleta.
-- Montos en fiat/UF; sats al quote/fondeo.
-- Red Windows v1: **Tor** p2p + **DHT Kademlia TCP** (`hbp-net`). Archivos = fallback. Sin servidor. GUI **Signet only**.
+- Montos en fiat/UF/SATS/BTC (dropdown). Sats de fiat: preview Yadio→CoinGecko→CMC; se fijan al quote/fondeo.
+- Red Windows v1: **Tor** + **DHT Kademlia TCP** + **rendezvous ntfy** (buscar por nombre). Onion paste = Avanzado. GUI **Signet only**.
+- GUI: solo el mandante crea obras. Contratista: buscar + mis obras. Oferta/aceptar/confirmar por el canal Tor. xpub local (no al peer).
 - Árbitro: **off** (`ARBITER_ENABLED = false`). Sin UI.
 - GUI nativa: crate `hbp-app`, binario `home_builder_pay`. `hbp-ui` localhost no es el producto.
 
@@ -105,8 +107,8 @@ Default de **producto** = **`fee_burn`**. JSON viejo sin campo `dispute` sigue s
 ### No listo / en pausa
 
 - Signet **unhappy** (timeout partida, timeout boleta con plazo corto, cancel coop). El feliz ya está. Plazos de demo: **2–3 h** de CLTV, carpetas **nuevas** (no `.ms`/`.cs`).
-- GUI nativa: obras, identidad por obra, offer/accept, t1/t2, tablero stage=bond, **Signet locked**, Tor+DHT overlay, backup. Falta: fondeo PSBT en la GUI, MuSig2 de recepción, armado fee-burn firmado, unhappy Signet.
-- Overlay DHT verificado en localhost (2 y 3 nodos). **No** se corrió Tor vivo entre dos PCs en esta VM. No hay lista pública de bootstrap.
+- GUI nativa: roles, offer/accept/commit por red, xpub local, t1/t2, stage=bond, Signet, Tor+DHT+ntfy, backup. **Falta:** fondeo PSBT / broadcast, MuSig2 de recepción, armado fee-burn firmado, unhappy Signet.
+- Overlay DHT verificado en localhost. Rendezvous ntfy **unit-tested** (parse/topic), **no** live two-PC Tor in this VM. Onion paste is fallback.
 - Android, mainnet (producto), boleta que rueda. BIP39 no hace falta para `hbp` (backup = hex 256 bits / 64 chars). Electrum/Blue sí usan BIP39 para la hot wallet.
 - 6 ítems del catálogo humano: [SCENARIOS.md](SCENARIOS.md).
 - P2, unwind de boleta, MAD/árbitro **desde la UI de prueba**.

@@ -288,7 +288,9 @@ mod tests {
     #[test]
     fn windows_search_paths_include_exe_dir_and_env() {
         let paths = default_windows_tor_paths();
-        assert!(paths.iter().any(|p| p.ends_with("tor.exe") || p.ends_with("tor")));
+        assert!(paths
+            .iter()
+            .any(|p| p.ends_with("tor.exe") || p.ends_with("tor")));
     }
 
     #[test]
@@ -418,7 +420,10 @@ pub fn spawn_tor(binary: &Path, torrc: &Path) -> crate::Result<Child> {
 
 fn spawn_tor_logged(binary: &Path, torrc: &Path, stderr: Option<&Path>) -> crate::Result<Child> {
     let mut cmd = Command::new(binary);
-    cmd.arg("-f").arg(torrc).stdin(Stdio::null()).stdout(Stdio::null());
+    cmd.arg("-f")
+        .arg(torrc)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null());
     if let Some(p) = stderr {
         let f = std::fs::File::create(p)?;
         cmd.stderr(Stdio::from(f));
@@ -514,7 +519,8 @@ fn reuse_running_product_tor(root: &Path) -> Option<TorRuntime> {
     if !probe_socks_port(&socks.ip().to_string(), socks.port()) {
         return None;
     }
-    let onion = read_onion_hostname(&root.join("tor").join("hidden_service")).or(Some(rec.onion))?;
+    let onion =
+        read_onion_hostname(&root.join("tor").join("hidden_service")).or(Some(rec.onion))?;
     Some(TorRuntime {
         child: None,
         onion: Some(onion.clone()),
@@ -545,7 +551,9 @@ fn outbound_fallback(app_port: u16) -> Option<TorRuntime> {
         onion: None,
         socks,
         detail: format!("{} SOCKS {} outbound only", found.label, socks),
-        hint_es: "Conectado solo para hablar. Aún no te pueden encontrar. Vuelve a pulsar Conectar red.".into(),
+        hint_es:
+            "Conectado solo para hablar. Aún no te pueden encontrar. Vuelve a pulsar Conectar red."
+                .into(),
         findable: false,
     })
 }
@@ -584,7 +592,14 @@ pub fn bring_up_tor_with_hint(
                     if onion.is_none() {
                         if let Ok(Some(st)) = child.try_wait() {
                             let tail = std::fs::read_to_string(&log).unwrap_or_default();
-                            let tail: String = tail.chars().rev().take(400).collect::<String>().chars().rev().collect();
+                            let tail: String = tail
+                                .chars()
+                                .rev()
+                                .take(400)
+                                .collect::<String>()
+                                .chars()
+                                .rev()
+                                .collect();
                             if let Some(fb) = outbound_fallback(app_port) {
                                 return Ok(fb);
                             }
@@ -615,7 +630,9 @@ pub fn bring_up_tor_with_hint(
                         onion: None,
                         socks,
                         detail: "spawned; hostname not yet written".into(),
-                        hint_es: "Tor está arrancando. Espera un momento y pulsa otra vez Conectar red.".into(),
+                        hint_es:
+                            "Tor está arrancando. Espera un momento y pulsa otra vez Conectar red."
+                                .into(),
                         findable: false,
                     })
                 }
@@ -643,7 +660,8 @@ pub fn bring_up_tor_with_hint(
                 onion: None,
                 socks: default_socks_addr(),
                 detail: e.to_string(),
-                hint_es: "No encontré Tor y no pude bajarlo. Revisa internet y pulsa Conectar red.".into(),
+                hint_es: "No encontré Tor y no pude bajarlo. Revisa internet y pulsa Conectar red."
+                    .into(),
                 findable: false,
             })
         }
@@ -704,9 +722,7 @@ fn control_cookie_bytes() -> Option<Vec<u8>> {
 }
 
 fn control_ok(s: &mut TcpStream) -> bool {
-    control_read(s)
-        .map(|r| r.contains("250"))
-        .unwrap_or(false)
+    control_read(s).map(|r| r.contains("250")).unwrap_or(false)
 }
 
 fn control_read(s: &mut TcpStream) -> Option<String> {

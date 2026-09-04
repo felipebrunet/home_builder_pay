@@ -11,25 +11,30 @@
 
 mod bundle;
 mod dht;
+mod fx;
+mod http;
 mod message;
 mod overlay;
+mod rendezvous;
 mod tor;
 mod wire;
 
-pub use dht::{dht_key, work_topic_key, DhtRecord, PeerInfo, WorkAnnounce};
-pub use message::{NetMessage, FILE_FALLBACK};
-pub use overlay::{OverlayConfig, OverlayHandle};
 pub use bundle::{
     download_expert_bundle, expert_bundle_url, expert_bundle_url_for, extract_expert_bundle,
     find_tor_in_dir, tor_cache_dir, TOR_BUNDLE_VERSION,
 };
+pub use dht::{dht_key, normalize_work_name, work_topic_key, DhtRecord, PeerInfo, WorkAnnounce};
+pub use fx::{fiat_ticker, preview_sats, quote_btc, FxQuote};
+pub use message::{NetMessage, FILE_FALLBACK};
+pub use overlay::{OverlayConfig, OverlayHandle};
+pub use rendezvous::{latest_announce, lookup_announce, publish_announce, rendezvous_topic};
 pub use tor::{
     bring_up_tor, bring_up_tor_with_hint, default_socks_addr, default_windows_tor_paths,
     discover_socks, find_tor_binary, probe_socks_port, read_onion_hostname, socks5_connect,
-    socks_label, spawn_tor, tor_status, write_product_torrc, DiscoveredSocks, TorConfig, TorRuntime,
-    TorStatus, SOCKS_CANDIDATE_PORTS,
+    socks_label, spawn_tor, tor_status, write_product_torrc, DiscoveredSocks, TorConfig,
+    TorRuntime, TorStatus, SOCKS_CANDIDATE_PORTS,
 };
-pub use wire::{parse_bootstrap_list, PeerAddr};
+pub use wire::{env_bootstrap_peers, parse_bootstrap_list, PeerAddr};
 
 pub type Result<T> = std::result::Result<T, Error>;
 

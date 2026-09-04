@@ -2,11 +2,11 @@
 //!
 //! Mainline BitTorrent DHT is UDP and does not traverse a Tor SOCKS5 proxy.
 //! This is a purpose-built TCP Kademlia (`FIND_NODE` / `FIND_VALUE` / `STORE`
-//! / `PING` / `DELIVER`) so two Windows machines that share a bootstrap
-//! onion (or a localhost peer in tests) can announce and look up works.
+//! / `PING` / `DELIVER`).
 //!
-//! There is **no public HBP bootstrap network** yet. Two laptops must share
-//! at least one listen address (`host:port` or `xxx.onion:80`).
+//! Two isolated onions are not a connected graph. After Tor is up, announce
+//! also hits a public HTTPS rendezvous (see [`crate::rendezvous`]) so **Buscar
+//! por nombre** works without pasting onions. Onion paste remains fallback.
 
 use std::collections::{BTreeMap, HashSet};
 use std::net::{SocketAddr, TcpListener, TcpStream};
@@ -15,13 +15,9 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
-use crate::dht::{
-    parse_node_id, work_topic_key, xor_distance, DhtRecord, PeerInfo, WorkAnnounce,
-};
+use crate::dht::{parse_node_id, work_topic_key, xor_distance, DhtRecord, PeerInfo, WorkAnnounce};
 use crate::message::NetMessage;
-use crate::wire::{
-    connect_peer, read_frame, write_frame, Op, PeerAddr, ResBody, WireMsg,
-};
+use crate::wire::{connect_peer, read_frame, write_frame, Op, PeerAddr, ResBody, WireMsg};
 
 const K: usize = 8;
 const ALPHA: usize = 3;
@@ -59,6 +55,7 @@ struct State {
     inbox: Vec<NetMessage>,
 }
 
+#[derive(Clone)]
 pub struct OverlayHandle {
     state: Arc<Mutex<State>>,
     local_addr: SocketAddr,
@@ -163,13 +160,7 @@ impl OverlayHandle {
             let s = self.state.lock().expect("dht");
             (hex::encode(s.node_id), s.advertised.clone())
         };
-        self.call(
-            dest,
-            Op::Ping {
-                node_id,
-                listen,
-            },
-        )
+        self.call(dest, Op::Ping { node_id, listen })
     }
 
     pub fn announce_work(&self, ann: &WorkAnnounce) -> crate::Result<[u8; 32]> {
@@ -185,13 +176,25 @@ impl OverlayHandle {
             let mut s = self.state.lock().expect("dht");
             s.store.insert(key, record.clone());
         }
-        let closest = self.iterative_find_node(key);
-        for p in closest {
-            let _ = self.call(&p.addr, Op::Store { record: record.clone() });
+        // Small overlay: replicate to every known peer, then the k-closest walk.
+        let mut targets = self.peers();
+        for p in self.iterative_find_node(key) {
+            if targets.iter().all(|x| x.node_id != p.node_id) {
+                targets.push(p);
+            }
+        }
+        for p in targets {
+            let _ = self.call(
+                &p.addr,
+                Op::Store {
+                    record: record.clone(),
+                },
+            );
         }
         Ok(key)
     }
 
+    /// DHT lookup (normalized name). Does not hit the public rendezvous.
     pub fn lookup_work(&self, work_name: &str) -> crate::Result<Option<WorkAnnounce>> {
         let key = work_topic_key(work_name);
         match self.iterative_find_value(key)? {
@@ -206,10 +209,25 @@ impl OverlayHandle {
         }
     }
 
+    /// DHT first, then public rendezvous (ntfy via Tor SOCKS when configured).
+    pub fn discover_work(&self, work_name: &str) -> crate::Result<Option<WorkAnnounce>> {
+        if let Some(ann) = self.lookup_work(work_name)? {
+            return Ok(Some(ann));
+        }
+        crate::rendezvous::lookup_announce(self.socks(), work_name)
+    }
+
+    /// Publish to the public name board. Best-effort; DHT announce is separate.
+    pub fn publish_rendezvous(&self, ann: &WorkAnnounce) -> crate::Result<String> {
+        crate::rendezvous::publish_announce(self.socks(), ann)
+    }
+
     pub fn deliver(&self, dest: &PeerAddr, msg: &NetMessage) -> crate::Result<()> {
         match self.call(dest, Op::Deliver { msg: msg.clone() })? {
             ResBody::Delivered => Ok(()),
-            other => Err(crate::Error::msg(format!("unexpected deliver reply: {other:?}"))),
+            other => Err(crate::Error::msg(format!(
+                "unexpected deliver reply: {other:?}"
+            ))),
         }
     }
 
@@ -221,6 +239,11 @@ impl OverlayHandle {
         if dest.host == us.host && dest.port == us.port && dest.host != "0.0.0.0" {
             return Ok(dispatch(&self.state, op));
         }
+        let timeout = if dest.is_onion() {
+            timeout.max(Duration::from_secs(40))
+        } else {
+            timeout
+        };
         let mut stream = connect_peer(dest, socks, timeout)?;
         let id = self.rpc_ids.fetch_add(1, Ordering::Relaxed);
         write_frame(&mut stream, &serde_json::to_vec(&WireMsg::Req { id, op })?)?;
@@ -347,7 +370,10 @@ impl OverlayHandle {
 
 impl Drop for OverlayHandle {
     fn drop(&mut self) {
-        self.shutdown.store(true, Ordering::Relaxed);
+        // Clones share the listener; only the last handle stops accept.
+        if Arc::strong_count(&self.state) <= 1 {
+            self.shutdown.store(true, Ordering::Relaxed);
+        }
     }
 }
 
@@ -411,7 +437,9 @@ fn dispatch(state: &Arc<Mutex<State>>, op: Op) -> ResBody {
             let k = parse_node_id(&key).unwrap_or([0u8; 32]);
             let s = state.lock().expect("dht");
             if let Some(rec) = s.store.get(&k) {
-                ResBody::Value { record: rec.clone() }
+                ResBody::Value {
+                    record: rec.clone(),
+                }
             } else {
                 drop(s);
                 ResBody::Nodes {
@@ -496,9 +524,27 @@ mod tests {
         })
         .unwrap();
         // B must learn the record via FIND_VALUE on A.
-        let found = b.lookup_work("Casa Norte").unwrap().expect("lookup");
+        let found = b.lookup_work("casa  NORTE").unwrap().expect("lookup");
         assert_eq!(found.onion, "alice.onion");
         assert_eq!(found.offer_id.as_deref(), Some("ab"));
+    }
+
+    #[test]
+    fn clone_does_not_stop_listener() {
+        let a = bind_local();
+        let b = a.clone();
+        drop(b);
+        let addr = PeerAddr::new("127.0.0.1", a.local_addr().port());
+        a.announce_work(&WorkAnnounce {
+            work_name: "X".into(),
+            onion: "x.onion".into(),
+            offer_id: None,
+            role: "mandante".into(),
+        })
+        .unwrap();
+        let c = bind_local();
+        c.bootstrap(&[addr]).unwrap();
+        assert!(c.lookup_work("X").unwrap().is_some());
     }
 
     #[test]

@@ -88,7 +88,9 @@ mod tests {
             },
             mandante_sig: "aa".into(),
         };
-        let msg = NetMessage::Offer { offer: offer.clone() };
+        let msg = NetMessage::Offer {
+            offer: offer.clone(),
+        };
         let back = NetMessage::decode(&msg.encode().unwrap()).unwrap();
         assert_eq!(back, msg);
         assert_eq!(back.kind(), "offer");

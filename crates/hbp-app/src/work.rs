@@ -2,10 +2,11 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
-use hbp_bitcoin::Identity;
+use hbp_bitcoin::{import_watch, Identity, WatchAccount};
 use hbp_core::{
-    bond_minor, suggest_equal_stage_minors, ContractBody, DisputePolicy, Network, Offer,
-    PartidaSpec, Role, Unit, DEFAULT_BOND_BPS, PRODUCT_NETWORK,
+    bond_minor, suggest_equal_stage_minors, vault_decrypt, vault_encrypt, ContractBody,
+    DisputePolicy, Network, Offer, PartidaSpec, Role, SignedContract, Unit, DEFAULT_BOND_BPS,
+    PRODUCT_NETWORK,
 };
 use serde::{Deserialize, Serialize};
 
@@ -35,6 +36,9 @@ pub struct WorkBackup {
 pub struct UiPrefs {
     #[serde(default = "default_dark")]
     pub dark: bool,
+    /// Who is using this computer. Contratista never sees "Crear obra".
+    #[serde(default)]
+    pub role: Role,
 }
 
 fn default_dark() -> bool {
@@ -43,8 +47,16 @@ fn default_dark() -> bool {
 
 impl Default for UiPrefs {
     fn default() -> Self {
-        Self { dark: true }
+        Self {
+            dark: true,
+            role: Role::Mandante,
+        }
     }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct PeerBook {
+    pub onions: Vec<String>,
 }
 
 pub struct WorkStore {
@@ -216,6 +228,134 @@ impl WorkStore {
         }
         Ok(Some(serde_json::from_str(&fs::read_to_string(p)?)?))
     }
+
+    pub fn save_pending(&self, slug: &str, signed: &SignedContract) -> Result<PathBuf> {
+        let path = self.work_dir(slug).join("01-accepted.pending.json");
+        fs::write(&path, serde_json::to_string_pretty(signed)?)?;
+        Ok(path)
+    }
+
+    pub fn load_pending(&self, slug: &str) -> Result<Option<SignedContract>> {
+        read_json_opt(&self.work_dir(slug).join("01-accepted.pending.json"))
+    }
+
+    pub fn save_signed(&self, slug: &str, signed: &SignedContract) -> Result<PathBuf> {
+        let dir = self.work_dir(slug).join("contracts");
+        fs::create_dir_all(&dir)?;
+        let path = dir.join("01-accepted.json");
+        fs::write(&path, serde_json::to_string_pretty(signed)?)?;
+        Ok(path)
+    }
+
+    pub fn load_signed(&self, slug: &str) -> Result<Option<SignedContract>> {
+        read_json_opt(
+            &self
+                .work_dir(slug)
+                .join("contracts")
+                .join("01-accepted.json"),
+        )
+    }
+
+    pub fn save_peer_onion(&self, slug: &str, onion: &str) -> Result<()> {
+        let onion = onion.trim();
+        if onion.is_empty() {
+            return Ok(());
+        }
+        fs::write(
+            self.work_dir(slug).join("peer.json"),
+            serde_json::to_string_pretty(&serde_json::json!({ "onion": onion }))?,
+        )?;
+        let mut book = self.load_peer_book();
+        if !book.onions.iter().any(|o| o == onion) {
+            book.onions.push(onion.to_string());
+            if book.onions.len() > 32 {
+                book.onions.remove(0);
+            }
+            let _ = fs::write(
+                self.root.join("net-peers.json"),
+                serde_json::to_string_pretty(&book)?,
+            );
+        }
+        Ok(())
+    }
+
+    pub fn load_peer_onion(&self, slug: &str) -> Option<String> {
+        let p = self.work_dir(slug).join("peer.json");
+        let v: serde_json::Value = serde_json::from_str(&fs::read_to_string(p).ok()?).ok()?;
+        v.get("onion")
+            .and_then(|s| s.as_str())
+            .map(|s| s.to_string())
+            .filter(|s| !s.is_empty())
+    }
+
+    pub fn load_peer_book(&self) -> PeerBook {
+        let p = self.root.join("net-peers.json");
+        fs::read_to_string(p)
+            .ok()
+            .and_then(|s| serde_json::from_str(&s).ok())
+            .unwrap_or_default()
+    }
+
+    /// Local watch-only xpub. Never sent to the peer.
+    pub fn save_watch(
+        &self,
+        slug: &str,
+        account: &WatchAccount,
+        passphrase: Option<&str>,
+    ) -> Result<PathBuf> {
+        let path = self.work_dir(slug).join("watch.json");
+        let json = serde_json::to_vec_pretty(account)?;
+        if let Some(pw) = passphrase.map(str::trim).filter(|s| !s.is_empty()) {
+            fs::write(&path, vault_encrypt(&json, pw)?)?;
+        } else {
+            fs::write(&path, json)?;
+        }
+        Ok(path)
+    }
+
+    pub fn load_watch(&self, slug: &str, passphrase: Option<&str>) -> Result<Option<WatchAccount>> {
+        let p = self.work_dir(slug).join("watch.json");
+        if !p.exists() {
+            return Ok(None);
+        }
+        let raw = fs::read_to_string(&p)?;
+        if hbp_core::vault_is_encrypted(&raw) {
+            let pw = passphrase
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .context("esta billetera está cifrada: escribe la frase")?;
+            let pt = vault_decrypt(&raw, pw)?;
+            return Ok(Some(serde_json::from_slice(&pt)?));
+        }
+        Ok(Some(serde_json::from_str(&raw)?))
+    }
+
+    pub fn import_xpub_local(
+        &self,
+        slug: &str,
+        raw: &str,
+        passphrase: Option<&str>,
+    ) -> Result<WatchAccount> {
+        let acc = import_watch(raw, None, PRODUCT_NETWORK, 20)?;
+        self.save_watch(slug, &acc, passphrase)?;
+        Ok(acc)
+    }
+
+    /// Contratista: open or create a local folder for a work found on the net.
+    pub fn ensure_contratista_work(&mut self, name: &str) -> Result<WorkEntry> {
+        let slug = slugify(name);
+        if let Some(e) = self.index.works.iter().find(|w| w.slug == slug).cloned() {
+            return Ok(e);
+        }
+        self.create_product_work(name, Role::Contratista, None)
+    }
+}
+
+fn read_json_opt<T: serde::de::DeserializeOwned>(path: &Path) -> Result<Option<T>> {
+    if !path.exists() {
+        return Ok(None);
+    }
+    Ok(Some(serde_json::from_str(&fs::read_to_string(path)?)?))
 }
 
 /// Build a fee-burn draft whose stages each equal the 10% bond.
@@ -475,8 +615,35 @@ mod tests {
         let _ = fs::remove_dir_all(&tmp);
         let store = WorkStore::open(tmp.join("a")).unwrap();
         assert!(store.load_prefs().dark);
-        store.save_prefs(&UiPrefs { dark: false }).unwrap();
+        store
+            .save_prefs(&UiPrefs {
+                dark: false,
+                role: Role::Contratista,
+            })
+            .unwrap();
         assert!(!store.load_prefs().dark);
+        assert_eq!(store.load_prefs().role, Role::Contratista);
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn contratista_work_and_peer_book() {
+        let tmp = std::env::temp_dir().join(format!("hbp-app-ct-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&tmp);
+        let mut store = WorkStore::open(tmp.join("a")).unwrap();
+        let e = store.ensure_contratista_work("Casa Norte").unwrap();
+        assert_eq!(e.role, Role::Contratista);
+        assert_eq!(
+            store.ensure_contratista_work("Casa Norte").unwrap().slug,
+            e.slug
+        );
+        store.save_peer_onion(&e.slug, "abc.onion").unwrap();
+        assert_eq!(store.load_peer_onion(&e.slug).as_deref(), Some("abc.onion"));
+        assert!(store
+            .load_peer_book()
+            .onions
+            .iter()
+            .any(|o| o == "abc.onion"));
         let _ = fs::remove_dir_all(&tmp);
     }
 }
