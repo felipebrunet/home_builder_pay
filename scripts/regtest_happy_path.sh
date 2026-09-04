@@ -76,7 +76,7 @@ $HBP --dir .m init --network regtest --role mandante
 $HBP --dir .c init --network regtest --role contratista
 
 log "Contrato 60k USD / 2x30k / boleta 20k"
-$HBP --dir .m new --unit USD --bond-bps 3333 --t-project "$TPROJ"
+$HBP --dir .m new --unit USD --bond-bps 3333 --t-project "$TPROJ" --dispute unwind
 $HBP --dir .m add-partida --desc Cimentacion --amount 30000 --plazo "$T1"
 $HBP --dir .m add-partida --desc Muros --amount 30000 --plazo "$T2"
 $HBP --dir .m offer

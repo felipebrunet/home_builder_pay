@@ -123,7 +123,7 @@ hbp_offer_60k() {
   local t1="$1" t2="$2" tproj="$3" note="$4"
   $HBP --dir .m init --network regtest --role mandante
   $HBP --dir .c init --network regtest --role contratista
-  $HBP --dir .m new --unit USD --bond-bps 3333 --t-project "$tproj"
+  $HBP --dir .m new --unit USD --bond-bps 3333 --t-project "$tproj" --dispute unwind
   $HBP --dir .m add-partida --desc Cimentacion --amount 30000 --plazo "$t1"
   $HBP --dir .m add-partida --desc Muros --amount 30000 --plazo "$t2"
   $HBP --dir .m offer
@@ -150,7 +150,7 @@ hbp_offer_60k_ex() {
   $HBP --dir .m init --network regtest --role mandante
   $HBP --dir .c init --network regtest --role contratista
   # shellcheck disable=SC2086
-  $HBP --dir .m new --unit USD --bond-bps 3333 --t-project "$tproj" ${NEW_EXTRA:-}
+  $HBP --dir .m new --unit USD --bond-bps 3333 --t-project "$tproj" ${NEW_EXTRA:---dispute unwind}
   $HBP --dir .m add-partida --desc Cimentacion --amount 30000 --plazo "$t1"
   $HBP --dir .m add-partida --desc Muros --amount 30000 --plazo "$t2"
   $HBP --dir .m offer

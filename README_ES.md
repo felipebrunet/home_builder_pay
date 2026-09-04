@@ -4,7 +4,7 @@
 
 Custodia Bitcoin entre pares para **partidas de obra** más una **boleta de garantía**. Dos partes — el mandante y el contratista — bloquean fondos en un 2-de-2 Taproot (MuSig2). No hay servidor.
 
-Esto es un MVP: CLI de escritorio, **regtest/signet**, archivos pasados a mano. Todavía no hay Tor ni DHT. El árbitro es opcional: una hoja Taproot que **ambos** nombran antes de fondear, no un amigo que el mandante pone en el aviso.
+Esto es un MVP: CLI + **GUI nativa** (Windows primero, egui). `hbp-ui` localhost **no** es el producto. Disputa de producto: fee-burn t1/t2. Árbitro off. Tor + DHT: scaffolding ([docs/NETWORK.md](docs/NETWORK.md), [docs/WINDOWS.md](docs/WINDOWS.md)).
 
 Protocolo, arquitectura, hoja de ruta y **en qué quedó la última sesión**: [docs/PROJECT.md](docs/PROJECT.md) (empezar por la sección 0). Feliz minado en Signet: [docs/SIGNET_HAPPY_PATH.md](docs/SIGNET_HAPPY_PATH.md). Dos PCs (Sparrow): [docs/SIGNET_TWO_PCS.md](docs/SIGNET_TWO_PCS.md). Watch-only + PSBT atómico (Blue/Electrum): [docs/BLUE_FUNDING.md](docs/BLUE_FUNDING.md).
 

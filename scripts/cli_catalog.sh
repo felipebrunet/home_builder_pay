@@ -33,7 +33,7 @@ if $HBP --dir s1/m addresses >/dev/null 2>&1; then fail 1 no_offer; else pass 1 
 mkdir -p s2
 $HBP --dir s2/m init --network regtest --role mandante >/dev/null
 $HBP --dir s2/c init --network regtest --role contratista >/dev/null
-$HBP --dir s2/m new --unit USD --bond-bps 3333 --t-project "$T" >/dev/null
+$HBP --dir s2/m new --unit USD --bond-bps 3333 --t-project "$T" --dispute unwind >/dev/null
 $HBP --dir s2/m add-partida --desc Cimentacion --amount 30000 --plazo "$T1" >/dev/null
 $HBP --dir s2/m add-partida --desc Muros --amount 30000 --plazo "$T2" >/dev/null
 $HBP --dir s2/m offer >/dev/null
@@ -97,7 +97,7 @@ expect_fail 6 terms_mismatch $HBP --dir s4/m commit /tmp/hbp-tamper.json
 mkdir -p s7
 $HBP --dir s7/m init --network regtest --role mandante >/dev/null
 $HBP --dir s7/c init --network regtest --role contratista >/dev/null
-$HBP --dir s7/m new --unit USD --bond-bps 3333 --t-project "$T" >/dev/null
+$HBP --dir s7/m new --unit USD --bond-bps 3333 --t-project "$T" --dispute unwind >/dev/null
 $HBP --dir s7/m add-partida --desc X --amount 30000 --plazo "$T1" >/dev/null
 $HBP --dir s7/m offer >/dev/null
 $HBP --dir s7/c accept s7/m/00-offer.json >/dev/null
@@ -117,7 +117,7 @@ import json
 p="s9/c/identity.json"
 d=json.load(open(p)); d["role"]="contratista"; json.dump(d, open(p,"w"))
 PY
-$HBP --dir s9/m new --unit USD --bond-bps 3333 --t-project "$T" >/dev/null
+$HBP --dir s9/m new --unit USD --bond-bps 3333 --t-project "$T" --dispute unwind >/dev/null
 $HBP --dir s9/m add-partida --desc X --amount 30000 --plazo "$T1" >/dev/null
 $HBP --dir s9/m offer >/dev/null
 expect_fail 9 same_pubkey $HBP --dir s9/c accept s9/m/00-offer.json
@@ -126,7 +126,7 @@ expect_fail 9 same_pubkey $HBP --dir s9/c accept s9/m/00-offer.json
 mkdir -p s10
 $HBP --dir s10/m init --network regtest --role mandante >/dev/null
 $HBP --dir s10/c init --network signet --role contratista >/dev/null
-$HBP --dir s10/m new --unit USD --bond-bps 3333 --t-project "$T" >/dev/null
+$HBP --dir s10/m new --unit USD --bond-bps 3333 --t-project "$T" --dispute unwind >/dev/null
 $HBP --dir s10/m add-partida --desc X --amount 30000 --plazo "$T1" >/dev/null
 $HBP --dir s10/m offer >/dev/null
 # accept may succeed (no network check on identity vs body.network of offer)
@@ -141,7 +141,7 @@ fi
 # 11 invalid draft
 mkdir -p s11
 $HBP --dir s11/m init --network regtest --role mandante >/dev/null
-$HBP --dir s11/m new --unit USD --bond-bps 3333 --t-project "$T" >/dev/null
+$HBP --dir s11/m new --unit USD --bond-bps 3333 --t-project "$T" --dispute unwind >/dev/null
 expect_fail 11 empty_partidas $HBP --dir s11/m offer
 expect_fail 11 zero_amount $HBP --dir s11/m add-partida --desc X --amount 0 --plazo "$T1"
 expect_fail 11 plazo_after_t $HBP --dir s11/m add-partida --desc X --amount 1 --plazo 1900000000
@@ -225,7 +225,7 @@ pass 141 mad_xor_arbiter_cli
 mkdir -p sfund
 $HBP --dir sfund/m init --network regtest --role mandante >/dev/null
 $HBP --dir sfund/c init --network regtest --role contratista >/dev/null
-$HBP --dir sfund/m new --unit USD --bond-bps 3333 --t-project "$T" >/dev/null
+$HBP --dir sfund/m new --unit USD --bond-bps 3333 --t-project "$T" --dispute unwind >/dev/null
 $HBP --dir sfund/m add-partida --desc Cimentacion --amount 30000 --plazo "$T1" >/dev/null
 $HBP --dir sfund/m add-partida --desc Muros --amount 30000 --plazo "$T2" >/dev/null
 $HBP --dir sfund/m offer >/dev/null

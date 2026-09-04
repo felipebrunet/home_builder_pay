@@ -95,8 +95,68 @@ pub fn bond_minor(total_minor: u64, bond_bps: u16) -> crate::Result<u64> {
         .ok_or_else(|| crate::Error::protocol("bond amount is zero"))
 }
 
-/// Human warnings, never hard errors. Bond > current partida is expected
-/// when the boleta is global and there are many small partidas.
+/// Product default: guarantee is 10% of total principal.
+pub const DEFAULT_BOND_BPS: u16 = 1000;
+
+/// How many equal stages make each stage's principal equal the bond.
+///
+/// `10000 / bond_bps` when that divides evenly (10% → 10 stages).
+pub fn equal_stage_count(bond_bps: u16) -> crate::Result<u32> {
+    if bond_bps == 0 {
+        return Err(crate::Error::protocol("bond_bps must be > 0"));
+    }
+    if 10_000 % u32::from(bond_bps) != 0 {
+        return Err(crate::Error::protocol(format!(
+            "bond_bps {bond_bps} does not divide 10000; cannot split into equal stages = bond"
+        )));
+    }
+    Ok(10_000 / u32::from(bond_bps))
+}
+
+/// One amount per stage so each equals the bond and they sum to `total_minor`.
+///
+/// If `total` is not an exact multiple of the bond (rounding), the last stage
+/// absorbs the remainder and [`stages_equal_bond`] will be false.
+pub fn suggest_equal_stage_minors(total_minor: u64, bond_bps: u16) -> crate::Result<Vec<u64>> {
+    let n = u64::from(equal_stage_count(bond_bps)?);
+    let bond = bond_minor(total_minor, bond_bps)?;
+    let exact = n
+        .checked_mul(bond)
+        .ok_or_else(|| crate::Error::protocol("stage plan overflow"))?;
+    if exact == total_minor {
+        return Ok(vec![bond; n as usize]);
+    }
+    if exact < total_minor {
+        let mut stages = vec![bond; n as usize];
+        stages[n as usize - 1] = bond + (total_minor - exact);
+        return Ok(stages);
+    }
+    Err(crate::Error::protocol(format!(
+        "total {total_minor} is smaller than {n} × bond {bond}"
+    )))
+}
+
+pub fn stages_equal_bond(total_minor: u64, bond_bps: u16, stages: &[u64]) -> bool {
+    let Ok(bond) = bond_minor(total_minor, bond_bps) else {
+        return false;
+    };
+    !stages.is_empty()
+        && stages.iter().all(|s| *s == bond)
+        && stages.iter().copied().sum::<u64>() == total_minor
+}
+
+/// Product guidance: each stage should equal the 10% bond.
+pub fn stage_bond_warnings(bond_minor_amount: u64, stage_minor: u64) -> Vec<String> {
+    if stage_minor == bond_minor_amount {
+        Vec::new()
+    } else {
+        vec![format!(
+            "partida {stage_minor} != boleta {bond_minor_amount}; product default is stage amount = bond (10% of total → N equal stages)"
+        )]
+    }
+}
+
+/// Human warnings, never hard errors.
 pub fn bond_warnings(bond_minor_amount: u64, total_minor: u64, partida_minor: u64) -> Vec<String> {
     let mut out = Vec::new();
     if total_minor > 0 && bond_minor_amount * 20 < total_minor {
@@ -105,11 +165,7 @@ pub fn bond_warnings(bond_minor_amount: u64, total_minor: u64, partida_minor: u6
     if total_minor > 0 && bond_minor_amount * 10 > total_minor * 3 {
         out.push("boleta over 30% of the project — contractor capital may not exist".into());
     }
-    if partida_minor > 0 && bond_minor_amount > partida_minor {
-        out.push(format!(
-            "boleta ({bond_minor_amount}) is larger than this partida ({partida_minor}); that is expected with a global bond and many partidas"
-        ));
-    }
+    out.extend(stage_bond_warnings(bond_minor_amount, partida_minor));
     out
 }
 
@@ -132,5 +188,16 @@ mod tests {
     #[test]
     fn bond_is_percent_of_total() {
         assert_eq!(bond_minor(2_000_000, 1_000).unwrap(), 200_000);
+    }
+
+    #[test]
+    fn ten_percent_bond_suggests_ten_equal_stages() {
+        assert_eq!(equal_stage_count(DEFAULT_BOND_BPS).unwrap(), 10);
+        let stages = suggest_equal_stage_minors(1_000_000, DEFAULT_BOND_BPS).unwrap();
+        assert_eq!(stages.len(), 10);
+        assert!(stages.iter().all(|s| *s == 100_000));
+        assert!(stages_equal_bond(1_000_000, DEFAULT_BOND_BPS, &stages));
+        assert!(stage_bond_warnings(100_000, 100_000).is_empty());
+        assert!(!stage_bond_warnings(100_000, 50_000).is_empty());
     }
 }

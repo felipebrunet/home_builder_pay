@@ -1,12 +1,19 @@
 [workspace]
 resolver = "2"
-members = ["crates/hbp-core", "crates/hbp-bitcoin", "crates/hbp-cli", "crates/hbp-ui"]
+members = [
+    "crates/hbp-core",
+    "crates/hbp-bitcoin",
+    "crates/hbp-cli",
+    "crates/hbp-ui",
+    "crates/hbp-net",
+    "crates/hbp-app",
+]
 
 [workspace.package]
 edition = "2021"
 license = "MIT"
 version = "0.1.0"
-rust-version = "1.85"
+rust-version = "1.88"
 
 [workspace.dependencies]
 hbp-core = { path = "crates/hbp-core" }

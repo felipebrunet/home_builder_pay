@@ -234,6 +234,7 @@ fn contract_signatures_roundtrip() {
             amount_minor: 150_000,
             plazo_unix: 1_700_000_000,
         }],
+        work_name: String::new(),
         mandante_pubkey: hex::encode(m_pk.serialize()),
         contratista_pubkey: Some(hex::encode(c_pk.serialize())),
         dispute: hbp_core::DisputePolicy::Unwind,
@@ -264,6 +265,7 @@ fn arbiter_tree_changes_address() {
                 amount_minor: 100,
                 plazo_unix: 1_700_000_000,
             }],
+            work_name: String::new(),
             mandante_pubkey: hex::encode(mp.serialize()),
             contratista_pubkey: Some(hex::encode(cp.serialize())),
             dispute: hbp_core::DisputePolicy::Arbiter { window_secs: 15 },
@@ -289,6 +291,7 @@ fn arbiter_tree_changes_address() {
                 amount_minor: 100,
                 plazo_unix: 1_700_000_000,
             }],
+            work_name: String::new(),
             mandante_pubkey: hex::encode(mp.serialize()),
             contratista_pubkey: Some(hex::encode(cp.serialize())),
             dispute: hbp_core::DisputePolicy::Arbiter { window_secs: 15 },
@@ -317,6 +320,7 @@ fn arbiter_leaf_two_key_witness() {
             amount_minor: 100,
             plazo_unix: 1_700_000_000,
         }],
+        work_name: String::new(),
         mandante_pubkey: hex::encode(mp.serialize()),
         contratista_pubkey: Some(hex::encode(cp.serialize())),
         dispute: hbp_core::DisputePolicy::Arbiter { window_secs: 15 },
@@ -867,4 +871,134 @@ fn combine_two_blue_style_partial_psbts() {
     assert_eq!(tx.input.len(), 2);
     assert!(tx.input.iter().all(|i| i.witness.len() == 2));
     let _ = serialize_hex(&tx);
+}
+
+#[test]
+fn fee_burn_split_is_half_and_rejects_dust() {
+    let s = crate::fee_burn_split(20_001).unwrap();
+    assert_eq!(s.continuation_sats, 10_000);
+    assert_eq!(s.fee_sats, 10_001);
+    assert!(crate::fee_burn_split(1_000).is_err());
+}
+
+#[test]
+fn fee_burn_t1_t2_shapes_and_coop_key_path() {
+    let (m_sk, m_pk, c_sk, c_pk) = pair();
+    let t1 = 1_700_000_000u32;
+    let t2 = 1_800_000_000u32;
+    let escrow = crate::fee_burn_escrow(&m_pk, &c_pk, t2, crate::EscrowKind::Partida).unwrap();
+    assert!(escrow.is_key_path_only());
+    assert_output_key_matches(&escrow, &m_pk, &c_pk).unwrap();
+
+    let funding = dummy_outpoint();
+    let input_sats = 20_000u64;
+    let (t1_tx, t2_tx, split) =
+        crate::build_fee_burn_chain(funding, input_sats, &escrow, t1, t2).unwrap();
+    crate::assert_fee_burn_t1_shape(&t1_tx, input_sats, &escrow.script_pubkey(), t1).unwrap();
+    crate::assert_fee_burn_t2_shape(&t2_tx, split.continuation_sats, t2).unwrap();
+    assert_eq!(t1_tx.lock_time, LockTime::from_consensus(t1));
+    assert_eq!(t2_tx.lock_time, LockTime::from_consensus(t2));
+    assert_eq!(t1_tx.output[0].value.to_sat(), 10_000);
+    assert_eq!(t2_tx.output[0].value.to_sat(), 0);
+    assert!(t2_tx.output[0].script_pubkey.is_op_return());
+    assert_eq!(
+        t2_tx.input[0].previous_output.txid,
+        t1_tx.compute_txid()
+    );
+
+    let dest = bitcoin::Address::p2tr_tweaked(escrow.output_key(), Network::Regtest);
+    let prev = TxOut {
+        value: Amount::from_sat(input_sats),
+        script_pubkey: escrow.script_pubkey(),
+    };
+    let coop = build_key_spend_tx(funding, prev.value, &dest, Amount::from_sat(200)).unwrap();
+    let sighash = key_spend_sighash(&coop, &prev).unwrap();
+    let mut journal = NonceJournal::default();
+    let s0 = [11u8; 32];
+    let s1 = [12u8; 32];
+    consume_nonce_seed(&mut journal, s0).unwrap();
+    consume_nonce_seed(&mut journal, s1).unwrap();
+    let sig = finish_coop_signature(
+        &m_pk,
+        &c_pk,
+        &escrow,
+        Some(&m_sk),
+        Some(&c_sk),
+        s0,
+        s1,
+        &sighash,
+    )
+    .unwrap();
+    verify_key_spend_sig(escrow.output_key().to_x_only_public_key(), &sighash, &sig).unwrap();
+
+    let t1_sighash = key_spend_sighash(
+        &t1_tx,
+        &TxOut {
+            value: Amount::from_sat(input_sats),
+            script_pubkey: escrow.script_pubkey(),
+        },
+    )
+    .unwrap();
+    let mut journal2 = NonceJournal::default();
+    let a = [13u8; 32];
+    let b = [14u8; 32];
+    consume_nonce_seed(&mut journal2, a).unwrap();
+    consume_nonce_seed(&mut journal2, b).unwrap();
+    let t1_sig = finish_coop_signature(
+        &m_pk,
+        &c_pk,
+        &escrow,
+        Some(&m_sk),
+        Some(&c_sk),
+        a,
+        b,
+        &t1_sighash,
+    )
+    .unwrap();
+    verify_key_spend_sig(
+        escrow.output_key().to_x_only_public_key(),
+        &t1_sighash,
+        &t1_sig,
+    )
+    .unwrap();
+}
+
+#[test]
+fn fee_burn_from_body_differs_from_unwind_address() {
+    let (_ms, mp, _cs, cp) = pair();
+    let unwind = partida_descriptor(&mp, &cp, 1_700_000_000).unwrap();
+    let body = hbp_core::ContractBody {
+        network: hbp_core::Network::Regtest,
+        unit: Unit::Usd,
+        work_name: "Casa".into(),
+        bond_bps: 1000,
+        t_project: 1_800_000_000,
+        partidas: vec![hbp_core::PartidaSpec {
+            id: 1,
+            description: "Radier".into(),
+            amount_minor: 100_000,
+            plazo_unix: 1_700_000_000,
+        }],
+        mandante_pubkey: hex::encode(mp.serialize()),
+        contratista_pubkey: Some(hex::encode(cp.serialize())),
+        dispute: hbp_core::DisputePolicy::fee_burn(1_700_000_000, 1_800_000_000),
+    };
+    let burn = crate::partida_escrow_from_body(&body, 1, None).unwrap();
+    assert!(burn.is_key_path_only());
+    assert_ne!(
+        unwind.output_key().to_x_only_public_key(),
+        burn.output_key().to_x_only_public_key()
+    );
+    let plan = crate::fee_burn_plan(
+        "partida",
+        Some(1),
+        dummy_outpoint(),
+        20_000,
+        &burn,
+        1_700_000_000,
+        1_800_000_000,
+    )
+    .unwrap();
+    assert_eq!(plan.continuation_sats, 10_000);
+    assert_eq!(plan.t1_fee_sats, 10_000);
 }

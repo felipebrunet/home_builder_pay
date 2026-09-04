@@ -2,6 +2,7 @@
 
 mod convert;
 mod error;
+mod fee_burn;
 mod fund;
 mod identity;
 mod musig;
@@ -11,6 +12,11 @@ mod taproot;
 mod validate;
 mod watch;
 
+pub use fee_burn::{
+    assert_fee_burn_t1_shape, assert_fee_burn_t2_shape, build_fee_burn_chain, build_fee_burn_t1_tx,
+    build_fee_burn_t2_tx, fee_burn_plan, fee_burn_split, FeeBurnPlan, FeeBurnSplit, DUST_SATS,
+    T2_OP_RETURN,
+};
 pub use error::Error;
 pub use fund::{
     attach_prev_tx, build_funding_psbt, combine_psbts, extract_signed_funding_tx, funding_tx,
@@ -31,10 +37,10 @@ pub use spend::{
     verify_key_spend_sig, verify_unwind_control_block, UnwindRole,
 };
 pub use taproot::{
-    assert_output_key_matches, bond_address, bond_descriptor, bond_escrow_from_body,
-    keys_from_body, mad_address, mad_escrow, mad_escrow_from_body, nums_xonly, partida_address,
-    partida_descriptor, partida_escrow_from_body, to_btc_network, tweaked_key_agg, ArbiterWith,
-    Escrow, EscrowKind,
+    assert_output_key_matches, bond_address, bond_descriptor, bond_escrow_from_body, fee_burn_escrow,
+    fee_burn_escrow_from_body, keys_from_body, mad_address, mad_escrow, mad_escrow_from_body,
+    nums_xonly, partida_address, partida_descriptor, partida_escrow_from_body, to_btc_network,
+    tweaked_key_agg, ArbiterWith, Escrow, EscrowKind,
 };
 pub use validate::{validate_funding_tx, ExpectedFunding, FundingIssue};
 pub use watch::{

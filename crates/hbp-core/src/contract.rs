@@ -63,31 +63,63 @@ pub struct PartidaSpec {
 /// Default 7 days between arbiter-window start (plazo) and last-resort unwind.
 pub const DEFAULT_ARBITER_WINDOW_SECS: u32 = 7 * 24 * 60 * 60;
 
+/// Product v1: arbiter nomination and UI are hard-off. Legacy `Arbiter` trees
+/// remain parseable so the mined catalog still compiles; the native app never
+/// constructs this policy.
+pub const ARBITER_ENABLED: bool = false;
+
 /// Offeror proposes this; accept locks it. Cannot change after funding (address depends on it).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "policy", rename_all = "snake_case")]
 pub enum DisputePolicy {
-    /// Timeout: each recovers their own funds. Default.
+    /// Dual-deadline miner-fee burn. **Product default** no-agreement path.
+    /// At `t1`, 50% of the locked UTXO is consumed as miner fees and the
+    /// remaining half continues; at `t2` the rest is likewise consumed as fees.
+    /// Cooperative MuSig2 key-path remains when both agree.
+    FeeBurn {
+        /// First burn deadline (unix CLTV). 50% of bond + active partida → fees.
+        t1: u32,
+        /// Second burn deadline (unix CLTV, must be > t1). Remaining 50% → fees.
+        t2: u32,
+    },
+    /// Legacy: timeout, each recovers their own funds. Kept for the mined catalog.
     Unwind,
-    /// Same unwind, plus a small symmetric stake that becomes unspendable if nobody cooperates after T.
+    /// Legacy: same unwind, plus a small symmetric NUMS stake.
     Mad {
         /// Basis points of partida 1 sats, **each** party (100 = 1%).
         mad_bps: u16,
     },
-    /// Slot for a late arbiter. Who it is is **not** in the offer: both name
-    /// the same pubkey later ([`ArbiterNomination`]) before funding.
+    /// Legacy slot. Disabled in the product UI (`ARBITER_ENABLED = false`).
     Arbiter { window_secs: u32 },
 }
 
 impl Default for DisputePolicy {
     fn default() -> Self {
+        // Serde default for offers that omit `dispute` (pre-fee-burn JSON).
+        // New product offers always emit `fee_burn`.
         Self::Unwind
     }
 }
 
 impl DisputePolicy {
+    pub fn fee_burn(t1: u32, t2: u32) -> Self {
+        Self::FeeBurn { t1, t2 }
+    }
+
+    pub fn is_fee_burn(&self) -> bool {
+        matches!(self, Self::FeeBurn { .. })
+    }
+
+    pub fn fee_burn_deadlines(&self) -> Option<(u32, u32)> {
+        match self {
+            Self::FeeBurn { t1, t2 } => Some((*t1, *t2)),
+            _ => None,
+        }
+    }
+
     pub fn validate(&self) -> Result<()> {
         match self {
+            Self::FeeBurn { t1, t2 } => validate_fee_burn_deadlines(*t1, *t2),
             Self::Unwind => Ok(()),
             Self::Mad { mad_bps } => {
                 if *mad_bps == 0 || *mad_bps > 500 {
@@ -105,18 +137,41 @@ impl DisputePolicy {
     }
 }
 
+/// Unix locktimes, `t2 > t1`. Same rule used by the GUI and the burn txs.
+pub fn validate_fee_burn_deadlines(t1: u32, t2: u32) -> Result<()> {
+    if t1 < 500_000_000 {
+        return Err(Error::protocol(
+            "fee-burn t1 must be a unix locktime (>= 500000000)",
+        ));
+    }
+    if t2 < 500_000_000 {
+        return Err(Error::protocol(
+            "fee-burn t2 must be a unix locktime (>= 500000000)",
+        ));
+    }
+    if t2 <= t1 {
+        return Err(Error::protocol("fee-burn t2 must be strictly after t1"));
+    }
+    Ok(())
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ContractBody {
     pub network: Network,
     pub unit: Unit,
-    /// Basis points of the sum of partidas (1000 = 10%).
+    /// Human name of this work (one secp identity per named work in the GUI).
+    /// Omitted from old JSON; empty string does not change `contract_id`.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub work_name: String,
+    /// Basis points of the sum of partidas (1000 = 10%). Product default is 10%.
     pub bond_bps: u16,
     pub t_project: u32,
     pub partidas: Vec<PartidaSpec>,
     pub mandante_pubkey: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub contratista_pubkey: Option<String>,
-    /// Offeror-defined; default unwind. Both lock it at accept.
+    /// Offeror-defined. Product default is [`DisputePolicy::FeeBurn`]; omitted
+    /// field still deserializes as legacy [`DisputePolicy::Unwind`].
     #[serde(default)]
     pub dispute: DisputePolicy,
 }
@@ -144,6 +199,13 @@ impl ContractBody {
             return Err(Error::protocol(
                 "t_project must be a unix locktime (>= 500000000)",
             ));
+        }
+        if let DisputePolicy::FeeBurn { t2, .. } = self.dispute {
+            if self.t_project < t2 {
+                return Err(Error::protocol(
+                    "t_project must be >= fee-burn t2 (use t_project = t2)",
+                ));
+            }
         }
         let mut seen = std::collections::BTreeSet::new();
         let mut last_plazo = 0u32;
@@ -194,6 +256,7 @@ impl ContractBody {
         Terms {
             network: self.network,
             unit: self.unit,
+            work_name: self.work_name.clone(),
             bond_bps: self.bond_bps,
             t_project: self.t_project,
             partidas: self.partidas.clone(),
@@ -208,6 +271,7 @@ impl ContractBody {
 pub struct Terms {
     pub network: Network,
     pub unit: Unit,
+    pub work_name: String,
     pub bond_bps: u16,
     pub t_project: u32,
     pub partidas: Vec<PartidaSpec>,
@@ -429,6 +493,7 @@ mod tests {
         let body = ContractBody {
             network: Network::Regtest,
             unit: Unit::Usd,
+            work_name: String::new(),
             bond_bps: 1000,
             t_project: 1_800_000_000,
             partidas: vec![PartidaSpec {
@@ -464,6 +529,7 @@ mod tests {
         let body = ContractBody {
             network: Network::Regtest,
             unit: Unit::Usd,
+            work_name: String::new(),
             bond_bps: 1000,
             t_project: 1_800_000_000,
             partidas: vec![PartidaSpec {
@@ -493,6 +559,7 @@ mod tests {
         let mut body = ContractBody {
             network: Network::Regtest,
             unit: Unit::Usd,
+            work_name: String::new(),
             bond_bps: 1000,
             t_project: 1_800_000_000,
             partidas: vec![PartidaSpec {
@@ -540,5 +607,71 @@ mod tests {
             .unwrap_err()
             .to_string()
             .contains("only valid if dispute policy is arbiter"));
+    }
+
+    #[test]
+    fn fee_burn_policy_roundtrip_and_deadlines() {
+        let policy = DisputePolicy::fee_burn(1_700_000_000, 1_800_000_000);
+        policy.validate().unwrap();
+        let json = serde_json::to_value(&policy).unwrap();
+        assert_eq!(json["policy"], "fee_burn");
+        assert_eq!(json["t1"], 1_700_000_000);
+        assert_eq!(json["t2"], 1_800_000_000);
+        assert!(DisputePolicy::fee_burn(1_800_000_000, 1_700_000_000)
+            .validate()
+            .is_err());
+        assert!(DisputePolicy::fee_burn(100, 200).validate().is_err());
+        assert!(!ARBITER_ENABLED);
+    }
+
+    #[test]
+    fn fee_burn_body_rejects_t_project_before_t2() {
+        let body = ContractBody {
+            network: Network::Regtest,
+            unit: Unit::Usd,
+            work_name: "Casa".into(),
+            bond_bps: 1000,
+            t_project: 1_750_000_000,
+            partidas: vec![PartidaSpec {
+                id: 1,
+                description: "Radier".into(),
+                amount_minor: 10_000,
+                plazo_unix: 1_700_000_000,
+            }],
+            mandante_pubkey: pk(1),
+            contratista_pubkey: Some(pk(2)),
+            dispute: DisputePolicy::fee_burn(1_700_000_000, 1_800_000_000),
+        };
+        assert!(body.validate().unwrap_err().to_string().contains("t_project"));
+        let mut ok = body.clone();
+        ok.t_project = 1_800_000_000;
+        ok.validate().unwrap();
+        assert_eq!(ok.terms().work_name, "Casa");
+    }
+
+    #[test]
+    fn work_name_omitted_keeps_legacy_contract_id() {
+        let mut body = ContractBody {
+            network: Network::Regtest,
+            unit: Unit::Usd,
+            work_name: String::new(),
+            bond_bps: 1000,
+            t_project: 1_800_000_000,
+            partidas: vec![PartidaSpec {
+                id: 1,
+                description: "Radier".into(),
+                amount_minor: 150_000,
+                plazo_unix: 1_700_000_000,
+            }],
+            mandante_pubkey: pk(1),
+            contratista_pubkey: Some(pk(2)),
+            dispute: DisputePolicy::Unwind,
+        };
+        let id_empty = contract_id(&body).unwrap();
+        let json = serde_json::to_value(&body).unwrap();
+        assert!(json.get("work_name").is_none());
+        body.work_name = "Obra Norte".into();
+        let id_named = contract_id(&body).unwrap();
+        assert_ne!(id_empty, id_named);
     }
 }
