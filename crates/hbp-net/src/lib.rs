@@ -9,6 +9,7 @@
 //! TCP. Two machines that share a bootstrap address can find each other.
 //! There is not yet a public HBP bootstrap cloud — see [docs/NETWORK.md].
 
+mod bundle;
 mod dht;
 mod message;
 mod overlay;
@@ -18,10 +19,15 @@ mod wire;
 pub use dht::{dht_key, work_topic_key, DhtRecord, PeerInfo, WorkAnnounce};
 pub use message::{NetMessage, FILE_FALLBACK};
 pub use overlay::{OverlayConfig, OverlayHandle};
+pub use bundle::{
+    download_expert_bundle, expert_bundle_url, expert_bundle_url_for, extract_expert_bundle,
+    find_tor_in_dir, tor_cache_dir, TOR_BUNDLE_VERSION,
+};
 pub use tor::{
-    bring_up_tor, default_socks_addr, default_windows_tor_paths, discover_socks, find_tor_binary,
-    probe_socks_port, read_onion_hostname, socks5_connect, socks_label, spawn_tor, tor_status,
-    write_product_torrc, DiscoveredSocks, TorConfig, TorRuntime, TorStatus, SOCKS_CANDIDATE_PORTS,
+    bring_up_tor, bring_up_tor_with_hint, default_socks_addr, default_windows_tor_paths,
+    discover_socks, find_tor_binary, probe_socks_port, read_onion_hostname, socks5_connect,
+    socks_label, spawn_tor, tor_status, write_product_torrc, DiscoveredSocks, TorConfig, TorRuntime,
+    TorStatus, SOCKS_CANDIDATE_PORTS,
 };
 pub use wire::{parse_bootstrap_list, PeerAddr};
 

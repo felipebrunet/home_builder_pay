@@ -8,9 +8,12 @@ description = "Tor point-to-point and TCP Kademlia DHT for home_builder_pay"
 
 [dependencies]
 hbp-core.workspace = true
+flate2 = "1"
 getrandom.workspace = true
 hex.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
+tar = "0.4"
 thiserror.workspace = true
+ureq = "2"

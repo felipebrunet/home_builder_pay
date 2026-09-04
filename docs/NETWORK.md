@@ -39,10 +39,11 @@ Three or more nodes work the same way: you only need a path of bootstraps (A kno
 Documented in [WINDOWS.md](WINDOWS.md). Short version:
 
 - Expert Bundle `tor.exe` next to `home_builder_pay.exe`, or `TOR_BINARY`, or PATH.
-- GUI **Conectar red (Tor + DHT)** probes SOCKS **9050** (Expert Bundle) then **9150** (Tor Browser). Attaches if either is up (`ADD_ONION`, or reuse `{works}/tor/hidden_service/hostname`). Spawns `tor.exe` only when nothing is listening.
-- Tor Browser on 9150 is enough for outbound. Publishing your own onion still wants Expert Bundle / control port.
-- Spawn path writes `{works}/tor/torrc` with `HiddenServiceDir` + `HiddenServicePort 80 → 127.0.0.1:<DHT port>`.
-- Env (advanced): SOCKS `HBP_TOR_SOCKS`, control `HBP_TOR_CONTROL` / `HBP_TOR_COOKIE`.
+- GUI **Conectar red (Tor + DHT)** finds or **downloads** the official Expert Bundle, then **spawns our own Tor + Hidden Service**. Status when the onion exists: *Conectado. Ya puedes ser encontrado.*
+- First connect may take a minute (download ~20 MB + bootstrap). Cache: `%LOCALAPPDATA%\home_builder_pay\tor\` (Windows) or `~/.local/share/home_builder_pay/tor/` (Linux).
+- Spawn uses dedicated SOCKS around `19050` and `{works}/tor/torrc` (`HiddenServicePort 80 → 127.0.0.1:<DHT port>`).
+- Tor Browser SOCKS **9150** is outbound-only fallback if spawn fails. It does not make you findable.
+- Env (advanced): `HBP_SKIP_TOR_DOWNLOAD=1`, `TOR_BINARY`, `HBP_TOR_SOCKS`.
 - Without Tor the DHT still speaks on localhost (how the unit tests run). That is **not** the product WAN path.
 
 ## Messages

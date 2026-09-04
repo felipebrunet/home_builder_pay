@@ -16,9 +16,14 @@ use hbp_core::{
     PRODUCT_NETWORK,
 };
 use hbp_net::{
-    bring_up_tor, parse_bootstrap_list, OverlayConfig, OverlayHandle, PeerAddr, TorConfig,
-    TorRuntime, WorkAnnounce,
+    bring_up_tor_with_hint, parse_bootstrap_list, OverlayConfig, OverlayHandle, PeerAddr,
+    TorConfig, TorRuntime, WorkAnnounce,
 };
+
+enum NetEvent {
+    Progress(String),
+    Finished(Result<TorRuntime, String>),
+}
 
 fn main() -> eframe::Result<()> {
     let opts = eframe::NativeOptions {
@@ -66,7 +71,7 @@ struct App {
     last_error: String,
     net_light: NetLight,
     net_line: String,
-    connect_rx: Option<mpsc::Receiver<Result<TorRuntime, String>>>,
+    connect_rx: Option<mpsc::Receiver<NetEvent>>,
 }
 
 impl App {
@@ -137,18 +142,26 @@ impl App {
             return;
         };
         match rx.try_recv() {
-            Ok(Ok(rt)) => {
+            Ok(NetEvent::Progress(s)) => {
+                self.net_line = s;
+                self.connect_rx = Some(rx);
+                ctx.request_repaint();
+            }
+            Ok(NetEvent::Finished(Ok(rt))) => {
                 let hint = rt.hint_es.clone();
                 let onion = rt.onion.clone();
                 let socks = rt.socks;
+                let findable = rt.findable;
                 if let Some(o) = &self.overlay {
                     o.set_socks(Some(socks));
                     if let Some(ref onion) = onion {
                         o.set_advertised(PeerAddr::new(onion.clone(), 80));
                     }
                 }
-                self.net_light = if onion.is_some() {
+                self.net_light = if findable {
                     NetLight::Ok
+                } else if onion.is_some() || rt.child.is_some() {
+                    NetLight::Partial
                 } else {
                     NetLight::Partial
                 };
@@ -158,8 +171,13 @@ impl App {
                     self.onion = onion;
                 }
                 self.tor_rt = Some(rt);
+                if findable {
+                    if let Some(entry) = self.selected_entry().cloned() {
+                        self.announce_work(&entry);
+                    }
+                }
             }
-            Ok(Err(e)) => {
+            Ok(NetEvent::Finished(Err(e))) => {
                 self.net_light = NetLight::Err;
                 self.net_line = e.clone();
                 self.fail(e);
@@ -491,7 +509,7 @@ impl App {
 
     fn show_network(&mut self, ui: &mut egui::Ui, slug: &str, entry: &WorkEntry, has_offer: bool) {
         ui.heading("Red");
-        ui.label("Un botón. Busca Tor (Expert Bundle o Tor Browser) y enciende el descubrimiento.");
+        ui.label("Un botón. Arranca Tor, crea tu dirección y te hace encontrable.");
         ui.horizontal(|ui| {
             let busy = self.net_light == NetLight::Connecting;
             let label = if busy {
@@ -505,6 +523,15 @@ impl App {
             net_badge(ui, self.net_light, &self.net_line);
         });
         ui.label(RichText::new(&self.net_line).italics());
+        if self.tor_rt.as_ref().map(|t| t.findable).unwrap_or(false) && !self.onion.is_empty() {
+            ui.horizontal(|ui| {
+                ui.label(RichText::new(format!("Tu código: {}", self.onion)).strong());
+                if ui.button("Copiar").clicked() {
+                    ui.output_mut(|o| o.copied_text = self.onion.clone());
+                    self.note("Código copiado");
+                }
+            });
+        }
 
         ui.add_space(4.0);
         ui.collapsing("Avanzado", |ui| {
@@ -769,17 +796,22 @@ impl App {
         };
         let root = self.store.root.clone();
         let (tx, rx) = mpsc::channel();
+        let progress_tx = tx.clone();
         thread::Builder::new()
             .name("hbp-tor".into())
             .spawn(move || {
-                let _ = tx.send(bring_up_tor(&root, port).map_err(|e| {
-                    format!("No pude conectar Tor. Abre Tor Browser o pon tor.exe junto a la app. ({e})")
-                }));
+                let result = bring_up_tor_with_hint(&root, port, |s| {
+                    let _ = progress_tx.send(NetEvent::Progress(s.to_string()));
+                })
+                .map_err(|e| {
+                    format!("No pude conectar la red. Revisa internet y vuelve a pulsar. ({e})")
+                });
+                let _ = tx.send(NetEvent::Finished(result));
             })
             .ok();
         self.connect_rx = Some(rx);
         self.net_light = NetLight::Connecting;
-        self.net_line = "Buscando Tor (Expert Bundle en 9050 o Tor Browser en 9150)…".into();
+        self.net_line = "Preparando la red… la primera vez puede tardar un minuto.".into();
         self.note("Conectando red…");
     }
 

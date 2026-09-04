@@ -31,38 +31,18 @@ cargo build -p hbp-app --release --target x86_64-pc-windows-gnu
 
 This environment did **not** produce a tested `.exe`. Treat the GNU target as a convenience; MSVC on a real Windows box is the supported path.
 
-## Tor (required for Windows v1 networking)
+## Tor (one click — you should be findable)
 
-Point-to-point and DHT RPCs to `.onion` go through SOCKS5. The crate does not vendor Tor; it drives a local `tor.exe`.
+Point-to-point and DHT RPCs to `.onion` go through SOCKS5. The app does **not** vendor Tor in git. On **Conectar red (Tor + DHT)** it:
 
-**Workable approach (Expert Bundle)**
+1. Looks for `tor.exe` next to `home_builder_pay.exe`, in `%LOCALAPPDATA%\home_builder_pay\tor\`, on `PATH`, or inside a Tor Browser install (binary only).
+2. If nothing is there, **downloads** the official [Tor Expert Bundle](https://dist.torproject.org/torbrowser/) (`tor-expert-bundle-windows-x86_64-*.tar.gz`) into `%LOCALAPPDATA%\home_builder_pay\tor\`. Tor is © The Tor Project, BSD-3-Clause; we do not relicense it.
+3. Writes a private `torrc` under the works directory and **spawns Tor with a Hidden Service** (`HiddenServicePort 80 → 127.0.0.1:<DHT port>`), on ports around `19050` so it does not fight Tor Browser’s `9150`.
+4. Waits for `hidden_service\hostname` and shows **Conectado. Ya puedes ser encontrado** plus your `.onion` on the main Red panel (copy button). No trip into Avanzado for the happy path.
 
-1. Download the [Tor Expert Bundle](https://www.torproject.org/download/tor/) (Windows). Unzip `tor.exe` + `geoip`.
-2. Place them either next to `home_builder_pay.exe`, or `%LOCALAPPDATA%\Tor\tor.exe`, or set `TOR_BINARY`.
-3. In the GUI: one button, **Conectar red (Tor + DHT)**. The app probes SOCKS **9050** (Expert Bundle) and **9150** (Tor Browser). If nothing is listening it writes `%USERPROFILE%\Documents\home_builder_pay\tor\torrc`:
+Tor Browser’s SOCKS (`9150`) is **outbound fallback only** if spawn/download fails. That lets you talk; it does not make you findable.
 
-```
-SocksPort 127.0.0.1:9050
-ControlPort 127.0.0.1:9051
-CookieAuthentication 1
-HiddenServiceDir …\tor\hidden_service
-HiddenServicePort 80 127.0.0.1:3848
-```
-
-   and tries to spawn `tor.exe -f torrc`. When `hidden_service\hostname` appears, that onion is the advertised DHT address (`xxx.onion:80`).
-4. **Tor Browser** is enough for outbound (Felipe’s case: Browser up on 9150, app used to time out on 9050). Publishing your own onion still wants the Expert Bundle or a control-port `ADD_ONION`. Advanced: paste the other laptop’s `.onion`.
-5. If you already run the Expert Bundle yourself, keep SOCKS on `9050` or let the app find 9150. Optional control-port `ADD_ONION` (`HBP_TOR_CONTROL` / `HBP_TOR_COOKIE`). There is no public bootstrap list yet.
-
-Manual torrc (if you refuse the spawn):
-
-```
-# hbp-product.torrc
-SocksPort 9050
-HiddenServiceDir C:\Users\YOU\AppData\Local\Tor\hbp_hs
-HiddenServicePort 80 127.0.0.1:3848
-```
-
-Then paste the hostname into the GUI “onion propio” field.
+You do not need to know “Expert Bundle” vs “Tor Browser”. One button.
 
 File-passing remains fallback if Tor is down. See [NETWORK.md](NETWORK.md).
 
@@ -73,7 +53,7 @@ File-passing remains fallback if Tor is down. See [NETWORK.md](NETWORK.md).
 - Accept an offer from a file path
 - Stage board
 - Signet locked (no mainnet, no network picker)
-- One-button Tor + DHT (9050 Expert Bundle **or** 9150 Tor Browser); advanced onion/bootstrap collapsed
+- One-button Tor + DHT that **spawns a Hidden Service** (download official bundle if needed). Status: *Ya puedes ser encontrado*. Avanzado is optional.
 - Human local date/time for t1/t2 (no raw unix)
 - Dark / light theme toggle (saved in `ui.json`)
 - Import / export backup JSON (secret hex, not BIP39; Signet only)
