@@ -16,8 +16,8 @@ use std::thread;
 use std::time::Duration;
 
 use crate::dht::{
-    parse_node_id, person_topic_key, work_topic_key, xor_distance, DhtRecord, PeerInfo,
-    WorkAnnounce,
+    normalize_work_name, parse_node_id, person_topic_key, work_topic_key, xor_distance, DhtRecord,
+    PeerInfo, WorkAnnounce,
 };
 use crate::message::NetMessage;
 use crate::wire::{connect_peer, read_frame, write_frame, Op, PeerAddr, ResBody, WireMsg};
@@ -56,6 +56,8 @@ struct State {
     peers: Vec<PeerInfo>,
     store: BTreeMap<[u8; 32], DhtRecord>,
     inbox: Vec<NetMessage>,
+    /// Person/obra name → published catalog (local + learned).
+    catalogs: BTreeMap<String, Vec<WorkAnnounce>>,
 }
 
 #[derive(Clone)]
@@ -85,6 +87,7 @@ impl OverlayHandle {
             peers: Vec::new(),
             store: BTreeMap::new(),
             inbox: Vec::new(),
+            catalogs: BTreeMap::new(),
         }));
         let shutdown = Arc::new(AtomicBool::new(false));
         let rpc_ids = Arc::new(AtomicU64::new(1));
@@ -167,19 +170,52 @@ impl OverlayHandle {
     }
 
     pub fn announce_work(&self, ann: &WorkAnnounce) -> crate::Result<[u8; 32]> {
-        // Persona is the product Buscar key. Obra title is secondary.
+        self.remember_announce(ann);
         if !ann.person_name.trim().is_empty() {
-            self.store_record(person_topic_key(&ann.person_name), ann)?;
+            let list = self.local_catalog(&ann.person_name);
+            self.store_bytes(
+                person_topic_key(&ann.person_name),
+                serde_json::to_vec(&list)?,
+            )?;
         }
         let key = work_topic_key(&ann.work_name);
         self.store_record(key, ann)?;
         Ok(key)
     }
 
+    fn remember_announce(&self, ann: &WorkAnnounce) {
+        let Ok(mut s) = self.state.lock() else {
+            return;
+        };
+        let mut keys = Vec::new();
+        if !ann.person_name.trim().is_empty() {
+            keys.push(normalize_work_name(&ann.person_name));
+        }
+        if !ann.work_name.trim().is_empty() {
+            keys.push(normalize_work_name(&ann.work_name));
+        }
+        for k in keys {
+            let slot = s.catalogs.entry(k).or_default();
+            crate::rendezvous::merge_announces(slot, [ann.clone()]);
+        }
+    }
+
+    fn local_catalog(&self, query: &str) -> Vec<WorkAnnounce> {
+        let q = normalize_work_name(query);
+        let Ok(s) = self.state.lock() else {
+            return Vec::new();
+        };
+        s.catalogs.get(&q).cloned().unwrap_or_default()
+    }
+
     fn store_record(&self, key: [u8; 32], ann: &WorkAnnounce) -> crate::Result<()> {
+        self.store_bytes(key, serde_json::to_vec(ann)?)
+    }
+
+    fn store_bytes(&self, key: [u8; 32], value: Vec<u8>) -> crate::Result<()> {
         let record = DhtRecord {
             key: hex::encode(key),
-            value: serde_json::to_vec(ann)?,
+            value,
             publisher: Some(self.advertised()),
             ttl_secs: 86_400,
         };
@@ -204,63 +240,85 @@ impl OverlayHandle {
         Ok(())
     }
 
+    fn decode_announces(bytes: &[u8]) -> Vec<WorkAnnounce> {
+        if let Ok(list) = serde_json::from_slice::<Vec<WorkAnnounce>>(bytes) {
+            return list
+                .into_iter()
+                .filter(|a| !a.onion.trim().is_empty() && !a.work_name.trim().is_empty())
+                .collect();
+        }
+        if let Ok(ann) = serde_json::from_slice::<WorkAnnounce>(bytes) {
+            if !ann.onion.trim().is_empty() {
+                return vec![ann];
+            }
+        }
+        Vec::new()
+    }
+
     /// DHT lookup (normalized name). Does not hit the public rendezvous.
     pub fn lookup_work(&self, work_name: &str) -> crate::Result<Option<WorkAnnounce>> {
         self.lookup_key(work_topic_key(work_name))
     }
 
     pub fn lookup_person(&self, person_name: &str) -> crate::Result<Option<WorkAnnounce>> {
-        self.lookup_key(person_topic_key(person_name))
+        Ok(self
+            .lookup_announces(person_topic_key(person_name))?
+            .into_iter()
+            .next())
     }
 
-    fn lookup_key(&self, key: [u8; 32]) -> crate::Result<Option<WorkAnnounce>> {
+    fn lookup_announces(&self, key: [u8; 32]) -> crate::Result<Vec<WorkAnnounce>> {
         match self.iterative_find_value(key)? {
-            Some(rec) => Ok(Some(serde_json::from_slice(&rec.value)?)),
-            None => Ok(self.lookup_local(key)),
+            Some(rec) => Ok(Self::decode_announces(&rec.value)),
+            None => {
+                let s = self.state.lock().expect("dht");
+                Ok(s.store
+                    .get(&key)
+                    .map(|r| Self::decode_announces(&r.value))
+                    .unwrap_or_default())
+            }
         }
     }
 
-    fn lookup_local(&self, key: [u8; 32]) -> Option<WorkAnnounce> {
-        let s = self.state.lock().ok()?;
-        let rec = s.store.get(&key)?;
-        serde_json::from_slice(&rec.value).ok()
+    fn lookup_key(&self, key: [u8; 32]) -> crate::Result<Option<WorkAnnounce>> {
+        Ok(self.lookup_announces(key)?.into_iter().next())
     }
 
     /// Local store → (LAN DHT if not onion) → public board (persona literal/hash +
     /// directory payload) → remote DHT. Isolated onions must hit the board before
     /// waiting on dead peers.
     pub fn discover_work(&self, query: &str) -> crate::Result<Option<WorkAnnounce>> {
+        Ok(self.discover_catalog(query)?.into_iter().next())
+    }
+
+    /// All published obras for a persona (or one obra if the query is a title).
+    pub fn discover_catalog(&self, query: &str) -> crate::Result<Vec<WorkAnnounce>> {
         let q = query.trim();
         if q.is_empty() {
-            return Ok(None);
+            return Ok(Vec::new());
         }
-        if let Some(ann) = self.lookup_local(person_topic_key(q)) {
-            return Ok(Some(ann));
-        }
-        if let Some(ann) = self.lookup_local(work_topic_key(q)) {
-            return Ok(Some(ann));
-        }
+        let mut out = self.local_catalog(q);
         let onion_wan = self.advertised().is_onion();
         if !onion_wan {
-            if let Ok(Some(ann)) = self.lookup_person(q) {
-                return Ok(Some(ann));
+            if let Ok(list) = self.lookup_announces(person_topic_key(q)) {
+                crate::rendezvous::merge_announces(&mut out, list);
             }
             if let Ok(Some(ann)) = self.lookup_work(q) {
-                return Ok(Some(ann));
+                crate::rendezvous::merge_announces(&mut out, [ann]);
             }
         }
-        if let Some(ann) = crate::rendezvous::lookup_announce(self.socks(), q)? {
-            return Ok(Some(ann));
+        if let Ok(board) = crate::rendezvous::lookup_catalog(self.socks(), q) {
+            crate::rendezvous::merge_announces(&mut out, board);
         }
         if onion_wan {
-            if let Ok(Some(ann)) = self.lookup_person(q) {
-                return Ok(Some(ann));
+            if let Ok(list) = self.lookup_announces(person_topic_key(q)) {
+                crate::rendezvous::merge_announces(&mut out, list);
             }
             if let Ok(Some(ann)) = self.lookup_work(q) {
-                return Ok(Some(ann));
+                crate::rendezvous::merge_announces(&mut out, [ann]);
             }
         }
-        Ok(None)
+        Ok(out)
     }
 
     /// Publish to the public name board. Best-effort; DHT announce is separate.
@@ -603,6 +661,18 @@ mod tests {
         assert_eq!(found.onion, "felipe.onion");
         let by_obra = b.discover_work("casa2").unwrap().expect("obra fallback");
         assert_eq!(by_obra.person_name, "Felipe");
+        a.announce_work(&WorkAnnounce {
+            work_name: "casa3".into(),
+            onion: "felipe.onion".into(),
+            offer_id: None,
+            role: "mandante".into(),
+            person_name: "Felipe".into(),
+        })
+        .unwrap();
+        let cat = b.discover_catalog("Felipe").unwrap();
+        assert_eq!(cat.len(), 2);
+        assert!(cat.iter().any(|a| a.work_name == "casa2"));
+        assert!(cat.iter().any(|a| a.work_name == "casa3"));
     }
 
     #[test]

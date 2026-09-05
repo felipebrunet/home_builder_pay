@@ -154,12 +154,60 @@ pub fn lookup_announce(
 
 /// Prefer a payload that matches the query (persona or obra). Else latest onion.
 pub fn pick_announce(raw: &str, query: &str) -> Option<WorkAnnounce> {
-    let all = announces_from_ntfy(raw);
-    all.iter()
-        .rev()
-        .find(|a| announce_matches_query(a, query))
-        .cloned()
-        .or_else(|| all.into_iter().rev().find(|a| !a.onion.trim().is_empty()))
+    matching_announces(raw, query)
+        .into_iter()
+        .next()
+        .or_else(|| latest_announce(raw))
+}
+
+/// Unique obras for a query; last write for a work_name wins.
+pub fn merge_announces(
+    into: &mut Vec<WorkAnnounce>,
+    incoming: impl IntoIterator<Item = WorkAnnounce>,
+) {
+    for ann in incoming {
+        if ann.onion.trim().is_empty() || ann.work_name.trim().is_empty() {
+            continue;
+        }
+        let slug = normalize_work_name(&ann.work_name);
+        if let Some(ex) = into
+            .iter_mut()
+            .find(|a| normalize_work_name(&a.work_name) == slug)
+        {
+            *ex = ann;
+        } else {
+            into.push(ann);
+        }
+    }
+}
+
+pub fn matching_announces(raw: &str, query: &str) -> Vec<WorkAnnounce> {
+    let mut out = Vec::new();
+    merge_announces(
+        &mut out,
+        announces_from_ntfy(raw)
+            .into_iter()
+            .filter(|a| announce_matches_query(a, query)),
+    );
+    out
+}
+
+pub fn lookup_catalog(socks: Option<SocketAddr>, query: &str) -> crate::Result<Vec<WorkAnnounce>> {
+    let query = query.trim();
+    if query.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut out = Vec::new();
+    for topic in lookup_topics(query) {
+        for host in NTFY_HOSTS {
+            let url = format!("{host}/{topic}/json?poll=1");
+            match get_text(socks, &url) {
+                Ok(raw) => merge_announces(&mut out, matching_announces(&raw, query)),
+                Err(_) => {}
+            }
+        }
+    }
+    Ok(out)
 }
 
 pub fn latest_announce(raw: &str) -> Option<WorkAnnounce> {
@@ -254,6 +302,22 @@ mod tests {
         assert_eq!(found.work_name, "casa2");
         assert_eq!(found.person_name, "Felipe");
         assert_eq!(pick_announce(&wrapped, "casa2").unwrap().onion, "abc.onion");
+    }
+
+    #[test]
+    fn catalog_lists_two_obras_for_same_persona() {
+        let a = casa2_felipe();
+        let mut b = a.clone();
+        b.work_name = "casa3".into();
+        let raw = format!(
+            "{}\n{}",
+            serde_json::to_string(&a).unwrap(),
+            serde_json::to_string(&b).unwrap()
+        );
+        let list = matching_announces(&raw, "Felipe");
+        assert_eq!(list.len(), 2);
+        assert!(list.iter().any(|x| x.work_name == "casa2"));
+        assert!(list.iter().any(|x| x.work_name == "casa3"));
     }
 
     #[test]

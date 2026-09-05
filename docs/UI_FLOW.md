@@ -8,7 +8,7 @@ Approved product map (2026-09-05). Step 1 is identity + chrome + next action. **
 |---|---|
 | **Persona** | Display name (e.g. “Felipe”). Header switcher. **Not** a folder slug. |
 | **Obra** | Job the mandante creates (`casa2`). Only the mandante creates obras. |
-| **Trato** | Contratista engaging that obra: find → wait → accept → confirm. |
+| **Trato** | Contratista picks one obra, requests the proposal, reviews it, then accepts. |
 | **Propuesta** | Signed offer (`00-offer.json` / `NetMessage::Offer`). |
 
 ## Shell (Electrum-like)
@@ -17,9 +17,9 @@ One top row: **profile/obra switcher** (`Felipe · Mandante  ·  casa2`) plus ne
 
 | Mandante | Contratista |
 |---|---|
-| **Obra** — monto, plazos, partidas; one green CTA (Preparar / Firmar) | **Buscar** — persona name + tratos |
-| **Red** — Conectarme / Publicar / status | **Trato** — Qué hacer ahora |
-| **Trato** — Qué hacer ahora + Enviar | **Red** — Conectarme / Avanzado |
+| **Obra** — monto, plazos, partidas; one green CTA (Preparar / Firmar) | **Buscar** — persona name + **obra cards** |
+| **Red** — Conectarme / Publicar / status | **Trato** — review (total, plazos, partidas) then Aceptar |
+| **Trato** — Enviar only after they asked for that obra | **Red** — Conectarme / Avanzado |
 | **Pago** — grey, “próximamente” | **Pago** — grey stub |
 
 Finished steps are muted checks. Waiting cards are amber; success green; primary actions green. Help is behind **¿Qué es esto?**. **Notas** stay collapsed (Ver / Limpiar).
@@ -37,19 +37,28 @@ Publish writes the same announce JSON to:
 
 DHT keys stay `hbp-person:felipe` (primary) and `hbp-work:casa2` (secondary). Isolated onions hit the board **before** remote DHT. Buscar `Felipe` must return the casa2 announce without typing the obra title.
 
-**Handshake:** after find, contratista DELIVERs `Hello` with their onion; mandante stores it and Enviar works without Avanzado paste.
+**Catalog handshake (not auto-accept):**
 
-## Retest (persona search)
+1. Mandante **Publicar** = catalog only. No offer on the wire.
+2. Contratista **Buscar** `Felipe` → list of that person’s published obras (cards). Does **not** open a trato or send Accept.
+3. Contratista picks one → **Ver propuesta** DELIVERs `Request { work_name, onion }` (+ `Hello` for the dest).
+4. Mandante inbox `Request` binds the peer **to that obra** and DELIVERs `Offer`.
+5. Contratista **Trato** shows the full proposal (total, moneda, boleta 10%, partidas, t1/t2). Then **Aceptar trato** → `Accept` → mandante `Commit`.
 
-Both windows online. No Avanzado onion paste.
+Mandante **Enviar** is a resend after a request, not a dump into Accept. A second obra stays in the catalog until they ask for it.
 
-1. **Mandante:** Yo pago → name **Felipe** → Seguir. Switcher: `Felipe · Mandante`. Tab **Obra** → crear **casa2**. Preparar → Firmar. Tab **Red** → **Conectarme** (auto-publica). Notas must mention tema `hbpn-felipe`, not only `casa2`.
-2. **Contratista:** Yo construyo → nombre → Seguir. Tab **Buscar** → **Conectarme** → type **`Felipe`** (not casa2) → **Buscar**.
-3. Trato `casa2 — con Felipe` appears; switcher and tab **Trato** open it.
-4. Mandante **Trato** → **Enviar**. Contratista **Aceptar**.
+## Retest (two obras, same mandante)
 
-If step 2 fails with only `casa2` working, persona board is still broken.
+Both online. No Avanzado. No PSBT.
+
+1. Mandante: Felipe → crear **casa2** → Preparar → Firmar → Red **Conectarme** / Publicar.
+2. Mandante: ＋ Nueva obra **casa3** → Preparar → Firmar → Publicar. Do **not** expect the contratista to jump to Aceptar.
+3. Contratista: Buscar **`Felipe`**. Cards: **casa2** and **casa3**. No trato auto-opened.
+4. **Ver propuesta** on casa2 → Trato review (total, plazos, partidas) → **Aceptar trato**.
+5. Buscar again (or same list) → **Ver propuesta** on casa3 → review → accept.
+
+If a second publish lands as Aceptar-only with no list/review, this slice is wrong.
 
 ## Out of step 1
 
-PSBT / funding wizard, fee-burn arming, Tor rewrite, several obras per persona.
+PSBT / funding wizard, fee-burn arming, Tor rewrite, several mandantes in one directory.

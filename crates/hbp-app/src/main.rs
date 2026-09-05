@@ -26,7 +26,7 @@ enum JobEvent {
     Progress(String),
     ConnectDone(Result<TorRuntime, String>),
     AnnounceDone(Result<(String, String), String>),
-    LookupDone(Result<Option<WorkAnnounce>, String>),
+    LookupDone(Result<Vec<WorkAnnounce>, String>),
     BootstrapDone(Result<usize, String>),
     DeliverDone(Result<String, String>),
     /// Background Hello / retry. Must not clear a user-facing `busy` job.
@@ -103,6 +103,7 @@ struct App {
     picking_role: bool,
     tab: MainTab,
     help_open: bool,
+    search_hits: Vec<WorkAnnounce>,
 }
 
 impl App {
@@ -157,6 +158,7 @@ impl App {
             picking_role,
             tab: start_tab,
             help_open: false,
+            search_hits: Vec::new(),
         }
     }
 
@@ -276,15 +278,15 @@ impl App {
                     self.busy = None;
                     self.fail(e);
                 }
-                JobEvent::LookupDone(Ok(Some(ann))) => {
+                JobEvent::LookupDone(Ok(hits)) => {
                     self.busy = None;
-                    self.on_found_work(ann);
-                }
-                JobEvent::LookupDone(Ok(None)) => {
-                    self.busy = None;
-                    self.fail(
-                        "No aparece. ¿El mandante se conectó y publicó? Prueba su nombre (Don José) o el de la obra. Si no, usen Avanzado.",
-                    );
+                    if hits.is_empty() {
+                        self.fail(
+                            "No aparece. ¿El mandante se conectó y publicó? Prueba su nombre (Don José) o el de la obra. Si no, usen Avanzado.",
+                        );
+                    } else {
+                        self.on_found_catalog(hits);
+                    }
                 }
                 JobEvent::LookupDone(Err(e)) => {
                     self.busy = None;
@@ -370,38 +372,88 @@ impl App {
                 if entry.role == Role::Mandante {
                     self.spawn_announce(&entry);
                 } else if !self.peer_onion.trim().is_empty() {
-                    self.send_hello(&self.peer_onion.clone(), &entry.name, false);
+                    self.send_request(&self.peer_onion.clone(), &entry.name);
                 }
             }
         }
     }
 
-    fn on_found_work(&mut self, ann: WorkAnnounce) {
-        let who = if ann.person_name.trim().is_empty() {
-            ann.work_name.clone()
-        } else {
-            format!("{} · {}", ann.person_name, ann.work_name)
-        };
-        self.note(format!("Encontré a {who}"));
+    fn on_found_catalog(&mut self, hits: Vec<WorkAnnounce>) {
+        self.search_hits = hits;
+        let n = self.search_hits.len();
+        let who = self
+            .search_hits
+            .iter()
+            .find(|a| !a.person_name.trim().is_empty())
+            .map(|a| a.person_name.trim().to_string())
+            .unwrap_or_else(|| self.lookup_name.trim().to_string());
+        self.note(format!(
+            "Encontré {n} obra(s) de {who}. Elige una y pide la propuesta. No se acepta sola."
+        ));
+        self.tab = MainTab::Buscar;
+        if let Some(onion) = self
+            .search_hits
+            .iter()
+            .map(|a| a.onion.trim().to_string())
+            .find(|o| !o.is_empty())
+        {
+            self.spawn_bootstrap(&onion);
+        }
+    }
+
+    fn request_obra(&mut self, ann: WorkAnnounce) {
         let onion = ann.onion.trim().to_string();
         if onion.is_empty() {
-            return;
+            return self.fail("Esa obra no trae código de red.");
         }
-        self.peer_onion = onion.clone();
         let peer = if ann.person_name.trim().is_empty() {
             None
         } else {
             Some(ann.person_name.as_str())
         };
-        if let Ok(entry) = self.store.ensure_contratista_work(&ann.work_name, peer) {
-            let _ = self.store.remember_peer(&entry.slug, &onion, peer);
-            self.selected = Some(entry.slug);
-            self.prefs.role = Role::Contratista;
-            let _ = self.store.save_prefs(&self.prefs);
-            self.tab = MainTab::Trato;
-            self.send_hello(&onion, &ann.work_name, false);
+        match self.store.ensure_contratista_work(&ann.work_name, peer) {
+            Ok(entry) => {
+                let _ = self.store.remember_peer(&entry.slug, &onion, peer);
+                self.peer_onion = onion.clone();
+                self.selected = Some(entry.slug);
+                self.prefs.role = Role::Contratista;
+                let _ = self.store.save_prefs(&self.prefs);
+                self.tab = MainTab::Trato;
+                self.note(format!(
+                    "Pedí la propuesta de {}. Revísala cuando llegue.",
+                    ann.work_name
+                ));
+                self.send_request(&onion, &ann.work_name);
+                self.send_hello(&onion, &ann.work_name, false);
+            }
+            Err(e) => self.fail(e),
         }
-        self.spawn_bootstrap(&onion);
+    }
+
+    fn send_request(&mut self, dest_onion: &str, work_name: &str) {
+        let Some(onion) = self.own_handle() else {
+            self.note("Sin mi código aún; reintenta Ver propuesta cuando estés en la red.");
+            return;
+        };
+        let dest = match PeerAddr::parse_flexible(dest_onion) {
+            Ok(p) => p,
+            Err(_) => return,
+        };
+        let Some(o) = self.overlay.clone() else {
+            return;
+        };
+        let msg = NetMessage::Request {
+            work_name: work_name.to_string(),
+            onion,
+            person_name: self.prefs.display_name().to_string(),
+        };
+        self.spawn_quiet(move |tx| {
+            let r = o
+                .deliver(&dest, &msg)
+                .map(|_| "Pedí la propuesta.".to_string())
+                .map_err(|e| format!("No pude pedir la propuesta ({e})"));
+            let _ = tx.send(JobEvent::QuietDeliver(r));
+        });
     }
 
     fn own_handle(&self) -> Option<String> {
@@ -465,6 +517,7 @@ impl App {
         if dest.is_empty() {
             return;
         }
+        self.send_request(&dest, &entry.name);
         self.send_hello(&dest, &entry.name, false);
     }
 
@@ -488,6 +541,11 @@ impl App {
                     person_name,
                     role,
                 } => self.on_inbox_hello(work_name, onion, person_name, role),
+                NetMessage::Request {
+                    work_name,
+                    onion,
+                    person_name,
+                } => self.on_inbox_request(work_name, onion, person_name),
                 NetMessage::Offer { offer } => self.on_inbox_offer(offer),
                 NetMessage::Accept { pending } => self.on_inbox_accept(pending),
                 NetMessage::Commit { signed } => self.on_inbox_commit(signed),
@@ -517,19 +575,39 @@ impl App {
             return;
         };
         self.apply_peer_on(&slug, &onion, &person_name);
-        self.selected = Some(slug);
         let they_contratista = role.eq_ignore_ascii_case("contratista");
         if self.prefs.role == Role::Mandante && they_contratista {
-            let who = if person_name.trim().is_empty() {
-                "El contratista".to_string()
-            } else {
-                person_name.trim().to_string()
-            };
-            self.note(format!("{who} ya te encontró. Puedes enviar la propuesta."));
-            self.tab = MainTab::Trato;
+            self.note("El contratista está en la red. Esperando que pida una obra del catálogo.");
             self.send_hello(&onion, &work_name, true);
-        } else if self.prefs.role == Role::Contratista && !they_contratista {
-            self.note("El mandante ya puede enviarte. Espera la propuesta.");
+        }
+    }
+
+    fn on_inbox_request(&mut self, work_name: String, onion: String, person_name: String) {
+        if self.prefs.role != Role::Mandante {
+            return;
+        }
+        let onion = onion.trim().to_string();
+        if onion.is_empty() {
+            return;
+        }
+        let Some(entry) = self.store.find_by_work_name(&work_name) else {
+            return self.note(format!(
+                "Pidieron {work_name}, pero no tengo esa obra aquí."
+            ));
+        };
+        self.apply_peer_on(&entry.slug, &onion, &person_name);
+        self.selected = Some(entry.slug.clone());
+        self.tab = MainTab::Trato;
+        let who = if person_name.trim().is_empty() {
+            "El contratista".to_string()
+        } else {
+            person_name.trim().to_string()
+        };
+        self.note(format!("{who} pidió {work_name}. Envío la propuesta."));
+        if matches!(self.store.load_offer(&entry.slug), Ok(Some(_))) {
+            self.spawn_send_offer(&entry.slug);
+        } else {
+            self.note("Aún no está firmada. Fírmala en Obra y luego Enviar.");
         }
     }
 
@@ -548,7 +626,8 @@ impl App {
                     return self.fail(e);
                 }
                 self.selected = Some(entry.slug);
-                self.note("Llegó la propuesta del mandante. Revísala y pulsa Aceptar trato.");
+                self.tab = MainTab::Trato;
+                self.note("Llegó la propuesta. Revísala en Trato (total, plazos, partidas) antes de aceptar.");
             }
             Err(e) => self.fail(e),
         }
@@ -919,7 +998,7 @@ impl App {
     fn show_tab_buscar(&mut self, ui: &mut egui::Ui) {
         panel_card(ui, self.prefs.dark, |ui| {
             ui.label(RichText::new("Buscar mandante").strong());
-            ui.label("Su nombre (como lo conoces), no el de la obra.");
+            ui.label("Su nombre. Verás sus obras; no se abre un trato solo.");
             show_field(
                 ui,
                 &mut self.lookup_name,
@@ -937,6 +1016,32 @@ impl App {
                 self.spawn_lookup();
             }
         });
+        if !self.search_hits.is_empty() {
+            ui.add_space(12.0);
+            ui.label(RichText::new("Obras publicadas").strong());
+            let hits = self.search_hits.clone();
+            let mut pick = None;
+            for ann in &hits {
+                let who = if ann.person_name.trim().is_empty() {
+                    String::new()
+                } else {
+                    format!(" · {}", ann.person_name.trim())
+                };
+                panel_card(ui, self.prefs.dark, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label(RichText::new(&ann.work_name).strong().size(16.0));
+                        ui.label(RichText::new(who).weak());
+                        if primary_btn(ui, "Ver propuesta", self.prefs.dark).clicked() {
+                            pick = Some(ann.clone());
+                        }
+                    });
+                });
+                ui.add_space(6.0);
+            }
+            if let Some(ann) = pick {
+                self.request_obra(ann);
+            }
+        }
         ui.add_space(12.0);
         ui.label(RichText::new("Mis tratos").weak());
         self.work_list(ui, true);
@@ -1062,17 +1167,66 @@ impl App {
             has_pending,
             has_signed,
         );
-        if entry.role == Role::Contratista && (has_offer || has_draft) && !has_signed {
+        if has_draft || has_offer {
+            ui.add_space(10.0);
+            self.show_proposal_review(ui, &slug);
+        } else if entry.role == Role::Contratista {
             ui.add_space(8.0);
-            if let Ok(Some(draft)) = self.store.load_draft(&slug) {
-                ui.label(format!(
-                    "Total {} {} · {} partidas",
-                    format_major_amount(draft.total_minor(), draft.unit),
-                    draft.unit,
-                    draft.partidas.len()
-                ));
+            ui.label(
+                RichText::new("Todavía no hay propuesta. Pídela desde Buscar → Ver propuesta.")
+                    .weak(),
+            );
+        }
+        if entry.role == Role::Contratista && has_offer && !has_pending && !has_signed {
+            ui.add_space(8.0);
+            if primary_btn(ui, "Aceptar trato", self.prefs.dark).clicked() {
+                self.accept_from_store(&slug, &id);
             }
         }
+    }
+
+    fn show_proposal_review(&self, ui: &mut egui::Ui, slug: &str) {
+        let Ok(Some(draft)) = self.store.load_draft(slug) else {
+            return;
+        };
+        let bond = bond_minor(draft.total_minor(), draft.bond_bps).unwrap_or(0);
+        let dark = self.prefs.dark;
+        panel_card(ui, dark, |ui| {
+            ui.label(RichText::new("Propuesta — revísala").strong());
+            ui.label(format!(
+                "Total {} {} · boleta 10% = {} {}",
+                format_major_amount(draft.total_minor(), draft.unit),
+                draft.unit,
+                format_major_amount(bond, draft.unit),
+                draft.unit
+            ));
+            if let Some((t1, t2)) = draft.dispute.fee_burn_deadlines() {
+                ui.label(format!("Primer plazo: {}", format_unix_local_es(t1)));
+                ui.label(format!("Segundo plazo: {}", format_unix_local_es(t2)));
+            }
+            ui.label(
+                RichText::new(
+                    "Si ambos están de acuerdo, se paga. Si no, se quema a esos dos plazos.",
+                )
+                .small()
+                .weak(),
+            );
+            ui.add_space(6.0);
+            egui::Grid::new("review-stages")
+                .striped(true)
+                .show(ui, |ui| {
+                    ui.strong("#");
+                    ui.strong("partida");
+                    ui.strong("monto");
+                    ui.end_row();
+                    for p in &draft.partidas {
+                        ui.label(p.id.to_string());
+                        ui.label(&p.description);
+                        ui.label(format_major_amount(p.amount_minor, draft.unit));
+                        ui.end_row();
+                    }
+                });
+        });
     }
 
     fn show_log_panel(&mut self, ctx: &egui::Context) {
@@ -1147,6 +1301,7 @@ impl App {
                 .clicked()
             {
                 self.selected = Some(w.slug);
+                self.tab = MainTab::Trato;
             }
         }
     }
@@ -1833,7 +1988,7 @@ impl App {
         }
         self.last_error.clear();
         self.start_job("buscando al mandante", move |tx| {
-            let r = o.discover_work(&name).map_err(|e| e.to_string());
+            let r = o.discover_catalog(&name).map_err(|e| e.to_string());
             let _ = tx.send(JobEvent::LookupDone(r));
         });
     }

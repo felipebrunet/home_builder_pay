@@ -81,13 +81,14 @@ fn mandante_step(p: WorkProgress) -> NextStep {
             };
         }
         return NextStep {
-            sentence: "Obra publicada. Esperando que el contratista te encuentre. Cuando esté listo, envías la propuesta.".into(),
+            sentence: "Obra en el catálogo. Espera que el contratista la pida. No se envía sola."
+                .into(),
             button: None,
             kind: NextKind::None,
         };
     }
     NextStep {
-        sentence: "Envía la propuesta al contratista.".into(),
+        sentence: "El contratista pidió esta obra. Envíale la propuesta (o reenvíala).".into(),
         button: Some("Enviar"),
         kind: NextKind::Send,
     }
@@ -149,8 +150,8 @@ fn contratista_step(p: WorkProgress) -> NextStep {
     }
     if p.has_offer {
         return NextStep {
-            sentence: "Llegó la propuesta. Acéptala si estás de acuerdo.".into(),
-            button: Some("Aceptar"),
+            sentence: "Revisa total, plazos y partidas abajo. Si estás de acuerdo, acepta.".into(),
+            button: None,
             kind: NextKind::Accept,
         };
     }
@@ -169,8 +170,7 @@ fn contratista_step(p: WorkProgress) -> NextStep {
         };
     }
     NextStep {
-        sentence: "Espera la propuesta del mandante. Cuando llegue, aparece el botón Aceptar."
-            .into(),
+        sentence: "Pediste esta obra. Espera la propuesta para revisarla. Aún no aceptes.".into(),
         button: None,
         kind: NextKind::None,
     }
@@ -194,7 +194,7 @@ mod tests {
         );
         assert_eq!(step.kind, NextKind::Send);
         assert_eq!(step.button, Some("Enviar"));
-        assert!(step.sentence.contains("Envía la propuesta"));
+        assert!(step.sentence.contains("pidió") || step.sentence.contains("Envía"));
     }
 
     #[test]
@@ -208,7 +208,7 @@ mod tests {
             },
         );
         assert_eq!(wait.kind, NextKind::None);
-        assert!(wait.sentence.contains("Espera la propuesta"));
+        assert!(wait.sentence.contains("Pediste") || wait.sentence.contains("Espera"));
         let acc = next_step(
             Role::Contratista,
             WorkProgress {
@@ -220,7 +220,8 @@ mod tests {
             },
         );
         assert_eq!(acc.kind, NextKind::Accept);
-        assert_eq!(acc.button, Some("Aceptar"));
+        assert!(acc.button.is_none());
+        assert!(acc.sentence.contains("Revisa"));
     }
 
     #[test]
@@ -250,7 +251,7 @@ mod tests {
         );
         assert_eq!(wait.kind, NextKind::None);
         assert!(wait.button.is_none());
-        assert!(wait.sentence.contains("Esperando"));
+        assert!(wait.sentence.contains("catálogo") || wait.sentence.contains("pida"));
         let done = completed_steps(
             Role::Mandante,
             WorkProgress {

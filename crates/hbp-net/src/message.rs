@@ -22,6 +22,12 @@ pub enum NetMessage {
         person_name: String,
         role: String,
     },
+    /// Contratista picked one obra from the catalog. Mandante replies with Offer.
+    Request {
+        work_name: String,
+        onion: String,
+        person_name: String,
+    },
     Offer {
         offer: Offer,
     },
@@ -47,6 +53,7 @@ impl NetMessage {
             Self::Ping { .. } => "ping",
             Self::Pong { .. } => "pong",
             Self::Hello { .. } => "hello",
+            Self::Request { .. } => "request",
             Self::Offer { .. } => "offer",
             Self::Accept { .. } => "accept",
             Self::Commit { .. } => "commit",
@@ -118,6 +125,21 @@ mod tests {
         match back {
             NetMessage::Hello { onion, .. } => assert_eq!(onion, "abc.onion"),
             _ => panic!("hello"),
+        }
+    }
+
+    #[test]
+    fn request_roundtrip_names_obra() {
+        let msg = NetMessage::Request {
+            work_name: "casa3".into(),
+            onion: "jose.onion".into(),
+            person_name: "José".into(),
+        };
+        let back = NetMessage::decode(&msg.encode().unwrap()).unwrap();
+        assert_eq!(back.kind(), "request");
+        match back {
+            NetMessage::Request { work_name, .. } => assert_eq!(work_name, "casa3"),
+            _ => panic!("request"),
         }
     }
 }
