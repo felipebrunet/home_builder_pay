@@ -32,6 +32,7 @@ pub const ART_PSBT: &str = "06-funding.unsigned.json";
 pub const ART_SIGNED: &str = "07-signed-psbt.json";
 pub const ART_ONESIG: &str = "07-onesig.psbt.json";
 pub const ART_COOP: &str = "08-coop.json";
+pub const ART_COOP_TX: &str = "09-coop-tx.json";
 pub const ART_TX: &str = "09-funding-tx.json";
 
 const FIRST_PARTIDA: u32 = 1;
@@ -303,6 +304,13 @@ pub struct PayUiDraft {
     pub stop_step: StopStep,
     #[serde(default)]
     pub bond_dest: String,
+    /// Fully signed MuSig2 spend (P1 cobro or boleta return). Not a funding PSBT.
+    #[serde(default)]
+    pub coop_tx_hex: String,
+    #[serde(default)]
+    pub coop_tx_kind: String,
+    #[serde(default)]
+    pub coop_tx_published: bool,
 }
 
 fn default_fee() -> String {
@@ -339,6 +347,9 @@ impl Default for PayUiDraft {
             stop_open: false,
             stop_step: StopStep::Confirm,
             bond_dest: String::new(),
+            coop_tx_hex: String::new(),
+            coop_tx_kind: String::new(),
+            coop_tx_published: false,
         }
     }
 }
@@ -1449,6 +1460,56 @@ pub fn hex_from_artifact(json: &serde_json::Value) -> Option<String> {
         })
 }
 
+pub fn coop_tx_wire(hex: &str, kind: &str) -> serde_json::Value {
+    serde_json::json!({
+        "hex": hex.trim(),
+        "kind": kind,
+        "txid": txid_from_tx_hex(hex).unwrap_or_default(),
+    })
+}
+
+pub fn coop_tx_kind_from_artifact(json: &serde_json::Value) -> Option<String> {
+    json.get("kind")
+        .and_then(|v| v.as_str())
+        .map(|s| s.trim().to_string())
+        .filter(|s| s == KIND_PARTIDA || s == KIND_BOND)
+}
+
+pub fn txid_from_tx_hex(hex: &str) -> Result<String> {
+    let raw = hex::decode(hex.trim()).context("tx hex")?;
+    let tx: Transaction = deserialize(&raw).context("tx hex")?;
+    Ok(tx.compute_txid().to_string())
+}
+
+pub fn needs_coop_publish(draft: &PayUiDraft) -> bool {
+    !draft.coop_tx_hex.trim().is_empty() && !draft.coop_tx_published
+}
+
+/// Apply a finished coop spend on the peer who did not press Terminar.
+pub fn apply_finished_coop_hex(project: &mut Project, hex: &str, kind: &str) -> Result<String> {
+    let txid = txid_from_tx_hex(hex)?;
+    match kind {
+        KIND_PARTIDA => {
+            if matches!(
+                project.partida(FIRST_PARTIDA).map(|p| &p.state),
+                Ok(PartidaStatus::Paid { .. })
+            ) {
+                return Ok(txid);
+            }
+            let _ = project.propose_reception(FIRST_PARTIDA);
+            project.mark_paid(FIRST_PARTIDA, txid.clone())?;
+        }
+        KIND_BOND => {
+            if matches!(project.bond, BondStatus::Released { .. }) {
+                return Ok(txid);
+            }
+            project.mark_bond_released(txid.clone())?;
+        }
+        other => bail!("cierre desconocido: {other}"),
+    }
+    Ok(txid)
+}
+
 fn now_unix() -> u32 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -2103,10 +2164,22 @@ mod tests {
         assert!(signed_m.mandante_partial.is_some());
         let hex = coop_finish(&m, &mut project, &signed_m, &mut jm).unwrap();
         assert!(!hex.is_empty());
+        assert!(txid_from_tx_hex(&hex).is_ok());
+        let wire = coop_tx_wire(&hex, KIND_PARTIDA);
+        assert_eq!(coop_tx_kind_from_artifact(&wire).as_deref(), Some(KIND_PARTIDA));
+        assert!(hex_from_artifact(&wire).is_some());
+        let mut draft = PayUiDraft::default();
+        draft.coop_tx_hex = hex.clone();
+        draft.coop_tx_kind = KIND_PARTIDA.into();
+        assert!(needs_coop_publish(&draft));
+        draft.coop_tx_published = true;
+        assert!(!needs_coop_publish(&draft));
+        draft.coop_tx_published = false;
         assert!(matches!(
             project.partida(1).unwrap().state,
             PartidaStatus::Paid { .. }
         ));
+        apply_finished_coop_hex(&mut project, &hex, KIND_PARTIDA).unwrap();
         assert!(!show_main_fund_ui(pay_stage(Some(&project), None)));
         assert_eq!(
             coop_action(Some(&signed_m), Role::Mandante),
@@ -2134,6 +2207,8 @@ mod tests {
         let bond = coop_sign(&m, &project, bond, &mut jm2).unwrap();
         let hex = coop_finish(&c, &mut project, &bond, &mut jc2).unwrap();
         assert!(!hex.is_empty());
+        assert!(txid_from_tx_hex(&hex).is_ok());
+        apply_finished_coop_hex(&mut project, &hex, KIND_BOND).unwrap();
         assert!(matches!(project.bond, BondStatus::Released { .. }));
         assert!(matches!(
             project.status,

@@ -29,8 +29,9 @@ pub use dht::{
     WorkAnnounce,
 };
 pub use esplora::{
-    esplora_address_txs, esplora_address_utxos, esplora_try_bases, esplora_tx_hex,
-    find_dual_amount, find_dual_amount_txid, EsploraTx, EsploraTxOut, EsploraUtxo,
+    esplora_address_txs, esplora_address_utxos, esplora_broadcast_tx, esplora_broadcast_url,
+    esplora_try_bases, esplora_try_broadcast, esplora_tx_hex, find_dual_amount,
+    find_dual_amount_txid, EsploraTx, EsploraTxOut, EsploraUtxo,
 };
 pub use fx::{
     fiat_ticker, fx_pair_label, fx_price_minor, parse_coingecko_btc_price, parse_yadio_btc_price,

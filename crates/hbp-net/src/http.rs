@@ -25,6 +25,17 @@ pub fn get_text(socks: Option<SocketAddr>, url: &str) -> crate::Result<String> {
     Ok(body)
 }
 
+pub fn post_text(socks: Option<SocketAddr>, url: &str, body: &str) -> crate::Result<String> {
+    let resp = http_agent(socks)
+        .post(url)
+        .set("Content-Type", "text/plain; charset=utf-8")
+        .send_string(body)
+        .map_err(|e| crate::Error::msg(e.to_string()))?
+        .into_string()
+        .map_err(|e| crate::Error::msg(e.to_string()))?;
+    Ok(resp)
+}
+
 pub fn put_text(socks: Option<SocketAddr>, url: &str, body: &str) -> crate::Result<String> {
     let resp = http_agent(socks)
         .put(url)

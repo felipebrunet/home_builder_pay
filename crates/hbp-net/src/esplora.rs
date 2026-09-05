@@ -4,7 +4,7 @@ use std::net::SocketAddr;
 
 use serde::Deserialize;
 
-use crate::http::get_text;
+use crate::http::{get_text, post_text};
 
 #[derive(Debug, Clone)]
 pub struct EsploraUtxo {
@@ -122,6 +122,43 @@ pub fn esplora_tx_hex(base: &str, socks: Option<SocketAddr>, txid: &str) -> crat
     Ok(raw.trim().to_string())
 }
 
+/// Blockstream / mempool Esplora: `POST {base}/tx` with raw hex.
+pub fn esplora_broadcast_url(base: &str) -> String {
+    format!("{}/tx", base.trim().trim_end_matches('/'))
+}
+
+pub fn esplora_broadcast_tx(
+    base: &str,
+    socks: Option<SocketAddr>,
+    tx_hex: &str,
+) -> crate::Result<String> {
+    let url = esplora_broadcast_url(base);
+    let body = tx_hex.trim();
+    if body.is_empty() {
+        return Err(crate::Error::msg("falta el tx hex"));
+    }
+    let resp = post_text(socks, &url, body)?;
+    Ok(resp.trim().to_string())
+}
+
+pub fn esplora_try_broadcast(bases: &[&str], socks: Option<SocketAddr>, tx_hex: &str) -> crate::Result<(String, String)> {
+    let mut errs = Vec::new();
+    for raw in bases {
+        let base = raw.trim().trim_end_matches('/');
+        if base.is_empty() {
+            continue;
+        }
+        match esplora_broadcast_tx(base, socks, tx_hex) {
+            Ok(txid) => return Ok((txid, base.to_string())),
+            Err(e) => errs.push(format!("{base}: {e}")),
+        }
+    }
+    Err(crate::Error::msg(format!(
+        "no pude publicar ({})",
+        errs.join("; ")
+    )))
+}
+
 /// First tx that pays both quoted escrow amounts (boleta + partida).
 pub fn find_dual_amount<'a>(
     txs: &'a [EsploraTx],
@@ -178,5 +215,17 @@ mod tests {
             },
         ];
         assert_eq!(find_dual_amount_txid(&txs, 20_000, 30_000), Some("yes"));
+    }
+
+    #[test]
+    fn broadcast_url_is_base_plus_tx() {
+        assert_eq!(
+            esplora_broadcast_url("https://blockstream.info/signet/api/"),
+            "https://blockstream.info/signet/api/tx"
+        );
+        assert_eq!(
+            esplora_broadcast_url("https://mempool.space/signet/api"),
+            "https://mempool.space/signet/api/tx"
+        );
     }
 }
