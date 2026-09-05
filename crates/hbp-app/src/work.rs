@@ -164,6 +164,17 @@ impl WorkStore {
         Ok(())
     }
 
+    /// Wipe a local obra folder and drop it from the index.
+    pub fn delete_work(&mut self, slug: &str) -> Result<()> {
+        self.index.works.retain(|w| w.slug != slug);
+        self.save_index()?;
+        let dir = self.work_dir(slug);
+        if dir.exists() {
+            fs::remove_dir_all(&dir)?;
+        }
+        Ok(())
+    }
+
     pub fn work_dir(&self, slug: &str) -> PathBuf {
         self.root.join(slug)
     }
@@ -1112,6 +1123,21 @@ mod tests {
         let loaded = store.load_watch(&e.slug, None).unwrap().unwrap();
         assert_eq!(loaded.receive_descriptor, acc.receive_descriptor);
         assert!(store.work_dir(&e.slug).join("watch.json").exists());
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn delete_work_wipes_folder_and_index() {
+        let tmp = std::env::temp_dir().join(format!("hbp-app-del-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&tmp);
+        let mut store = WorkStore::open(tmp.join("a")).unwrap();
+        let e = store
+            .create_product_work("casa-borrar", Role::Mandante, None)
+            .unwrap();
+        assert!(store.work_dir(&e.slug).exists());
+        store.delete_work(&e.slug).unwrap();
+        assert!(!store.work_dir(&e.slug).exists());
+        assert!(!store.index.works.iter().any(|w| w.slug == e.slug));
         let _ = fs::remove_dir_all(&tmp);
     }
 }

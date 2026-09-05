@@ -11,13 +11,13 @@ use bitcoin::psbt::Psbt;
 use bitcoin::{Address, Amount, OutPoint, Transaction};
 use hbp_bitcoin::{
     apply_key_spend_sig, attach_prev_tx, bond_address, bond_escrow_from_body, build_funding_psbt,
-    build_key_spend_tx, build_partial_funding_psbt, combine_partials, combine_psbts,
-    complete_partial_funding_psbt, encode_partial, encode_pubnonce, extract_signed_funding_tx,
-    funding_share, key_spend_sighash, keys_from_body, new_nonce_seed, our_partial_signature,
-    parse_partial, parse_pubnonce, partida_address, partida_escrow_from_body,
-    psbt_signed_input_count, sign_quote, signer_index, start_round, to_btc_network,
-    tweaked_key_agg, validate_funding_tx, verify_quote, CoopFile, ExpectedFunding, FundingRequest,
-    Identity, OfferedCoin, WatchScan, WatchedUtxo,
+    build_key_spend_tx, build_partial_funding_psbt, build_split_key_spend_tx, combine_partials,
+    combine_psbts, complete_partial_funding_psbt, encode_partial, encode_pubnonce,
+    extract_signed_funding_tx, funding_share, key_spend_sighash, keys_from_body, new_nonce_seed,
+    our_partial_signature, parse_partial, parse_pubnonce, partida_address,
+    partida_escrow_from_body, psbt_signed_input_count, sign_quote, signer_index, start_round,
+    to_btc_network, tweaked_key_agg, validate_funding_tx, verify_quote, CoopFile, ExpectedFunding,
+    FundingRequest, Identity, OfferedCoin, WatchScan, WatchedUtxo,
 };
 use hbp_core::{
     bond_minor, btc_price_to_minor, fiat_minor_to_sats, format_major_amount, minor_from_major,
@@ -60,6 +60,7 @@ pub enum FundHandshakeStep {
     RetrySend,
     ExportAndSign,
     SendOneSig,
+    BroadcastFunding,
     WaitChain,
 }
 
@@ -75,6 +76,7 @@ impl FundHandshakeStep {
             Self::RetrySend => "Reenviar",
             Self::ExportAndSign => "Exportar para firmar",
             Self::SendOneSig => "Enviar lo firmado",
+            Self::BroadcastFunding => "Publicar en Signet",
             Self::WaitChain => "Comprobar en la red",
         }
     }
@@ -157,6 +159,9 @@ pub fn fund_handshake_step(v: &FundView) -> FundHandshakeStep {
     if v.send_failed && v.pending_send.is_some() {
         return FundHandshakeStep::RetrySend;
     }
+    if funding_view_fully_signed(v) {
+        return FundHandshakeStep::BroadcastFunding;
+    }
     if v.onesig_from_peer || v.mark >= FundMark::OneSigSent || v.awaiting_like() {
         return FundHandshakeStep::WaitChain;
     }
@@ -179,6 +184,46 @@ pub fn fund_handshake_step(v: &FundView) -> FundHandshakeStep {
         _ if v.has_our_coin => FundHandshakeStep::SendPartial,
         _ if v.has_scan => FundHandshakeStep::PickCoin,
         _ => FundHandshakeStep::ScanCoins,
+    }
+}
+
+fn funding_view_fully_signed(v: &FundView) -> bool {
+    let n = v.inputs.unwrap_or(0);
+    n > 0 && v.sigs >= n
+}
+
+pub fn funding_psbt_fully_signed(raw: &str) -> bool {
+    matches!(classify_funding_psbt(raw), Ok((n, s)) if n > 0 && s >= n)
+}
+
+pub fn extract_funding_tx_hex(raw: &str) -> Result<String> {
+    let psbt = parse_psbt(raw)?;
+    let tx = extract_signed_funding_tx(psbt)?;
+    Ok(serialize_hex(&tx))
+}
+
+pub fn best_funding_psbt(draft: &PayUiDraft) -> &str {
+    let a = draft.onesig_hex.trim();
+    let b = draft.unsigned_psbt_hex.trim();
+    match (funding_psbt_fully_signed(a), funding_psbt_fully_signed(b)) {
+        (true, false) => a,
+        (false, true) => b,
+        (true, true) => {
+            let sa = classify_funding_psbt(a).map(|c| c.1).unwrap_or(0);
+            let sb = classify_funding_psbt(b).map(|c| c.1).unwrap_or(0);
+            if sa >= sb {
+                a
+            } else {
+                b
+            }
+        }
+        (false, false) => {
+            if a.is_empty() {
+                b
+            } else {
+                a
+            }
+        }
     }
 }
 
@@ -311,10 +356,19 @@ pub struct PayUiDraft {
     pub coop_tx_kind: String,
     #[serde(default)]
     pub coop_tx_published: bool,
+    /// Contratista % of each pot (0–100). Mandante gets the rest.
+    #[serde(default = "default_close_pct")]
+    pub close_c_pct: String,
+    #[serde(default)]
+    pub close_m_dest: String,
 }
 
 fn default_fee() -> String {
     "250".into()
+}
+
+fn default_close_pct() -> String {
+    "100".into()
 }
 
 impl Default for PayUiDraft {
@@ -350,6 +404,8 @@ impl Default for PayUiDraft {
             coop_tx_hex: String::new(),
             coop_tx_kind: String::new(),
             coop_tx_published: false,
+            close_c_pct: default_close_pct(),
+            close_m_dest: String::new(),
         }
     }
 }
@@ -517,6 +573,235 @@ pub fn partida_ui_enabled(project: &Project, id: u32) -> bool {
 
 pub fn can_open_stop_wizard(project: &Project) -> bool {
     project.bond_is_funded()
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ObraDeleteKind {
+    Unstarted,
+    Closed,
+    BlockedLive,
+}
+
+pub fn obra_delete_kind(project: Option<&Project>) -> ObraDeleteKind {
+    let Some(p) = project else {
+        return ObraDeleteKind::Unstarted;
+    };
+    if p.bond_is_funded() || p.has_open_onchain_partida() {
+        return ObraDeleteKind::BlockedLive;
+    }
+    if p.is_stopped()
+        || matches!(p.status, ProjectStatus::Closed | ProjectStatus::Cancelled)
+        || matches!(
+            p.bond,
+            BondStatus::Released { .. } | BondStatus::Unwound { .. } | BondStatus::FeeBurnT2 { .. }
+        )
+    {
+        return ObraDeleteKind::Closed;
+    }
+    ObraDeleteKind::Unstarted
+}
+
+pub fn can_delete_obra(project: Option<&Project>) -> bool {
+    !matches!(obra_delete_kind(project), ObraDeleteKind::BlockedLive)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ObraLane {
+    Borrador = 0,
+    Trato = 1,
+    Fondeado = 2,
+    EnCurso = 3,
+    Cierre = 4,
+}
+
+pub fn obra_lane_labels() -> &'static [&'static str] {
+    &["Borrador", "Trato", "Fondeado", "En curso", "Cierre"]
+}
+
+pub fn obra_lane(project: Option<&Project>, has_signed: bool) -> ObraLane {
+    let Some(p) = project else {
+        return if has_signed {
+            ObraLane::Trato
+        } else {
+            ObraLane::Borrador
+        };
+    };
+    if p.is_stopped() || matches!(p.status, ProjectStatus::Closed | ProjectStatus::Cancelled) {
+        return ObraLane::Cierre;
+    }
+    match pay_stage(Some(p), None) {
+        PayStage::AllClosed => ObraLane::Cierre,
+        PayStage::PartidaInCourse | PayStage::UnlockNext => ObraLane::EnCurso,
+        PayStage::FundBondP1 if p.bond_is_funded() => ObraLane::Fondeado,
+        PayStage::FundBondP1 | PayStage::NeedQuote | PayStage::NeedQuoteSig => {
+            if has_signed {
+                ObraLane::Trato
+            } else {
+                ObraLane::Borrador
+            }
+        }
+        _ => ObraLane::Borrador,
+    }
+}
+
+pub fn boleta_badge(project: &Project) -> &'static str {
+    match project.bond {
+        BondStatus::Unfunded => "pendiente",
+        BondStatus::Funded { .. } => "fondeada",
+        BondStatus::Released { .. } => "devuelta",
+        BondStatus::Unwound { .. } => "deshecha",
+        BondStatus::FeeBurnT1 { .. } => "quema 1",
+        BondStatus::FeeBurnT2 { .. } => "quema 2",
+    }
+}
+
+pub fn p1_badge(project: &Project) -> &'static str {
+    match project.partida(FIRST_PARTIDA).map(|p| &p.state) {
+        Ok(PartidaStatus::Scheduled | PartidaStatus::AmountAgreed { .. }) => "pendiente",
+        Ok(PartidaStatus::Funding { .. }) => "fondeando",
+        Ok(PartidaStatus::Locked { .. } | PartidaStatus::ReceptionProposed { .. }) => "en curso",
+        Ok(PartidaStatus::Paid { .. }) => "cobrada",
+        Ok(PartidaStatus::Unwound { .. }) => "deshecha",
+        Ok(PartidaStatus::FeeBurnT1 { .. }) => "quema 1",
+        Ok(PartidaStatus::FeeBurnT2 { .. }) => "quema 2",
+        Err(_) => "—",
+    }
+}
+
+/// Contratista share of a pot after fee. Mandante gets the rest.
+pub fn close_split_sats(pot: u64, contratista_pct: u32, fee: u64) -> Result<(u64, u64)> {
+    if contratista_pct > 100 {
+        bail!("el % del contratista debe ser 0–100");
+    }
+    if pot <= fee {
+        bail!("la comisión se come el pozo");
+    }
+    let net = pot - fee;
+    let to_c = net.saturating_mul(contratista_pct as u64) / 100;
+    let to_m = net.saturating_sub(to_c);
+    if to_c > 0 && to_c < 546 {
+        bail!("la parte del contratista quedaría en polvo");
+    }
+    if to_m > 0 && to_m < 546 {
+        bail!("la parte del mandante quedaría en polvo");
+    }
+    Ok((to_c, to_m))
+}
+
+pub fn close_pot_sats(project: &Project, kind: &str) -> Result<u64> {
+    match kind {
+        KIND_BOND => project
+            .bond_utxo()
+            .map(|(_, _, s)| s)
+            .context("la boleta aún no está fondeada"),
+        KIND_PARTIDA => project
+            .partida(FIRST_PARTIDA)?
+            .locked_utxo()
+            .map(|(_, _, s)| s)
+            .context("la partida 1 aún no está locked"),
+        other => bail!("cierre desconocido: {other}"),
+    }
+}
+
+pub fn parse_pct(raw: &str) -> Result<u32> {
+    let n: u32 = raw.trim().parse().context("% 0–100")?;
+    if n > 100 {
+        bail!("el % debe ser 0–100");
+    }
+    Ok(n)
+}
+
+pub fn mandante_pct(contratista_pct: u32) -> u32 {
+    100u32.saturating_sub(contratista_pct.min(100))
+}
+
+pub fn close_split_preview(
+    project: &Project,
+    kind: &str,
+    contratista_pct: u32,
+    fee: u64,
+) -> Option<(u64, u64, u64)> {
+    let pot = close_pot_sats(project, kind).ok()?;
+    let (to_c, to_m) = close_split_sats(pot, contratista_pct, fee).ok()?;
+    Some((pot, to_c, to_m))
+}
+
+pub fn obra_delete_reason_es(kind: ObraDeleteKind) -> &'static str {
+    match kind {
+        ObraDeleteKind::Unstarted => {
+            "Borra el borrador de este computador. No hay plata en Signet."
+        }
+        ObraDeleteKind::Closed => "La obra ya está cerrada. Borra los archivos de este computador.",
+        ObraDeleteKind::BlockedLive => {
+            "No se puede borrar: hay plata en Signet. Ciérrenla primero o espera la quema."
+        }
+    }
+}
+
+/// Attach the agreed % split onto a coop file so MuSig2 pays both destinations.
+/// 100% to the contratista keeps the single-output path (no stub file).
+pub fn seed_coop_split(
+    existing: Option<CoopFile>,
+    project: &Project,
+    kind: &str,
+    dest_c: &str,
+    dest_m: &str,
+    contratista_pct: u32,
+    fee: u64,
+) -> Result<Option<CoopFile>> {
+    if contratista_pct >= 100 {
+        return Ok(existing);
+    }
+    if dest_c.trim().is_empty() {
+        bail!("escribe la cuenta del contratista");
+    }
+    if dest_m.trim().is_empty() {
+        bail!("escribe la cuenta del mandante para el reparto");
+    }
+    let pot = close_pot_sats(project, kind)?;
+    let (to_c, _) = close_split_sats(pot, contratista_pct, fee)?;
+    if let Some(mut c) = existing {
+        let same = c.dest.trim() == dest_c.trim()
+            && c.refund_dest.as_deref().map(str::trim) == Some(dest_m.trim())
+            && c.pay_sats == Some(to_c)
+            && c.fee == fee;
+        if same {
+            return Ok(Some(c));
+        }
+        if (c.mandante_pubnonce.is_some() || c.contratista_pubnonce.is_some())
+            && c.refund_dest.is_some()
+            && c.pay_sats.is_some()
+        {
+            return Ok(Some(c));
+        }
+        c.dest = dest_c.trim().to_string();
+        c.refund_dest = Some(dest_m.trim().to_string());
+        c.pay_sats = Some(to_c);
+        c.fee = fee;
+        return Ok(Some(c));
+    }
+    Ok(Some(CoopFile {
+        contract_id: project.contract.id()?,
+        kind: kind.to_string(),
+        partida_id: if kind == KIND_PARTIDA {
+            Some(FIRST_PARTIDA)
+        } else {
+            None
+        },
+        outpoint: String::new(),
+        sats: pot,
+        dest: dest_c.trim().to_string(),
+        fee,
+        refund: false,
+        pay_sats: Some(to_c),
+        refund_dest: Some(dest_m.trim().to_string()),
+        tx_hex: String::new(),
+        sighash: String::new(),
+        mandante_pubnonce: None,
+        contratista_pubnonce: None,
+        mandante_partial: None,
+        contratista_partial: None,
+    }))
 }
 
 pub fn p1_blocks_bond_return(project: &Project) -> bool {
@@ -1095,6 +1380,7 @@ fn coop_unsigned(
     dest: &str,
     fee: u64,
     kind: &str,
+    split: Option<(&str, u64)>,
 ) -> Result<(
     hbp_bitcoin::Escrow,
     bitcoin::secp256k1::PublicKey,
@@ -1132,7 +1418,21 @@ fn coop_unsigned(
         .map_err(|e| anyhow::anyhow!("{e}"))?
         .require_network(net)?;
     let op = OutPoint::from_str(&outpoint).map_err(|e| anyhow::anyhow!("{e}"))?;
-    let unsigned = build_key_spend_tx(op, Amount::from_sat(sats), &dest, Amount::from_sat(fee))?;
+    let unsigned = if let Some((rd, pay)) = split {
+        let refund = Address::from_str(rd.trim())
+            .map_err(|e| anyhow::anyhow!("{e}"))?
+            .require_network(net)?;
+        build_split_key_spend_tx(
+            op,
+            Amount::from_sat(sats),
+            &dest,
+            Amount::from_sat(pay),
+            &refund,
+            Amount::from_sat(fee),
+        )?
+    } else {
+        build_key_spend_tx(op, Amount::from_sat(sats), &dest, Amount::from_sat(fee))?
+    };
     let prev = bitcoin::TxOut {
         value: Amount::from_sat(sats),
         script_pubkey: escrow.script_pubkey(),
@@ -1299,8 +1599,19 @@ pub fn coop_contribute(
         .filter(|d| !d.trim().is_empty())
         .unwrap_or_else(|| dest.trim().to_string());
     let fee_use = existing.as_ref().map(|c| c.fee).unwrap_or(fee);
+    let keep_rd = existing.as_ref().and_then(|c| c.refund_dest.clone());
+    let keep_pay = existing.as_ref().and_then(|c| c.pay_sats);
+    let split = existing.as_ref().and_then(|c| {
+        let rd = c.refund_dest.as_deref()?;
+        let pay = c.pay_sats?;
+        if rd.trim().is_empty() || pay == 0 {
+            None
+        } else {
+            Some((rd, pay))
+        }
+    });
     let (escrow, m_pk, c_pk, unsigned, sighash, outpoint, sats) =
-        coop_unsigned(project, &dest_use, fee_use, kind)?;
+        coop_unsigned(project, &dest_use, fee_use, kind, split)?;
     let sh = hex::encode(sighash);
     let mut coop = match existing {
         Some(c) if c.sighash == sh && c.kind == kind => c,
@@ -1315,6 +1626,10 @@ pub fn coop_contribute(
             sh.clone(),
         )?,
     };
+    if coop.refund_dest.is_none() {
+        coop.refund_dest = keep_rd;
+        coop.pay_sats = keep_pay;
+    }
     if project.contract.id()? != coop.contract_id {
         bail!("el archivo de cierre es de otro trato");
     }
@@ -1393,8 +1708,16 @@ pub fn coop_finish(
     if project.contract.id()? != coop.contract_id {
         bail!("el archivo de cierre es de otro trato");
     }
-    let (escrow, m_pk, c_pk, unsigned, sighash, _, _) =
-        coop_unsigned(project, &coop.dest, coop.fee, &coop.kind)?;
+    let (escrow, m_pk, c_pk, unsigned, sighash, _, _) = coop_unsigned(
+        project,
+        &coop.dest,
+        coop.fee,
+        &coop.kind,
+        coop.refund_dest
+            .as_deref()
+            .and_then(|rd| coop.pay_sats.map(|p| (rd, p)))
+            .filter(|(rd, p)| !rd.trim().is_empty() && *p > 0),
+    )?;
     if hex::encode(sighash) != coop.sighash {
         bail!("el sighash del cierre no coincide");
     }
@@ -2109,6 +2432,21 @@ mod tests {
             )),
             WaitChain
         );
+        assert_eq!(
+            fund_handshake_step(&view(
+                true,
+                true,
+                true,
+                Some(2),
+                2,
+                false,
+                OneSigFromPeer,
+                false,
+                None,
+                true
+            )),
+            BroadcastFunding
+        );
     }
 
     #[test]
@@ -2304,7 +2642,10 @@ mod tests {
         assert!(txid_from_tx_hex(&hex).is_ok());
         assert!(looks_like_signed_coop_hex(&hex));
         let wire = coop_tx_wire(&hex, KIND_PARTIDA);
-        assert_eq!(coop_tx_kind_from_artifact(&wire).as_deref(), Some(KIND_PARTIDA));
+        assert_eq!(
+            coop_tx_kind_from_artifact(&wire).as_deref(),
+            Some(KIND_PARTIDA)
+        );
         assert!(hex_from_artifact(&wire).is_some());
         let mut draft = PayUiDraft::default();
         stash_finished_coop_hex(&mut draft, &hex, KIND_PARTIDA);
@@ -2447,5 +2788,57 @@ mod tests {
             err.to_string().contains("no coincide") || err.to_string().contains("no armes"),
             "{err}"
         );
+    }
+
+    #[test]
+    fn close_split_sats_and_delete_gates() {
+        assert_eq!(close_split_sats(10_000, 80, 250).unwrap(), (7800, 1950));
+        assert!(close_split_sats(10_000, 101, 250).is_err());
+        let (m, c) = pair_ids();
+        let signed = signed_two_partidas(&m, &c);
+        let project = Project::from_signed(signed).unwrap();
+        assert_eq!(obra_delete_kind(Some(&project)), ObraDeleteKind::Unstarted);
+        assert!(can_delete_obra(Some(&project)));
+        assert_eq!(obra_delete_kind(None), ObraDeleteKind::Unstarted);
+        assert_eq!(obra_lane(None, false), ObraLane::Borrador);
+        assert_eq!(obra_lane(None, true), ObraLane::Trato);
+        assert_eq!(obra_lane_labels().len(), 5);
+        assert_eq!(mandante_pct(70), 30);
+        assert_eq!(
+            obra_delete_reason_es(ObraDeleteKind::BlockedLive).contains("Signet"),
+            true
+        );
+    }
+
+    #[test]
+    fn coop_split_stub_pays_two_outputs() {
+        let (m, c) = pair_ids();
+        let (project, _q) = funded_p1(&m, &c);
+        let dest_c = dummy_coin(Role::Contratista, 9, 1_000).address;
+        let dest_m = dummy_coin(Role::Mandante, 8, 1_000).address;
+        let pot = close_pot_sats(&project, KIND_PARTIDA).unwrap();
+        let (to_c, to_m) = close_split_sats(pot, 70, 250).unwrap();
+        let seeded = seed_coop_split(None, &project, KIND_PARTIDA, &dest_c, &dest_m, 70, 250)
+            .unwrap()
+            .unwrap();
+        assert_eq!(seeded.pay_sats, Some(to_c));
+        assert_eq!(seeded.refund_dest.as_deref(), Some(dest_m.as_str()));
+        let mut jm = NonceJournal::default();
+        let proposed = coop_propose_on(
+            &m,
+            &project,
+            &dest_c,
+            250,
+            &mut jm,
+            KIND_PARTIDA,
+            Some(seeded),
+        )
+        .unwrap();
+        assert_eq!(proposed.pay_sats, Some(to_c));
+        let tx: Transaction = deserialize(&hex::decode(&proposed.tx_hex).unwrap()).unwrap();
+        assert_eq!(tx.output.len(), 2);
+        assert_eq!(tx.output[0].value.to_sat(), to_c);
+        assert_eq!(tx.output[1].value.to_sat(), to_m);
+        assert_eq!(to_c + to_m + 250, pot);
     }
 }

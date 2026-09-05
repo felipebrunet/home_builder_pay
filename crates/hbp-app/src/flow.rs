@@ -179,12 +179,10 @@ fn contratista_step(p: WorkProgress) -> NextStep {
     }
 }
 
-/// Visible tab labels, in order, every frame. Contratista first tab is Obra (search / mis obras).
-pub fn shell_tab_labels(role: Role) -> &'static [&'static str] {
-    match role {
-        Role::Mandante => &["Obra", "Red", "Trato", "Pago"],
-        Role::Contratista => &["Obra", "Trato", "Red", "Pago"],
-    }
+/// Visible tab labels, in order, every frame. Both roles: Obra | Red | Trato | Pago.
+/// Contratista Obra still hosts search / mis obras.
+pub fn shell_tab_labels(_role: Role) -> &'static [&'static str] {
+    &["Obra", "Red", "Trato", "Pago"]
 }
 
 #[cfg(test)]
@@ -314,19 +312,10 @@ mod tests {
     }
 
     #[test]
-    fn shell_tabs_are_obra_red_trato_pago_or_obra_trato_red_pago() {
-        assert_eq!(
-            shell_tab_labels(Role::Mandante),
-            &["Obra", "Red", "Trato", "Pago"]
-        );
-        assert_eq!(
-            shell_tab_labels(Role::Contratista),
-            &["Obra", "Trato", "Red", "Pago"]
-        );
-        assert!(!shell_tab_labels(Role::Contratista).contains(&"Buscar"));
-        assert_eq!(shell_tab_labels(Role::Mandante)[0], "Obra");
-        assert_eq!(shell_tab_labels(Role::Contratista)[0], "Obra");
-        assert_eq!(shell_tab_labels(Role::Mandante).len(), 4);
-        assert_eq!(shell_tab_labels(Role::Contratista).len(), 4);
+    fn shell_tabs_both_roles_obra_red_trato_pago() {
+        for role in [Role::Mandante, Role::Contratista] {
+            assert_eq!(shell_tab_labels(role), &["Obra", "Red", "Trato", "Pago"]);
+            assert!(!shell_tab_labels(role).contains(&"Buscar"));
+        }
     }
 }

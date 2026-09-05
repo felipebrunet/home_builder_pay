@@ -4,27 +4,31 @@ use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
 
-use eframe::egui::{self, Color32, RichText, Vec2};
+use eframe::egui::{self, Color32, RichText};
 use hbp_app::{
-    agreed_fx_line, apply_finished_coop_hex, apply_incoming_quote, apply_verified_p1_funding,
-    build_our_partial, can_open_stop_or_redo, can_recotizar,
-    classify_funding_psbt, coin_from_watched, complete_incoming_partial, completed_steps,
-    contract_bond_minor, contratista_accept, coop_action, coop_finish, coop_propose_on,
-    coop_tx_kind_from_artifact, coop_tx_wire, default_works_root, draft_equal_stages, draft_quote,
-    escrow_addrs, export_backup, format_unix_local_es, fund_handshake_step, funding_wire,
+    accent_amber, accent_blue, accent_green, agreed_fx_line, apply_finished_coop_hex,
+    apply_incoming_quote, apply_theme, apply_verified_p1_funding, best_funding_psbt, big_btn,
+    boleta_badge, build_our_partial, can_delete_obra, can_open_stop_or_redo, can_recotizar,
+    classify_funding_psbt, close_split_preview, coin_from_watched, complete_incoming_partial,
+    completed_steps, contract_bond_minor, contratista_accept, coop_action, coop_finish,
+    coop_propose_on, coop_tx_kind_from_artifact, coop_tx_wire, deadline_editor, default_works_root,
+    draft_equal_stages, draft_quote, edit_fg, escrow_addrs, export_backup, extract_funding_tx_hex,
+    format_unix_local_es, fund_handshake_step, funding_psbt_fully_signed, funding_wire,
     funding_wire_hex, hex_from_artifact, import_backup, import_signed, infer_coop_kind,
-    lock_quote_if_ready, looks_like_signed_coop_hex, mandante_commit, needs_coop_publish,
-    next_step, obra_amount_pair, our_funding_need, p1_blocks_bond_return, pago_coop_gate,
-    shell_tab_labels,
-    parse_fee, parse_psbt, parse_psbt_bytes, partida_spec_minor, partida_ui_enabled, party_role,
-    pay_stage, prefer_funding_psbt, preview_quote_sats, psbt_display_text, psbt_file_bytes,
-    psbt_to_hex, quote_fully_signed, quote_price_minor, read_backup_file, recover_coop_tx_into_draft,
-    recotizar_if_unfunded, restore_unconfirmed_bond, show_main_fund_ui, sign_our_quote,
-    spanish_chain_status, spanish_now_pay, stash_finished_coop_hex, suggest_watched,
-    txid_from_tx_hex, validate_deadline_order, write_backup_file, CoopAction, DeadlineFields,
-    FundHandshakeStep, FundMark, FundView, FundingSendKind, NextKind, PagoCoopGate, PayStage,
+    lock_quote_if_ready, looks_like_signed_coop_hex, mandante_commit, mandante_pct,
+    needs_coop_publish, next_step, obra_amount_pair, obra_delete_kind, obra_delete_reason_es,
+    obra_lane, our_funding_need, p1_badge, p1_blocks_bond_return, pago_coop_gate, panel_card,
+    parse_fee, parse_pct, parse_psbt, parse_psbt_bytes, partida_spec_minor, partida_ui_enabled,
+    party_role, pay_stage, prefer_funding_psbt, preview_quote_sats, primary_btn, psbt_display_text,
+    psbt_file_bytes, psbt_to_hex, quote_fully_signed, quote_price_minor, read_backup_file,
+    recotizar_if_unfunded, recover_coop_tx_into_draft, restore_unconfirmed_bond, seed_coop_split,
+    shell_tab_labels, show_field, show_main_fund_ui, show_multiline, show_obra_stepper,
+    show_pot_badges, sign_our_quote, spanish_chain_status, spanish_now_pay,
+    stash_finished_coop_hex, suggest_watched, theme_red, txid_from_tx_hex, unit_helper,
+    validate_deadline_order, write_backup_file, CoopAction, DeadlineFields, FundHandshakeStep,
+    FundMark, FundView, FundingSendKind, NextKind, ObraDeleteKind, PagoCoopGate, PayStage,
     PayUiDraft, StopStep, UiPrefs, WorkEntry, WorkProgress, WorkStore, ART_COOP, ART_COOP_TX,
-    ART_ONESIG, ART_PARTIAL, ART_PSBT, KIND_BOND, KIND_PARTIDA, MONTHS_ES,
+    ART_ONESIG, ART_PARTIAL, ART_PSBT, KIND_BOND, KIND_PARTIDA,
 };
 use hbp_bitcoin::{
     address_at, default_esplora_urls, scan_watch, sign_body, CoopFile, Identity, OfferedCoin,
@@ -37,9 +41,9 @@ use hbp_core::{
 use hbp_net::{
     announce_topics, bring_up_tor_with_hint, env_bootstrap_peers, esplora_address_txs,
     esplora_address_utxos, esplora_try_bases, esplora_try_broadcast, esplora_tx_hex,
-    find_dual_amount, fx_pair_label,
-    literal_topic, parse_bootstrap_list, preview_sats, quote_btc, FxQuote, NetMessage,
-    OverlayConfig, OverlayHandle, PeerAddr, TorConfig, TorRuntime, WorkAnnounce,
+    find_dual_amount, fx_pair_label, literal_topic, parse_bootstrap_list, preview_sats, quote_btc,
+    FxQuote, NetMessage, OverlayConfig, OverlayHandle, PeerAddr, TorConfig, TorRuntime,
+    WorkAnnounce,
 };
 
 enum JobEvent {
@@ -56,6 +60,7 @@ enum JobEvent {
     ChainDone(Result<Option<(String, bool, String)>, String>),
     CoopSeen(Result<(String, String), String>),
     BroadcastDone(Result<(String, String), String>),
+    FundingBroadcastDone(Result<(String, String), String>),
 }
 
 fn main() -> eframe::Result<()> {
@@ -135,6 +140,7 @@ struct App {
     chain_busy: bool,
     funding_in_flight: Option<FundingSendKind>,
     restart_confirm: bool,
+    delete_confirm: bool,
 }
 
 impl App {
@@ -194,6 +200,7 @@ impl App {
             chain_busy: false,
             funding_in_flight: None,
             restart_confirm: false,
+            delete_confirm: false,
         }
     }
 
@@ -463,6 +470,30 @@ impl App {
                         if let Some(slug) = self.selected.clone() {
                             self.confirm_coop_if_needed(&slug);
                             self.pay_poll_coop(&slug, false);
+                        }
+                    } else {
+                        self.note(e);
+                    }
+                }
+                JobEvent::FundingBroadcastDone(Ok((txid, _base))) => {
+                    self.chain_busy = false;
+                    self.pay.funding_tx_hex = self.pay.funding_tx_hex.clone();
+                    self.pay_chain_line = format!("Publicada en Signet. {txid}");
+                    self.note(format!("Publicada en Signet. {txid}"));
+                    if let Some(slug) = self.selected.clone() {
+                        let _ = self.store.save_pay_draft(&slug, &self.pay);
+                        self.pay_verify(&slug);
+                        self.pay_poll_chain(&slug, false);
+                    }
+                }
+                JobEvent::FundingBroadcastDone(Err(e)) => {
+                    self.chain_busy = false;
+                    let lower = e.to_lowercase();
+                    if lower.contains("already") || lower.contains("mempool") {
+                        self.pay_chain_line = "Ya está en Signet.".into();
+                        self.note("Ya está en Signet. Comprueba en la red.");
+                        if let Some(slug) = self.selected.clone() {
+                            self.pay_poll_chain(&slug, true);
                         }
                     } else {
                         self.note(e);
@@ -884,8 +915,7 @@ impl App {
                 && json.get("sighash").is_none())
         {
             if let Some(hex) = hex_from_artifact(&json) {
-                let kind = coop_tx_kind_from_artifact(&json)
-                    .unwrap_or_else(|| KIND_PARTIDA.into());
+                let kind = coop_tx_kind_from_artifact(&json).unwrap_or_else(|| KIND_PARTIDA.into());
                 self.take_finished_coop(&slug, hex, &kind);
             }
             return;
@@ -919,9 +949,14 @@ impl App {
                 self.pay.awaiting_chain = true;
                 self.pay.send_failed = false;
                 self.pay.pending_send = None;
-                self.pay_chain_line =
-                    "Firma la segunda en Electrum y publícala. Luego comprueba.".into();
-                self.note("Llegó lo firmado. Fírmalo en Electrum y publícalo ahí.");
+                if funding_psbt_fully_signed(&self.pay.onesig_hex) {
+                    self.pay_chain_line = "Ya está firmado. Publícalo en Signet.".into();
+                    self.note("Llegó el envío completo. Pulsa Publicar en Signet.");
+                } else {
+                    self.pay_chain_line =
+                        "Firma la segunda entrada. Luego publícalo aquí en Signet.".into();
+                    self.note("Llegó lo firmado. Firma tu parte y publícalo en Signet.");
+                }
             } else if name.contains("partial") {
                 let next = prefer_funding_psbt(&self.pay.unsigned_psbt_hex, &hex);
                 if next != self.pay.unsigned_psbt_hex {
@@ -1001,9 +1036,11 @@ impl eframe::App for App {
                 }
                 self.watch_scan = None;
                 self.pay_chain_line.clear();
+                self.delete_confirm = false;
             } else {
                 self.pay = PayUiDraft::default();
                 self.watch_scan = None;
+                self.delete_confirm = false;
             }
             self.last_slug = self.selected.clone();
         }
@@ -1214,24 +1251,12 @@ impl App {
 
     fn show_tabs(&mut self, ui: &mut egui::Ui) {
         let labels = shell_tab_labels(self.prefs.role);
-        let tabs: &[(MainTab, &str)] = match self.prefs.role {
-            Role::Mandante => &[
-                (MainTab::Obra, labels[0]),
-                (MainTab::Red, labels[1]),
-                (MainTab::Trato, labels[2]),
-                (MainTab::Pago, labels[3]),
-            ],
-            Role::Contratista => &[
-                (MainTab::Obra, labels[0]),
-                (MainTab::Trato, labels[1]),
-                (MainTab::Red, labels[2]),
-                (MainTab::Pago, labels[3]),
-            ],
-        };
-        debug_assert_eq!(
-            tabs.iter().map(|(_, l)| *l).collect::<Vec<_>>(),
-            labels.to_vec()
-        );
+        let tabs: &[(MainTab, &str)] = &[
+            (MainTab::Obra, labels[0]),
+            (MainTab::Red, labels[1]),
+            (MainTab::Trato, labels[2]),
+            (MainTab::Pago, labels[3]),
+        ];
         let pago_ok = self
             .selected
             .as_ref()
@@ -1303,6 +1328,8 @@ impl App {
         let has_offer = matches!(self.store.load_offer(&slug), Ok(Some(_)));
         let has_signed = matches!(self.store.load_signed(&slug), Ok(Some(_)));
         self.show_construction(ui, &slug, &id, &entry, has_draft, has_offer, has_signed);
+        ui.add_space(12.0);
+        self.show_delete_obra(ui, &slug);
         ui.add_space(12.0);
         ui.collapsing("Billetera y respaldo", |ui| {
             self.show_wallet(ui, Some(&slug));
@@ -1392,6 +1419,11 @@ impl App {
         ui.add_space(12.0);
         ui.label(RichText::new("Mis tratos").weak());
         self.work_list(ui, true);
+        if self.selected.is_some() {
+            let slug = self.selected.clone().unwrap();
+            ui.add_space(10.0);
+            self.show_delete_obra(ui, &slug);
+        }
     }
 
     fn show_tab_red(&mut self, ui: &mut egui::Ui) {
@@ -1534,14 +1566,15 @@ impl App {
             if let Ok(project) = self.store.ensure_pay_project(&slug) {
                 if can_open_stop_or_redo(&project, &self.pay) {
                     ui.add_space(10.0);
-                    if primary_btn(ui, "Detener obra y devolver boleta", self.prefs.dark).clicked()
-                    {
+                    if primary_btn(ui, "Detener obra y repartir", self.prefs.dark).clicked() {
                         self.open_stop_wizard(&slug, &project);
                         self.tab = MainTab::Pago;
                     }
                 }
             }
         }
+        ui.add_space(12.0);
+        self.show_delete_obra(ui, &slug);
     }
 
     fn show_proposal_review(&self, ui: &mut egui::Ui, slug: &str) {
@@ -1641,6 +1674,70 @@ impl App {
                 }
             }
         });
+    }
+
+    fn show_delete_obra(&mut self, ui: &mut egui::Ui, slug: &str) {
+        let project = self.store.ensure_pay_project(slug).ok();
+        let kind = obra_delete_kind(project.as_ref());
+        let dark = self.prefs.dark;
+        panel_card(ui, dark, |ui| {
+            ui.label(RichText::new("Borrar esta obra").strong());
+            ui.label(RichText::new(obra_delete_reason_es(kind)).small().weak());
+            match kind {
+                ObraDeleteKind::BlockedLive => {
+                    ui.label(
+                        RichText::new("No se puede borrar: hay plata en Signet.")
+                            .color(theme_red()),
+                    );
+                }
+                ObraDeleteKind::Unstarted | ObraDeleteKind::Closed => {
+                    if !self.delete_confirm {
+                        if ui.button("Borrar esta obra").clicked() {
+                            self.delete_confirm = true;
+                        }
+                    } else {
+                        ui.label(
+                            RichText::new(
+                                "¿Seguro? Se borra de este computador. No se puede deshacer.",
+                            )
+                            .color(theme_red()),
+                        );
+                        ui.horizontal(|ui| {
+                            if primary_btn(ui, "Sí, borrar", dark).clicked() {
+                                self.delete_selected_obra();
+                            }
+                            if ui.button("Cancelar").clicked() {
+                                self.delete_confirm = false;
+                            }
+                        });
+                    }
+                }
+            }
+        });
+    }
+
+    fn delete_selected_obra(&mut self) {
+        let Some(slug) = self.selected.clone() else {
+            return;
+        };
+        let project = self.store.ensure_pay_project(&slug).ok();
+        if !can_delete_obra(project.as_ref()) {
+            self.delete_confirm = false;
+            return self.fail("No se puede borrar: hay plata en Signet.");
+        }
+        match self.store.delete_work(&slug) {
+            Ok(()) => {
+                self.selected = None;
+                self.last_slug = None;
+                self.delete_confirm = false;
+                self.pay = PayUiDraft::default();
+                self.watch_scan = None;
+                self.pay_chain_line.clear();
+                self.note("Obra borrada de este computador.");
+                self.tab = MainTab::Obra;
+            }
+            Err(e) => self.fail(e),
+        }
     }
 
     fn work_list(&mut self, ui: &mut egui::Ui, as_trato: bool) {
@@ -2008,11 +2105,9 @@ impl App {
             let disk = self.store.load_coop_tx(&slug).ok().flatten();
             if recover_coop_tx_into_draft(&mut self.pay, &project, disk.as_ref()) {
                 let _ = self.store.save_pay_draft(&slug, &self.pay);
-                let _ = self.store.save_coop_tx(
-                    &slug,
-                    &self.pay.coop_tx_hex,
-                    &self.pay.coop_tx_kind,
-                );
+                let _ =
+                    self.store
+                        .save_coop_tx(&slug, &self.pay.coop_tx_hex, &self.pay.coop_tx_kind);
             }
         }
         let pending_q = self.store.load_pay_quote(&slug).ok().flatten();
@@ -2023,6 +2118,19 @@ impl App {
         );
         ui.set_width(ui.available_width());
         ui.spacing_mut().item_spacing.y = 10.0;
+        let has_signed = true;
+        panel_card(ui, self.prefs.dark, |ui| {
+            ui.label(RichText::new("Estado de la obra").strong().size(16.0));
+            show_obra_stepper(ui, obra_lane(Some(&project), has_signed), self.prefs.dark);
+            ui.add_space(4.0);
+            show_pot_badges(
+                ui,
+                boleta_badge(&project),
+                p1_badge(&project),
+                self.prefs.dark,
+            );
+        });
+        ui.add_space(10.0);
         self.show_pay_now_left(
             ui,
             &slug,
@@ -2057,7 +2165,11 @@ impl App {
         have_watch: bool,
     ) {
         let dark = self.prefs.dark;
-        let bond_coop = self.store.load_pay_coop_kind(slug, KIND_BOND).ok().flatten();
+        let bond_coop = self
+            .store
+            .load_pay_coop_kind(slug, KIND_BOND)
+            .ok()
+            .flatten();
         let gate = pago_coop_gate(Some(project), &self.pay, bond_coop.as_ref());
         let now = spanish_now_pay(Some(project), pending, &self.pay, bond_coop.as_ref());
         let status_color = match gate {
@@ -2178,6 +2290,9 @@ impl App {
         let locked = quote.map(quote_fully_signed).unwrap_or(false);
         panel_card(ui, dark, |ui| {
             ui.label(RichText::new("Resumen").strong().size(16.0));
+            show_obra_stepper(ui, obra_lane(Some(project), true), dark);
+            show_pot_badges(ui, boleta_badge(project), p1_badge(project), dark);
+            ui.add_space(4.0);
             let bond_minor = contract_bond_minor(body);
             let bond_sats = quote.map(|q| q.bond_sats);
             let (bond_main, bond_sec) = obra_amount_pair(bond_minor, body.unit, bond_sats);
@@ -2614,7 +2729,7 @@ impl App {
                 }
                 FundHandshakeStep::ExportAndSign => {
                     ui.label(
-                        "Listo para firmar en Electrum. Exporta, firma, luego envía lo firmado.",
+                        "Exporta, firma tu parte (Electrum si hace falta), luego tráela. Cuando estén las dos firmas, se publica aquí.",
                     );
                     self.show_psbt_share(
                         ui,
@@ -2647,9 +2762,49 @@ impl App {
                         self.pay_send_onesig(slug, role, fee);
                     }
                 }
+                FundHandshakeStep::BroadcastFunding => {
+                    ui.label(
+                        RichText::new("Ya está firmado (las dos partes). Publícalo en Signet.")
+                            .color(accent_green(dark)),
+                    );
+                    if primary_btn(ui, "Publicar en Signet", dark).clicked() {
+                        self.pay_broadcast_funding();
+                    }
+                    ui.add_space(4.0);
+                    ui.horizontal(|ui| {
+                        if ui.button("Copiar texto").clicked() {
+                            if let Ok(hex) = extract_funding_tx_hex(best_funding_psbt(&self.pay)) {
+                                ui.output_mut(|o| o.copied_text = hex);
+                                self.note("Copiado. Electrum solo si Signet falla.");
+                            } else {
+                                self.fail("No pude sacar el envío firmado.");
+                            }
+                        }
+                        if ui.button("Exportar archivo").clicked() {
+                            self.pay_export_funding_hex(slug);
+                        }
+                    });
+                    if !self.pay_chain_line.is_empty() {
+                        ui.label(
+                            RichText::new(&self.pay_chain_line)
+                                .color(accent_green(dark))
+                                .strong()
+                                .size(15.0),
+                        );
+                    }
+                    if self.chain_busy {
+                        ui.horizontal(|ui| {
+                            ui.spinner();
+                            ui.label("Hablando con Signet…");
+                        });
+                    }
+                    if primary_btn(ui, "Comprobar en la red", dark).clicked() {
+                        self.pay_poll_chain(slug, true);
+                    }
+                }
                 FundHandshakeStep::WaitChain => {
                     ui.label(
-                        RichText::new("El otro firma y publica en Electrum. Luego comprueba aquí.")
+                        RichText::new("Espera la segunda firma o comprueba si ya está en Signet.")
                             .color(accent_amber(dark)),
                     );
                     if !self.pay_chain_line.is_empty() {
@@ -3226,26 +3381,25 @@ impl App {
             .map(|r| coop_action(coop.as_ref(), r))
             .unwrap_or(CoopAction::Propose);
         let title = if bond {
-            "Devolver la boleta"
+            "Cerrar y repartir la boleta"
         } else {
-            "Cobrar la partida 1"
+            "Cerrar y repartir la partida 1"
         };
         let hint = if bond {
-            "Cuenta del contratista (Signet)"
+            "Cuenta del contratista"
         } else {
-            "Dónde recibir la plata de la partida 1"
+            "Cuenta del contratista (partida 1)"
         };
         panel_card(ui, dark, |ui| {
-            ui.label(RichText::new(title).strong());
+            ui.label(RichText::new(title).strong().size(16.0));
             ui.label(
-                RichText::new(if bond {
-                    "Los dos tienen que estar de acuerdo. La boleta vuelve al contratista."
-                } else {
-                    "Cuando ambos están de acuerdo, se paga la partida 1 al contratista."
-                })
+                RichText::new(
+                    "Los dos acuerdan un %. El mismo % vale para la partida y para la boleta, cada pozo por su lado. Contratista + mandante = 100.",
+                )
                 .small()
                 .weak(),
             );
+            self.show_close_split_editor(ui, project, kind);
             ui.horizontal(|ui| {
                 ui.label(hint);
                 if bond {
@@ -3260,7 +3414,7 @@ impl App {
                     show_field(
                         ui,
                         &mut self.pay.dest,
-                        "tu cuenta Signet",
+                        "cuenta Signet del contratista",
                         dark,
                         260.0,
                     );
@@ -3278,9 +3432,7 @@ impl App {
                             .color(accent_amber(dark)),
                         );
                     } else if self.pay.coop_tx_published && self.pay.coop_tx_kind == kind {
-                        ui.label(
-                            RichText::new("Ya está en Signet.").color(accent_green(dark)),
-                        );
+                        ui.label(RichText::new("Ya está en Signet.").color(accent_green(dark)));
                     } else {
                         ui.label(
                             RichText::new(
@@ -3329,7 +3481,7 @@ impl App {
             return;
         }
         ui.add_space(8.0);
-        if primary_btn(ui, "Detener obra y devolver boleta", self.prefs.dark).clicked() {
+        if primary_btn(ui, "Detener obra y repartir", self.prefs.dark).clicked() {
             self.open_stop_wizard(slug, project);
         }
     }
@@ -3361,7 +3513,11 @@ impl App {
         project: &hbp_core::Project,
     ) {
         let dark = self.prefs.dark;
-        let bond_coop = self.store.load_pay_coop_kind(slug, KIND_BOND).ok().flatten();
+        let bond_coop = self
+            .store
+            .load_pay_coop_kind(slug, KIND_BOND)
+            .ok()
+            .flatten();
         let gate = pago_coop_gate(Some(project), &self.pay, bond_coop.as_ref());
         if matches!(gate, Some(PagoCoopGate::ShowPublish)) || needs_coop_publish(&self.pay) {
             self.show_coop_publish(ui, slug);
@@ -3394,12 +3550,8 @@ impl App {
         match self.pay.stop_step {
             StopStep::Confirm => {
                 panel_card(ui, dark, |ui| {
-                    ui.label(
-                        RichText::new("Detener obra y devolver boleta")
-                            .strong()
-                            .size(16.0),
-                    );
-                    ui.label("Se para la obra. La boleta vuelve al contratista. Las partidas que siguen quedan cerradas.");
+                    ui.label(RichText::new("Detener obra y repartir").strong().size(16.0));
+                    ui.label("Se para la obra. Acuerdan un %: la partida 1 y la boleta se cierran con ese mismo reparto. Sin acuerdo, la plata se quema.");
                     if p1_blocks_bond_return(project) {
                         ui.label(
                             RichText::new(
@@ -3447,16 +3599,19 @@ impl App {
                     }
                 } else {
                     ui.label(
-                        RichText::new("Cuando la partida 1 esté cobrada y publicada, sigue a la boleta.")
-                            .small()
-                            .weak(),
+                        RichText::new(
+                            "Cuando la partida 1 esté cobrada y publicada, sigue a la boleta.",
+                        )
+                        .small()
+                        .weak(),
                     );
                 }
             }
             StopStep::DestBond => {
                 panel_card(ui, dark, |ui| {
-                    ui.label(RichText::new("Destino de la boleta").strong());
-                    ui.label("Cuenta del contratista, donde vuelve la plata de la boleta.");
+                    ui.label(RichText::new("Cuentas y reparto de la boleta").strong());
+                    ui.label("Mismo % que la partida. Cuenta del contratista y, si no es 100%, cuenta del mandante.");
+                    self.show_close_split_editor(ui, project, KIND_BOND);
                     show_field(
                         ui,
                         &mut self.pay.bond_dest,
@@ -3638,6 +3793,57 @@ impl App {
         }
     }
 
+    fn show_close_split_editor(
+        &mut self,
+        ui: &mut egui::Ui,
+        project: &hbp_core::Project,
+        kind: &str,
+    ) {
+        let dark = self.prefs.dark;
+        let mut pct = parse_pct(&self.pay.close_c_pct).unwrap_or(100);
+        ui.add_space(2.0);
+        ui.label(RichText::new("Cuánto se lleva el contratista").strong());
+        ui.horizontal(|ui| {
+            if ui
+                .add(egui::Slider::new(&mut pct, 0..=100).suffix("%"))
+                .changed()
+            {
+                self.pay.close_c_pct = pct.to_string();
+            }
+            show_field(ui, &mut self.pay.close_c_pct, "100", dark, 52.0);
+            if let Ok(p) = parse_pct(&self.pay.close_c_pct) {
+                pct = p;
+            }
+            ui.label(
+                RichText::new(format!("Mandante {}%", mandante_pct(pct)))
+                    .size(14.0)
+                    .weak(),
+            );
+        });
+        if pct < 100 {
+            ui.horizontal(|ui| {
+                ui.label("Cuenta del mandante");
+                show_field(
+                    ui,
+                    &mut self.pay.close_m_dest,
+                    "cuenta Signet del mandante",
+                    dark,
+                    260.0,
+                );
+            });
+        }
+        let fee = parse_fee(&self.pay.fee_sats).unwrap_or(250);
+        if let Some((pot, to_c, to_m)) = close_split_preview(project, kind, pct, fee) {
+            ui.label(
+                RichText::new(format!(
+                    "Este pozo: {pot} sats → contratista {to_c} · mandante {to_m}"
+                ))
+                .small()
+                .weak(),
+            );
+        }
+    }
+
     fn pay_coop_act(&mut self, slug: &str, kind: &str, want: CoopAction) {
         match want {
             CoopAction::Propose | CoopAction::Sign => self.pay_coop_contribute(slug, kind),
@@ -3668,10 +3874,26 @@ impl App {
             return self.fail(if kind == KIND_BOND {
                 "Escribe la cuenta del contratista."
             } else {
-                "Escribe dónde recibir la plata."
+                "Escribe la cuenta del contratista."
             });
         }
+        let pct = match parse_pct(&self.pay.close_c_pct) {
+            Ok(p) => p,
+            Err(e) => return self.fail(e),
+        };
         let existing = self.store.load_pay_coop_kind(slug, kind).ok().flatten();
+        let existing = match seed_coop_split(
+            existing,
+            &project,
+            kind,
+            &dest,
+            &self.pay.close_m_dest,
+            pct,
+            fee,
+        ) {
+            Ok(c) => c,
+            Err(e) => return self.fail(e),
+        };
         let mut journal = match self.store.load_pay_nonces(slug) {
             Ok(j) => j,
             Err(e) => return self.fail(e),
@@ -3811,7 +4033,11 @@ impl App {
     }
 
     fn pay_redo_bond_return(&mut self, slug: &str) {
-        let coop = self.store.load_pay_coop_kind(slug, KIND_BOND).ok().flatten();
+        let coop = self
+            .store
+            .load_pay_coop_kind(slug, KIND_BOND)
+            .ok()
+            .flatten();
         let mut project = match self.store.ensure_pay_project(slug) {
             Ok(p) => p,
             Err(e) => return self.fail(e),
@@ -3887,7 +4113,11 @@ impl App {
                     }
                 });
                 ui.add_space(4.0);
-                ui.label(RichText::new("Texto del envío (por si quieres guardarlo)").small().weak());
+                ui.label(
+                    RichText::new("Texto del envío (por si quieres guardarlo)")
+                        .small()
+                        .weak(),
+                );
                 show_multiline(
                     ui,
                     &mut self.pay.coop_tx_hex,
@@ -3942,6 +4172,69 @@ impl App {
             let r = esplora_try_broadcast(&refs, socks, &hex).map_err(|e| e.to_string());
             let _ = tx.send(JobEvent::BroadcastDone(r));
         });
+    }
+
+    fn pay_broadcast_funding(&mut self) {
+        let psbt = best_funding_psbt(&self.pay).to_string();
+        if psbt.is_empty() {
+            return self.fail("No hay envío firmado para publicar.");
+        }
+        if !funding_psbt_fully_signed(&psbt) {
+            return self.fail("Falta una firma. Exporta, firma, y tráelo de nuevo.");
+        }
+        let hex = match extract_funding_tx_hex(&psbt) {
+            Ok(h) => h,
+            Err(e) => return self.fail(e),
+        };
+        if self.chain_busy {
+            return;
+        }
+        self.pay.funding_tx_hex = hex.clone();
+        if let Some(slug) = self.selected.clone() {
+            let _ = self.store.save_pay_draft(&slug, &self.pay);
+        }
+        let socks = self.socks();
+        let urls = self.esplora_url_list();
+        if urls.is_empty() {
+            return self.fail("No hay red Signet para publicar.");
+        }
+        self.chain_busy = true;
+        self.pay_chain_line = "Publicando en Signet…".into();
+        self.note("Publicando el fondeo en Signet…");
+        self.spawn_quiet(move |tx| {
+            let refs: Vec<&str> = urls.iter().map(|s| s.as_str()).collect();
+            let r = esplora_try_broadcast(&refs, socks, &hex).map_err(|e| e.to_string());
+            let _ = tx.send(JobEvent::FundingBroadcastDone(r));
+        });
+    }
+
+    fn pay_export_funding_hex(&mut self, slug: &str) {
+        let psbt = best_funding_psbt(&self.pay).to_string();
+        let hex = match extract_funding_tx_hex(&psbt) {
+            Ok(h) => h,
+            Err(e) => return self.fail(e),
+        };
+        let filename = "fondeo-signet.hex";
+        let dir = self.store.pay_dir(slug);
+        let fallback = dir.join(filename);
+        if let Err(e) = std::fs::create_dir_all(&dir) {
+            return self.fail(e);
+        }
+        if let Err(e) = std::fs::write(&fallback, hex.as_bytes()) {
+            return self.fail(e);
+        }
+        if let Some(path) = rfd::FileDialog::new()
+            .add_filter("hex", &["hex", "txt"])
+            .set_file_name(filename)
+            .save_file()
+        {
+            match std::fs::write(&path, hex.as_bytes()) {
+                Ok(()) => self.note(format!("Archivo guardado en {}", path.display())),
+                Err(e) => self.fail(e),
+            }
+        } else {
+            self.note(format!("Archivo guardado en {}", fallback.display()));
+        }
     }
 
     fn maybe_poll_coop(&mut self) {
@@ -4542,118 +4835,6 @@ fn friendly_store_err(e: &str) -> String {
     }
 }
 
-fn big_btn(ui: &mut egui::Ui, label: &str) -> egui::Response {
-    ui.add(egui::Button::new(label).min_size(Vec2::new(220.0, 32.0)))
-}
-
-fn primary_btn(ui: &mut egui::Ui, label: &str, dark: bool) -> egui::Response {
-    ui.add(
-        egui::Button::new(
-            RichText::new(label)
-                .color(Color32::WHITE)
-                .strong()
-                .size(16.0),
-        )
-        .fill(accent_green(dark))
-        .min_size(Vec2::new(ui.available_width().min(420.0).max(260.0), 44.0)),
-    )
-}
-
-fn panel_card(ui: &mut egui::Ui, dark: bool, add: impl FnOnce(&mut egui::Ui)) {
-    let w = ui.available_width();
-    egui::Frame::none()
-        .fill(panel_fill(dark))
-        .stroke(egui::Stroke::new(1.0, panel_stroke(dark)))
-        .inner_margin(14.0)
-        .rounding(6.0)
-        .show(ui, |ui| {
-            ui.set_min_width((w - 8.0).max(200.0));
-            ui.with_layout(egui::Layout::top_down(egui::Align::Min), add);
-        });
-}
-
-fn accent_blue(dark: bool) -> Color32 {
-    if dark {
-        Color32::from_rgb(91, 141, 239)
-    } else {
-        Color32::from_rgb(43, 108, 176)
-    }
-}
-
-fn accent_green(dark: bool) -> Color32 {
-    if dark {
-        Color32::from_rgb(61, 155, 95)
-    } else {
-        Color32::from_rgb(47, 133, 90)
-    }
-}
-
-fn accent_amber(dark: bool) -> Color32 {
-    if dark {
-        Color32::from_rgb(212, 160, 23)
-    } else {
-        Color32::from_rgb(192, 86, 33)
-    }
-}
-
-fn theme_red() -> Color32 {
-    Color32::from_rgb(200, 64, 64)
-}
-
-fn panel_fill(dark: bool) -> Color32 {
-    if dark {
-        Color32::from_rgb(36, 40, 50)
-    } else {
-        Color32::from_rgb(255, 255, 255)
-    }
-}
-
-fn panel_stroke(dark: bool) -> Color32 {
-    if dark {
-        Color32::from_rgb(70, 78, 96)
-    } else {
-        Color32::from_rgb(198, 206, 220)
-    }
-}
-
-fn deadline_editor(ui: &mut egui::Ui, id: &str, fields: &mut DeadlineFields) {
-    ui.horizontal(|ui| {
-        ui.add(
-            egui::DragValue::new(&mut fields.day)
-                .range(1..=31)
-                .prefix("día "),
-        );
-        let month_label = MONTHS_ES
-            .get(fields.month.saturating_sub(1) as usize)
-            .copied()
-            .unwrap_or("mes");
-        egui::ComboBox::from_id_salt(format!("{id}-month"))
-            .selected_text(month_label)
-            .show_ui(ui, |ui| {
-                for (i, name) in MONTHS_ES.iter().enumerate() {
-                    ui.selectable_value(&mut fields.month, i as u32 + 1, *name);
-                }
-            });
-        ui.add(
-            egui::DragValue::new(&mut fields.year)
-                .range(2024..=2100)
-                .prefix("año "),
-        );
-        ui.label("  ");
-        ui.add(
-            egui::DragValue::new(&mut fields.hour)
-                .range(0..=23)
-                .suffix(" h"),
-        );
-        ui.add(
-            egui::DragValue::new(&mut fields.minute)
-                .range(0..=59)
-                .suffix(" min"),
-        );
-    });
-    ui.label(RichText::new(fields.preview_es()).italics().small());
-}
-
 fn net_badge(ui: &mut egui::Ui, light: NetLight, _line: &str) {
     let (color, text) = match light {
         NetLight::Off => (Color32::from_rgb(140, 140, 140), "Apagado"),
@@ -4663,105 +4844,6 @@ fn net_badge(ui: &mut egui::Ui, light: NetLight, _line: &str) {
         NetLight::Err => (Color32::from_rgb(210, 70, 70), "Error"),
     };
     ui.colored_label(color, format!("● {text}"));
-}
-
-fn edit_fg(dark: bool) -> Color32 {
-    if dark {
-        Color32::WHITE
-    } else {
-        Color32::from_rgb(12, 14, 18)
-    }
-}
-
-fn edit_bg(dark: bool) -> Color32 {
-    if dark {
-        Color32::from_rgb(72, 78, 94)
-    } else {
-        Color32::WHITE
-    }
-}
-
-fn field_single<'a>(value: &'a mut String, hint: &str, dark: bool) -> egui::TextEdit<'a> {
-    egui::TextEdit::singleline(value)
-        .hint_text(hint.to_owned())
-        .text_color(edit_fg(dark))
-        .frame(false)
-}
-
-fn unit_helper(unit: Unit) -> &'static str {
-    match unit {
-        Unit::Sats => {
-            "El monto ya está en SATS. No se convierte con un precio. El pago en cadena viene después."
-        }
-        Unit::Btc => {
-            "El monto ya está en BTC. Los sats salen de ese monto. El pago en cadena viene después."
-        }
-        _ => {
-            "Moneda del contrato. Los sats se fijan después, al cotizar/fondear con un precio. Elegir moneda no arma el pago."
-        }
-    }
-}
-
-fn show_field(
-    ui: &mut egui::Ui,
-    value: &mut String,
-    hint: &str,
-    dark: bool,
-    width: f32,
-) -> egui::Response {
-    let stroke = if dark {
-        Color32::from_rgb(170, 176, 190)
-    } else {
-        Color32::from_rgb(90, 96, 108)
-    };
-    egui::Frame::none()
-        .fill(edit_bg(dark))
-        .stroke(egui::Stroke::new(1.0, stroke))
-        .inner_margin(4.0)
-        .rounding(4.0)
-        .show(ui, |ui| {
-            ui.add(field_single(value, hint, dark).desired_width(width))
-        })
-        .inner
-}
-
-fn show_multiline(
-    ui: &mut egui::Ui,
-    value: &mut String,
-    hint: &str,
-    dark: bool,
-    width: f32,
-    rows: usize,
-) -> egui::Response {
-    let stroke = if dark {
-        Color32::from_rgb(170, 176, 190)
-    } else {
-        Color32::from_rgb(90, 96, 108)
-    };
-    egui::Frame::none()
-        .fill(edit_bg(dark))
-        .stroke(egui::Stroke::new(1.0, stroke))
-        .inner_margin(4.0)
-        .rounding(4.0)
-        .show(ui, |ui| {
-            ui.add(
-                egui::TextEdit::multiline(value)
-                    .hint_text(hint.to_owned())
-                    .text_color(edit_fg(dark))
-                    .frame(false)
-                    .desired_width(width)
-                    .desired_rows(rows),
-            )
-        })
-        .inner
-}
-
-fn paint_widgets(v: &mut egui::Visuals, fg: Color32) {
-    v.widgets.noninteractive.fg_stroke.color = fg;
-    v.widgets.inactive.fg_stroke.color = fg;
-    v.widgets.hovered.fg_stroke.color = fg;
-    v.widgets.active.fg_stroke.color = fg;
-    v.widgets.open.fg_stroke.color = fg;
 }
 
 fn parse_psbt_has_outpoint(raw: &str, outpoint: &str) -> bool {
@@ -4776,43 +4858,4 @@ fn parse_psbt_has_outpoint(raw: &str, outpoint: &str) -> bool {
         .input
         .iter()
         .any(|i| i.previous_output.to_string() == want)
-}
-
-fn apply_theme(ctx: &egui::Context, dark: bool) {
-    let mut v = if dark {
-        egui::Visuals::dark()
-    } else {
-        egui::Visuals::light()
-    };
-    let fg = edit_fg(dark);
-    v.override_text_color = Some(fg);
-    paint_widgets(&mut v, fg);
-    if dark {
-        v.extreme_bg_color = Color32::from_rgb(28, 32, 42);
-        v.faint_bg_color = Color32::from_rgb(32, 36, 48);
-        v.widgets.inactive.bg_fill = Color32::from_rgb(44, 50, 64);
-        v.widgets.hovered.bg_fill = Color32::from_rgb(58, 72, 104);
-        v.widgets.active.bg_fill = Color32::from_rgb(61, 155, 95);
-        v.widgets.open.bg_fill = Color32::from_rgb(44, 50, 64);
-        v.window_fill = Color32::from_rgb(22, 24, 30);
-        v.panel_fill = Color32::from_rgb(26, 28, 36);
-        v.selection.bg_fill = Color32::from_rgb(43, 90, 176);
-        v.selection.stroke.color = fg;
-        v.warn_fg_color = Color32::from_rgb(212, 160, 23);
-        v.error_fg_color = Color32::from_rgb(220, 80, 80);
-    } else {
-        v.extreme_bg_color = Color32::from_rgb(255, 255, 255);
-        v.faint_bg_color = Color32::from_rgb(232, 236, 244);
-        v.widgets.inactive.bg_fill = Color32::from_rgb(236, 240, 248);
-        v.widgets.hovered.bg_fill = Color32::from_rgb(214, 226, 246);
-        v.widgets.active.bg_fill = Color32::from_rgb(47, 133, 90);
-        v.widgets.open.bg_fill = Color32::from_rgb(236, 240, 248);
-        v.window_fill = Color32::from_rgb(236, 238, 244);
-        v.panel_fill = Color32::from_rgb(244, 245, 247);
-        v.selection.bg_fill = Color32::from_rgb(190, 214, 245);
-        v.selection.stroke.color = Color32::from_rgb(20, 32, 48);
-        v.warn_fg_color = Color32::from_rgb(180, 90, 20);
-        v.error_fg_color = Color32::from_rgb(180, 40, 40);
-    }
-    ctx.set_visuals(v);
 }

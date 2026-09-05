@@ -58,6 +58,8 @@ Bond and the live partida each have their **own** t1/t2 chain. Same user-defined
 
 A different key-path spend of the **same** funding UTXO (reception or cancel). If it confirms first, the burn txs are invalid. After t1 has confirmed, coop can still spend the continuation before t2 (recover the remaining half by agreement).
 
+**Agreed % (GUI).** When both parties agree, they set one **contratista %** (mandante = 100 − that). The same ratio is applied to **partida 1** and **boleta** as two sequential MuSig2 spends (`build_split_key_spend_tx`: one input, two outputs). 100% to the contratista stays a single-output spend. Broadcast is in-app Esplora, same as today. Fee-burn remains the **only** path if they do not agree.
+
 ## CLI / files
 
 ```

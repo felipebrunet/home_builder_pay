@@ -18,12 +18,12 @@ One top row: **profile/obra switcher** (`Felipe · Mandante  ·  casa2`) plus ne
 
 | Mandante | Contratista |
 |---|---|
-| **Obra** — monto, plazos, partidas; one green CTA (Preparar / Firmar) | **Obra** — persona name + **obra cards** (same search as before) |
-| **Red** — Conectarme / Publicar / status | **Trato** — review (total, plazos, partidas) then Aceptar |
-| **Trato** — Enviar only after they asked for that obra | **Red** — Conectarme / Avanzado |
+| **Obra** — monto, plazos, partidas; one green CTA (Preparar / Firmar) | **Obra** — persona name + **obra cards** (search / mis obras) |
+| **Red** — Conectarme / Publicar / status | **Red** — Conectarme / Avanzado |
+| **Trato** — Enviar only after they asked for that obra | **Trato** — review (total, plazos, partidas) then Aceptar |
 | **Pago** — enabled once the trato is signed | **Pago** — enabled once the trato is signed |
 
-Tab order is fixed every frame: mandante **Obra \| Red \| Trato \| Pago**; contratista **Obra \| Trato \| Red \| Pago**. No Buscar tab.
+Tab order is identical every frame for both roles: **Obra \| Red \| Trato \| Pago**. No Buscar tab.
 
 Finished steps are muted checks. Waiting cards are amber; success green; primary actions green. Help is behind **¿Qué es esto?**. **Notas** stay collapsed (Ver / Limpiar).
 
@@ -75,17 +75,22 @@ After **Trato cerrado**, the next-step card is **Ir a Pago**. Status lines:
 1. **Buscar mi plata** — scans the local vpub. App auto-selects the smallest confirmed coin that covers share + fee; user can pick another (labeled Plata 1 / 2, not raw outpoints).
 2. **Armar y enviar mi parte** — either side builds a 1-input PSBT that already has exact **boleta + P1** outputs. Wired as `Artifact` `06-funding.partial.json`.
 3. **Completar con mi parte** — peer adds the second input, sends back the complete unsigned 2-in PSBT (`06-funding.unsigned.json`). Incoming older partials cannot overwrite a complete PSBT.
-4. **Exportar para firmar** — `.psbt` file + copiar. Sign in Electrum. **Traer lo firmado**; app sends `07-onesig.psbt.json`. Peer signs the second input in Electrum and **broadcasts there**.
-5. **Comprobar en la red** — Esplora poll. Status in Spanish without a txid on the primary line (`Confirmada en Signet`). Manual tx-hex stays in Avanzado.
+4. **Exportar para firmar** — `.psbt` file + copiar. Sign each input (Electrum if needed). **Traer lo firmado**; app sends `07-onesig.psbt.json`.
+5. When the PSBT has **all signatures**, **Publicar en Signet** (Esplora POST) in-app. Copiar / Exportar are backup. Electrum broadcast is fallback only.
+6. **Comprobar en la red** — Esplora poll. Status in Spanish; txid after a successful publish.
 
 Boleta and partida 1 are **distinct** Taproot addresses (fee-burn key-path + unique tagged merkle tweak per output id). Later partidas stay grey until P1 is terminal.
 
 **Reception (P1).** When P1 is locked: dest + cooperative close. One green button: **Proponer cobro** → wait → **Firmar cobro** → **Marcar cobrada**. Finish marks P1 `Paid` and keeps the **signed tx on screen**. Incoming CoopFiles **merge** both sides’ parts. Each laptop **reuses** its nonce seed for that sighash (a second Proponer/Firmar does not rotate it). That was the `invalid signer index 0` / `falta nonce del mandante` bug when both proposed over Tor.
 
-**Two publish paths (do not mix them):**
+**Two publish paths (both end in-app):**
 
-1. **Funding PSBT** (singlesig inputs from Electrum): **Exportar para firmar** → Electrum sign → peer signs the other input → **broadcast in Electrum** → **Comprobar en la red**. That path stays Electrum.
-2. **Coop MuSig2** (cobro partida 1, devolución boleta): the tx is **fully signed inside the app**. Do **not** tell the user to publish in Electrum.
+1. **Funding PSBT** (singlesig inputs): **Exportar para firmar** → Electrum/Sparrow *sign* if needed → peer signs the other input → when 2-of-2 is complete, **Publicar en Signet** (Esplora POST) in-app. Copiar / Exportar are backup. Electrum broadcast is fallback only.
+2. **Coop MuSig2** (cierre con % de partida + boleta): the tx is **fully signed inside the app**. Same **Publicar en Signet**. Do **not** tell the user Electrum is required.
+
+**Cerrar con % (MVP).** One slider: **% al contratista** (0–100). Mandante gets the rest. The **same %** applies to each pot on its own (partida 1, then boleta) — two sequential MuSig2 txs, each 1-in 2-out when the split is not 100/0. Both sides propose/agree the % before signing. Accounts: contratista dest + mandante dest (if % < 100). Then **Publicar en Signet**.
+
+**Borrar obra.** Allowed only if (a) never funded on-chain / draft or (b) fully closed / detenida. Confirm. Wipes the local slug folder. Live escrow UTXOs cannot be deleted.
 
 **Click order after Terminar / Marcar cobrada / Terminar y devolver**
 
