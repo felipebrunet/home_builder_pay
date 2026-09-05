@@ -175,9 +175,24 @@ fn parse_major_scaled(major: &str, scale: u64) -> crate::Result<u64> {
         .ok_or_else(|| crate::Error::protocol("amount overflow"))
 }
 
+/// BTC price in stored minor units of `unit` (1/100, except SATS).
+///
+/// `74_492_748` CLP/BTC → `7_449_274_800`. Never treat a USD major price as CLP.
+pub fn btc_price_to_minor(btc_price_major: f64, unit: Unit) -> crate::Result<u64> {
+    if !btc_price_major.is_finite() || btc_price_major <= 0.0 {
+        return Err(crate::Error::protocol("btc price must be > 0"));
+    }
+    let v = (btc_price_major * unit.minor_per_major() as f64).round();
+    if v < 1.0 || v > u64::MAX as f64 {
+        return Err(crate::Error::protocol("btc price out of range"));
+    }
+    Ok(v as u64)
+}
+
 /// Convert contract-currency minor units to sats given a BTC price in the same minor units.
 ///
 /// Example: 150_000 cents ($1,500) at 8_000_000 cents/BTC ($80,000) → 1_875_000 sats.
+/// 500_000 (5_000 CLP) at 7_449_274_800 (74_492_748 CLP/BTC) → 6_712 sats.
 pub fn fiat_minor_to_sats(amount_minor: u64, btc_price_minor: u64) -> crate::Result<u64> {
     if btc_price_minor == 0 {
         return Err(crate::Error::protocol("btc price must be > 0"));
@@ -309,6 +324,23 @@ mod tests {
     #[test]
     fn converts_sats() {
         assert_eq!(fiat_minor_to_sats(150_000, 8_000_000).unwrap(), 1_875_000);
+    }
+
+    #[test]
+    fn five_thousand_clp_at_known_clp_btc() {
+        let amount = parse_major_amount("5000", Unit::Clp).unwrap();
+        assert_eq!(amount, 500_000, "CLP is stored as 1/100");
+        let price = btc_price_to_minor(74_492_748.0, Unit::Clp).unwrap();
+        assert_eq!(price, 7_449_274_800);
+        assert_eq!(fiat_minor_to_sats(amount, price).unwrap(), 6_712);
+        let usd_price = btc_price_to_minor(79_600.0, Unit::Usd).unwrap();
+        assert_eq!(usd_price, 7_960_000);
+        let wrong = fiat_minor_to_sats(amount, usd_price).unwrap();
+        assert!(
+            wrong > 1_000_000,
+            "USD/BTC applied to CLP is ~1000× too high ({wrong})"
+        );
+        assert_ne!(wrong, 6_712);
     }
 
     #[test]

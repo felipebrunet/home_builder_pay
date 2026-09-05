@@ -12,9 +12,9 @@ mod state;
 mod vault;
 
 pub use amount::{
-    bond_minor, bond_warnings, equal_stage_count, fiat_minor_to_sats, format_major_amount,
-    minor_from_major, parse_major_amount, stage_bond_warnings, stages_equal_bond,
-    suggest_equal_stage_minors, Unit, DEFAULT_BOND_BPS, MINOR_PER_MAJOR,
+    bond_minor, bond_warnings, btc_price_to_minor, equal_stage_count, fiat_minor_to_sats,
+    format_major_amount, minor_from_major, parse_major_amount, stage_bond_warnings,
+    stages_equal_bond, suggest_equal_stage_minors, Unit, DEFAULT_BOND_BPS, MINOR_PER_MAJOR,
 };
 pub use contract::{
     canonical_json, contract_id, decode_compressed_pubkey, sha256_bytes,

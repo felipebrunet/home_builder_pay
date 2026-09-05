@@ -20,8 +20,8 @@ use hbp_bitcoin::{
     Identity, OfferedCoin, WatchScan, WatchedUtxo,
 };
 use hbp_core::{
-    bond_minor, fiat_minor_to_sats, minor_from_major, NonceJournal, PartidaQuote, PartidaStatus,
-    Project, Quote, Role, SignedContract, Unit, PRODUCT_NETWORK,
+    bond_minor, btc_price_to_minor, fiat_minor_to_sats, minor_from_major, NonceJournal,
+    PartidaQuote, PartidaStatus, Project, Quote, Role, SignedContract, Unit, PRODUCT_NETWORK,
 };
 use serde::{Deserialize, Serialize};
 
@@ -419,6 +419,44 @@ pub fn price_minor_from_major(major: &str) -> Result<u64> {
     Ok(minor_from_major(major.trim())?)
 }
 
+/// Manual major or FX quote → price in the **contract** unit. USD FX never applies to CLP.
+pub fn quote_price_minor(
+    contract_unit: Unit,
+    manual_major: &str,
+    fx: Option<&hbp_net::FxQuote>,
+) -> Result<Option<u64>> {
+    if contract_unit.is_bitcoin_denom() {
+        return Ok(None);
+    }
+    let manual = manual_major.trim();
+    if !manual.is_empty() {
+        let major: f64 = manual
+            .replace('_', "")
+            .parse()
+            .context("precio BTC (número)")?;
+        hbp_net::require_plausible_pair(contract_unit, major)
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
+        return Ok(Some(btc_price_to_minor(major, contract_unit)?));
+    }
+    if let Some(q) = fx {
+        if q.unit != contract_unit {
+            bail!(
+                "el precio es {}/BTC; este trato es {}/BTC. Consulta de nuevo.",
+                q.unit,
+                contract_unit
+            );
+        }
+        return Ok(Some(
+            hbp_net::fx_price_minor(q, contract_unit).context("precio FX inválido")?,
+        ));
+    }
+    Ok(None)
+}
+
+pub fn can_recotizar(project: &Project) -> bool {
+    !project.funding_started()
+}
+
 pub fn preview_quote_sats(signed: &SignedContract, price_minor: Option<u64>) -> Result<(u64, u64)> {
     let body = &signed.body;
     let bond = bond_minor(body.total_minor(), body.bond_bps)?;
@@ -458,6 +496,11 @@ pub fn draft_quote(
         bail!("MAD no entra en esta pantalla");
     }
     let body = &signed.body;
+    if !body.unit.is_bitcoin_denom() {
+        let price = price_minor.context("falta el precio BTC en la moneda de la obra")?;
+        let major = price as f64 / body.unit.minor_per_major() as f64;
+        hbp_net::require_plausible_pair(body.unit, major).map_err(|e| anyhow::anyhow!("{e}"))?;
+    }
     let bond_sats = amount_to_sats(
         bond_minor(body.total_minor(), body.bond_bps)?,
         body.unit,
@@ -530,6 +573,14 @@ pub fn apply_incoming_quote(local: Option<Quote>, incoming: Quote) -> Result<Quo
         out.contratista_sig = incoming.contratista_sig;
     }
     Ok(out)
+}
+
+pub fn recotizar_if_unfunded(project: &mut Project) -> Result<()> {
+    if !can_recotizar(project) {
+        bail!("el fondeo ya empezó; no se puede recotizar");
+    }
+    project.clear_quote()?;
+    Ok(())
 }
 
 pub fn lock_quote_if_ready(project: &mut Project, quote: &Quote) -> Result<bool> {
@@ -1299,6 +1350,99 @@ mod tests {
         // 10% of $2000 = $200; $200 / $80k * 1e8 = 250_000 sats. P1 $1000 → 1_250_000.
         assert_eq!(bond, 250_000);
         assert_eq!(p1, 1_250_000);
+    }
+
+    fn signed_clp_partida(m: &Identity, c: &Identity, p1_minor: u64) -> SignedContract {
+        let draft = ContractBody {
+            network: Network::Signet,
+            unit: Unit::Clp,
+            work_name: "casa-clp".into(),
+            bond_bps: DEFAULT_BOND_BPS,
+            t_project: 1_800_000_000,
+            partidas: vec![
+                PartidaSpec {
+                    id: 1,
+                    description: "Radier".into(),
+                    amount_minor: p1_minor,
+                    plazo_unix: 1_700_000_000,
+                },
+                PartidaSpec {
+                    id: 2,
+                    description: "Muros".into(),
+                    amount_minor: p1_minor,
+                    plazo_unix: 1_710_000_000,
+                },
+            ],
+            mandante_pubkey: m.public_key.clone(),
+            contratista_pubkey: None,
+            dispute: DisputePolicy::fee_burn(1_700_000_000, 1_800_000_000),
+        };
+        let offer = Offer {
+            mandante_sig: hbp_bitcoin::sign_body(&m.secret().unwrap(), &draft).unwrap(),
+            body: draft,
+        };
+        let pending = contratista_accept(offer.clone(), c).unwrap();
+        mandante_commit(&offer, pending, m).unwrap()
+    }
+
+    #[test]
+    fn clp_quote_uses_clp_btc_not_usd() {
+        use hbp_core::{btc_price_to_minor, parse_major_amount};
+        let (m, c) = pair_ids();
+        let p1 = parse_major_amount("5000", Unit::Clp).unwrap();
+        assert_eq!(p1, 500_000);
+        let signed = signed_clp_partida(&m, &c, p1);
+        let clp_price = btc_price_to_minor(74_492_748.0, Unit::Clp).unwrap();
+        let (bond, p1_sats) = preview_quote_sats(&signed, Some(clp_price)).unwrap();
+        assert_eq!(p1_sats, 6_712);
+        // 10% boleta of 10_000 CLP total (two 5000 partidas) = 1000 CLP → 1_342 sats.
+        assert_eq!(bond, 1_342);
+
+        let usd_fx = hbp_net::FxQuote {
+            unit: Unit::Usd,
+            btc_price_major: 79_600.0,
+            source: "test",
+        };
+        assert!(quote_price_minor(Unit::Clp, "", Some(&usd_fx)).is_err());
+        let from_manual = quote_price_minor(Unit::Clp, "74492748", None)
+            .unwrap()
+            .unwrap();
+        assert_eq!(from_manual, clp_price);
+        assert!(quote_price_minor(Unit::Clp, "79600", None).is_err());
+
+        let q = draft_quote(&signed, Some(clp_price), "Yadio 74492748 CLP/BTC").unwrap();
+        assert_eq!(q.partida_sats(1).unwrap(), 6_712);
+        let usd_price = btc_price_to_minor(79_600.0, Unit::Usd).unwrap();
+        assert!(
+            draft_quote(&signed, Some(usd_price), "wrong USD").is_err(),
+            "USD/BTC must not quote a CLP contract"
+        );
+    }
+
+    #[test]
+    fn recotizar_clears_unfunded_quote() {
+        let (m, c) = pair_ids();
+        let signed = signed_two_partidas(&m, &c);
+        let mut project = Project::from_signed(signed.clone()).unwrap();
+        let q = sign_our_quote(
+            &c,
+            &signed,
+            sign_our_quote(
+                &m,
+                &signed,
+                draft_quote(&signed, Some(8_000_000), "fx").unwrap(),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        lock_quote_if_ready(&mut project, &q).unwrap();
+        assert!(can_recotizar(&project));
+        recotizar_if_unfunded(&mut project).unwrap();
+        assert!(project.quote.is_none());
+        assert_eq!(
+            spanish_now(Some(&project), None),
+            "Ahora: acordar cotización de boleta + partida 1."
+        );
     }
 
     #[test]

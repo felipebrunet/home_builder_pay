@@ -478,6 +478,14 @@ impl WorkStore {
         read_json_opt(&self.pay_dir(slug).join("02-quote.json"))
     }
 
+    pub fn clear_pay_quote(&self, slug: &str) -> Result<()> {
+        let path = self.pay_dir(slug).join("02-quote.json");
+        if path.exists() {
+            fs::remove_file(path)?;
+        }
+        Ok(())
+    }
+
     pub fn save_pay_coins(&self, slug: &str, coins: &PayCoins) -> Result<()> {
         let dir = self.ensure_pay_dir(slug)?;
         fs::write(dir.join("coins.json"), serde_json::to_string_pretty(coins)?)?;

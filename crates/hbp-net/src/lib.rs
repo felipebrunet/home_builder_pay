@@ -32,7 +32,10 @@ pub use esplora::{
     esplora_address_txs, esplora_address_utxos, esplora_try_bases, esplora_tx_hex,
     find_dual_amount, find_dual_amount_txid, EsploraTx, EsploraTxOut, EsploraUtxo,
 };
-pub use fx::{fiat_ticker, preview_sats, quote_btc, FxQuote};
+pub use fx::{
+    fiat_ticker, fx_pair_label, fx_price_minor, parse_coingecko_btc_price, parse_yadio_btc_price,
+    preview_sats, quote_btc, require_plausible_pair, FxQuote,
+};
 pub use message::{NetMessage, FILE_FALLBACK};
 pub use overlay::{OverlayConfig, OverlayHandle};
 pub use rendezvous::{

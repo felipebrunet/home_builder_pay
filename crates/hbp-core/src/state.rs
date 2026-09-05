@@ -188,6 +188,22 @@ impl Project {
         Ok(())
     }
 
+    /// Drop a locked quote before any UTXO is funded so both sides can recotizar.
+    pub fn clear_quote(&mut self) -> Result<()> {
+        if self.funding_started() {
+            return Err(Error::protocol(
+                "too late to recotizar: el fondeo ya empezó",
+            ));
+        }
+        self.quote = None;
+        for p in &mut self.partidas {
+            if matches!(p.state, PartidaStatus::AmountAgreed { .. }) {
+                p.state = PartidaStatus::Scheduled;
+            }
+        }
+        Ok(())
+    }
+
     pub fn funding_started(&self) -> bool {
         !matches!(self.bond, BondStatus::Unfunded)
             || self.partidas.iter().any(|p| {
@@ -591,6 +607,22 @@ mod tests {
             .note_partida_funding(2, "x".into(), 1, 20_000, 1, 1)
             .unwrap_err();
         assert!(err.to_string().contains("partida 1 must be paid"));
+    }
+
+    #[test]
+    fn clear_quote_before_funding_then_relock() {
+        let mut p = project();
+        p.set_quote(signed_quote(&p)).unwrap();
+        assert!(p.quote.is_some());
+        p.clear_quote().unwrap();
+        assert!(p.quote.is_none());
+        assert!(matches!(
+            p.partida(1).unwrap().state,
+            PartidaStatus::Scheduled
+        ));
+        p.set_quote(signed_quote(&p)).unwrap();
+        p.note_bond_funding("bond".into(), 0, 50_000, 1).unwrap();
+        assert!(p.clear_quote().is_err());
     }
 
     #[test]

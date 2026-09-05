@@ -62,7 +62,7 @@ After **Trato cerrado**, the next-step card is **Ir a Pago**. Status lines:
 | Bond + P1 noted | **Partida 1 en curso** |
 | P1 Paid / Unwound / T2 | Partida 1 cerrada. Ahora puedes cotizar / fondear partida 2. |
 
-**Quote.** Use the local xpub/watch if present (never sent). Price: **Yadio → CoinGecko → CoinMarketCap**, or a manual BTC price both sides confirm. GUI drafts `Quote` (all partidas, because the protocol requires it) but the banner only highlights boleta + P1 sats. Each side signs (`sign_quote`); both signatures required before `set_quote`. Wired as `NetMessage::Quote` over Tor, same as offer/accept.
+**Quote.** FX is **contract unit per BTC** (`CLP/BTC`, `USD/BTC`, …), never a leftover USD rate on a CLP trato. Yadio → CoinGecko → CoinMarketCap (pair for that unit). SATS/BTC skip FX. Amounts stay 1/100 of the unit. A signed-but-unfunded quote can **Recotizar**. GUI drafts `Quote` (all partidas) but the banner only highlights boleta + P1 sats. Both signatures required before `set_quote`. Wired as `NetMessage::Quote` over Tor.
 
 **Funding (PSBT handshake).** Primary path is watch-only xpub + Esplora (blockstream → mempool Signet), not paste-both-outpoints. One green button per stage. Prior steps lock (no competing “Armar de nuevo”); **Empezar de nuevo** is behind Avanzado with confirm. If Tor deliver fails, the PSBT stays local and the CTA is **Reenviar**.
 

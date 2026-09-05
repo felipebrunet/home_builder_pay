@@ -6,18 +6,19 @@ use std::time::Duration;
 
 use eframe::egui::{self, Color32, RichText, Vec2};
 use hbp_app::{
-    apply_incoming_quote, apply_verified_p1_funding, build_our_partial, classify_funding_psbt,
-    coin_from_watched, complete_incoming_partial, completed_steps, contratista_accept, coop_finish,
-    coop_propose, coop_sign, default_works_root, draft_equal_stages, draft_quote, escrow_addrs,
-    export_backup, format_unix_local_es, fund_handshake_step, funding_wire, funding_wire_hex,
-    hex_artifact, hex_from_artifact, import_backup, import_signed, lock_quote_if_ready,
-    mandante_commit, next_step, our_funding_need, parse_fee, parse_psbt, parse_psbt_bytes,
-    partida_ui_enabled, party_role, pay_stage, prefer_funding_psbt, preview_quote_sats,
-    price_minor_from_major, psbt_display_text, psbt_file_bytes, psbt_to_hex, quote_fully_signed,
-    read_backup_file, sign_our_quote, spanish_chain_status, spanish_now, suggest_watched,
-    validate_deadline_order, write_backup_file, DeadlineFields, FundHandshakeStep, FundMark,
-    FundView, FundingSendKind, NextKind, PayStage, PayUiDraft, UiPrefs, WorkEntry, WorkProgress,
-    WorkStore, ART_COOP, ART_ONESIG, ART_PARTIAL, ART_PSBT, ART_TX, MONTHS_ES,
+    apply_incoming_quote, apply_verified_p1_funding, build_our_partial, can_recotizar,
+    classify_funding_psbt, coin_from_watched, complete_incoming_partial, completed_steps,
+    contratista_accept, coop_finish, coop_propose, coop_sign, default_works_root,
+    draft_equal_stages, draft_quote, escrow_addrs, export_backup, format_unix_local_es,
+    fund_handshake_step, funding_wire, funding_wire_hex, hex_artifact, hex_from_artifact,
+    import_backup, import_signed, lock_quote_if_ready, mandante_commit, next_step,
+    our_funding_need, parse_fee, parse_psbt, parse_psbt_bytes, partida_ui_enabled, party_role,
+    pay_stage, prefer_funding_psbt, preview_quote_sats, psbt_display_text, psbt_file_bytes,
+    psbt_to_hex, quote_fully_signed, quote_price_minor, read_backup_file, recotizar_if_unfunded,
+    sign_our_quote, spanish_chain_status, spanish_now, suggest_watched, validate_deadline_order,
+    write_backup_file, DeadlineFields, FundHandshakeStep, FundMark, FundView, FundingSendKind,
+    NextKind, PayStage, PayUiDraft, UiPrefs, WorkEntry, WorkProgress, WorkStore, ART_COOP,
+    ART_ONESIG, ART_PARTIAL, ART_PSBT, ART_TX, MONTHS_ES,
 };
 use hbp_bitcoin::{
     address_at, default_esplora_urls, scan_watch, sign_body, CoopFile, Identity, OfferedCoin,
@@ -29,9 +30,9 @@ use hbp_core::{
 };
 use hbp_net::{
     announce_topics, bring_up_tor_with_hint, env_bootstrap_peers, esplora_address_txs,
-    esplora_address_utxos, esplora_try_bases, esplora_tx_hex, find_dual_amount, literal_topic,
-    parse_bootstrap_list, preview_sats, quote_btc, FxQuote, NetMessage, OverlayConfig,
-    OverlayHandle, PeerAddr, TorConfig, TorRuntime, WorkAnnounce,
+    esplora_address_utxos, esplora_try_bases, esplora_tx_hex, find_dual_amount, fx_pair_label,
+    literal_topic, parse_bootstrap_list, preview_sats, quote_btc, FxQuote, NetMessage,
+    OverlayConfig, OverlayHandle, PeerAddr, TorConfig, TorRuntime, WorkAnnounce,
 };
 
 enum JobEvent {
@@ -356,8 +357,13 @@ impl App {
                 }
                 JobEvent::FxDone(Ok(q)) => {
                     self.busy = None;
-                    self.fx_line =
-                        format!("1 BTC ≈ {:.2} {} ({})", q.btc_price_major, q.unit, q.source);
+                    self.fx_line = format!(
+                        "1 BTC = {:.2} {}  ({}, {})",
+                        q.btc_price_major,
+                        q.unit,
+                        fx_pair_label(q.unit),
+                        q.source
+                    );
                     self.fx = Some(q);
                 }
                 JobEvent::FxDone(Err(e)) => {
@@ -890,6 +896,9 @@ impl eframe::App for App {
                     }
                     self.total_major = format_major_amount(draft.total_minor(), draft.unit);
                     self.unit = draft.unit;
+                }
+                if let Ok(Some(signed)) = self.store.load_signed(&slug) {
+                    self.unit = signed.body.unit;
                 }
                 if let Some(p) = self.store.load_peer_onion(&slug) {
                     self.peer_onion = p;
@@ -1791,7 +1800,7 @@ impl App {
                 )
                 .clicked()
             {
-                self.spawn_fx();
+                self.spawn_fx(self.unit);
             }
         });
         if let (Ok(total), Some(q)) = (
@@ -2007,29 +2016,52 @@ impl App {
                             .small()
                             .color(accent_green(dark)),
                     );
+                    if can_recotizar(project) {
+                        ui.add_space(6.0);
+                        ui.label(
+                            RichText::new(
+                                "Si el tipo de cambio estaba mal (por ejemplo USD/BTC en un trato CLP), recotiza.",
+                            )
+                            .small()
+                            .weak(),
+                        );
+                        if ui.button("Recotizar").clicked() {
+                            self.pay_recotizar(slug);
+                        }
+                    }
                 }
                 return;
             }
 
+            let pair = fx_pair_label(signed.body.unit);
             ui.label(
-                RichText::new("Precio BTC: Yadio → CoinGecko → CoinMarketCap, o escríbelo tú.")
-                    .small()
-                    .weak(),
+                RichText::new(format!(
+                    "Precio {pair}: Yadio → CoinGecko → CoinMarketCap, o escríbelo tú."
+                ))
+                .small()
+                .weak(),
             );
             ui.horizontal(|ui| {
                 if ui.button("Consultar precio").clicked() {
-                    self.spawn_fx();
+                    self.spawn_fx(signed.body.unit);
                 }
                 if !self.fx_line.is_empty() {
                     ui.label(RichText::new(&self.fx_line).small());
                 }
             });
-            ui.horizontal(|ui| {
-                ui.label("BTC (manual)");
-                show_field(ui, &mut self.pay.price_major, "ej. 80000", dark, 140.0);
-            });
+            if !signed.body.unit.is_bitcoin_denom() {
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new(format!("{pair} (manual)")).strong());
+                    let hint = match signed.body.unit {
+                        Unit::Clp => "ej. 74492748",
+                        Unit::Usd => "ej. 80000",
+                        _ => "ej. precio de 1 BTC",
+                    };
+                    show_field(ui, &mut self.pay.price_major, hint, dark, 160.0);
+                });
+            }
 
-            if let Some(price) = self.pay_price_minor() {
+            if let Some(price) = self.pay_price_minor(signed.body.unit) {
                 if let Ok((bond, p1)) = preview_quote_sats(signed, Some(price)) {
                     ui.label(
                         RichText::new(format!("Boleta ≈ {bond} sats · partida 1 ≈ {p1} sats"))
@@ -2912,40 +2944,42 @@ impl App {
         });
     }
 
-    fn pay_price_minor(&self) -> Option<u64> {
-        if let Ok(p) = price_minor_from_major(&self.pay.price_major) {
-            if p > 0 {
-                return Some(p);
-            }
+    fn pay_price_minor(&self, contract_unit: Unit) -> Option<u64> {
+        match quote_price_minor(contract_unit, &self.pay.price_major, self.fx.as_ref()) {
+            Ok(p) => p,
+            Err(_) => None,
         }
-        self.fx
-            .as_ref()
-            .map(|q| (q.btc_price_major * 100.0).round() as u64)
     }
 
-    fn pay_fx_note(&self) -> String {
+    fn pay_fx_note(&self, contract_unit: Unit) -> String {
+        let pair = fx_pair_label(contract_unit);
         if !self.pay.price_major.trim().is_empty() {
-            return format!("manual {} / BTC", self.pay.price_major.trim());
+            return format!("manual {} {}", self.pay.price_major.trim(), pair);
         }
         if let Some(q) = &self.fx {
-            return format!("{} {:.2} {}/BTC", q.source, q.btc_price_major, q.unit);
+            if q.unit == contract_unit {
+                return format!("{} {:.2} {}", q.source, q.btc_price_major, pair);
+            }
         }
         String::new()
     }
 
     fn pay_propose_quote(&mut self, slug: &str, id: &Identity, signed: &SignedContract) {
-        let price =
-            if signed.body.unit.is_bitcoin_denom() {
-                None
-            } else {
-                match self.pay_price_minor() {
-                    Some(p) => Some(p),
-                    None => return self.fail(
-                        "Consulta el precio o escribe cuánto vale 1 BTC en la moneda de la obra.",
-                    ),
+        let price = if signed.body.unit.is_bitcoin_denom() {
+            None
+        } else {
+            match quote_price_minor(signed.body.unit, &self.pay.price_major, self.fx.as_ref()) {
+                Ok(Some(p)) => Some(p),
+                Ok(None) => {
+                    return self.fail(format!(
+                        "Consulta el precio o escribe 1 BTC en {}.",
+                        fx_pair_label(signed.body.unit)
+                    ))
                 }
-            };
-        match draft_quote(signed, price, &self.pay_fx_note())
+                Err(e) => return self.fail(e),
+            }
+        };
+        match draft_quote(signed, price, &self.pay_fx_note(signed.body.unit))
             .and_then(|q| sign_our_quote(id, signed, q))
         {
             Ok(q) => {
@@ -2985,6 +3019,30 @@ impl App {
                     }
                 }
                 self.spawn_deliver(NetMessage::Quote { quote: q }, "Cotización enviada.");
+            }
+            Err(e) => self.fail(e),
+        }
+    }
+
+    fn pay_recotizar(&mut self, slug: &str) {
+        let mut project = match self.store.ensure_pay_project(slug) {
+            Ok(p) => p,
+            Err(e) => return self.fail(e),
+        };
+        match recotizar_if_unfunded(&mut project) {
+            Ok(()) => {
+                if let Err(e) = self.store.save_pay_project(slug, &project) {
+                    return self.fail(e);
+                }
+                if let Err(e) = self.store.clear_pay_quote(slug) {
+                    return self.fail(e);
+                }
+                self.pay.reset_funding_handshake();
+                self.pay.price_major.clear();
+                let _ = self.store.save_pay_draft(slug, &self.pay);
+                self.note(
+                    "Cotización borrada. Propón otra con el precio en la moneda de la obra (CLP/BTC, no USD/BTC).",
+                );
             }
             Err(e) => self.fail(e),
         }
@@ -3619,8 +3677,7 @@ impl App {
         true
     }
 
-    fn spawn_fx(&mut self) {
-        let unit = self.unit;
+    fn spawn_fx(&mut self, unit: Unit) {
         if unit.is_bitcoin_denom() {
             self.fx_line = "Esta moneda ya es bitcoin: no hace falta un precio.".into();
             return;
