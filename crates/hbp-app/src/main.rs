@@ -11,12 +11,13 @@ use hbp_app::{
     coop_propose, coop_sign, default_works_root, draft_equal_stages, draft_quote, escrow_addrs,
     export_backup, format_unix_local_es, fund_handshake_step, funding_wire, funding_wire_hex,
     hex_artifact, hex_from_artifact, import_backup, import_signed, lock_quote_if_ready,
-    mandante_commit, next_step, our_funding_need, parse_fee, parse_psbt, partida_ui_enabled,
-    party_role, pay_stage, preview_quote_sats, price_minor_from_major, psbt_to_hex,
-    quote_fully_signed, read_backup_file, sign_our_quote, spanish_now, suggest_watched,
-    validate_deadline_order, write_backup_file, DeadlineFields, FundHandshakeStep, NextKind,
-    PayStage, PayUiDraft, UiPrefs, WorkEntry, WorkProgress, WorkStore, ART_COOP, ART_ONESIG,
-    ART_PARTIAL, ART_PSBT, ART_TX, MONTHS_ES,
+    mandante_commit, next_step, our_funding_need, parse_fee, parse_psbt, parse_psbt_bytes,
+    partida_ui_enabled, party_role, pay_stage, prefer_funding_psbt, preview_quote_sats,
+    price_minor_from_major, psbt_display_text, psbt_file_bytes, psbt_to_hex, quote_fully_signed,
+    read_backup_file, sign_our_quote, spanish_chain_status, spanish_now, suggest_watched,
+    validate_deadline_order, write_backup_file, DeadlineFields, FundHandshakeStep, FundMark,
+    FundView, FundingSendKind, NextKind, PayStage, PayUiDraft, UiPrefs, WorkEntry, WorkProgress,
+    WorkStore, ART_COOP, ART_ONESIG, ART_PARTIAL, ART_PSBT, ART_TX, MONTHS_ES,
 };
 use hbp_bitcoin::{
     address_at, default_esplora_urls, scan_watch, sign_body, CoopFile, Identity, OfferedCoin,
@@ -28,7 +29,7 @@ use hbp_core::{
 };
 use hbp_net::{
     announce_topics, bring_up_tor_with_hint, env_bootstrap_peers, esplora_address_txs,
-    esplora_address_utxos, esplora_try_bases, esplora_tx_hex, find_dual_amount_txid, literal_topic,
+    esplora_address_utxos, esplora_try_bases, esplora_tx_hex, find_dual_amount, literal_topic,
     parse_bootstrap_list, preview_sats, quote_btc, FxQuote, NetMessage, OverlayConfig,
     OverlayHandle, PeerAddr, TorConfig, TorRuntime, WorkAnnounce,
 };
@@ -44,7 +45,7 @@ enum JobEvent {
     QuietDeliver(Result<String, String>),
     FxDone(Result<FxQuote, String>),
     ScanDone(Result<(WatchScan, String), String>),
-    ChainDone(Result<Option<String>, String>),
+    ChainDone(Result<Option<(String, bool, String)>, String>),
 }
 
 fn main() -> eframe::Result<()> {
@@ -123,6 +124,8 @@ struct App {
     pay_chain_line: String,
     last_chain_poll: std::time::Instant,
     chain_busy: bool,
+    funding_in_flight: Option<FundingSendKind>,
+    restart_confirm: bool,
 }
 
 impl App {
@@ -184,6 +187,8 @@ impl App {
             pay_chain_line: String::new(),
             last_chain_poll: std::time::Instant::now(),
             chain_busy: false,
+            funding_in_flight: None,
+            restart_confirm: false,
         }
     }
 
@@ -333,10 +338,12 @@ impl App {
                 }
                 JobEvent::DeliverDone(Ok(msg)) => {
                     self.busy = None;
+                    self.on_funding_deliver(true);
                     self.note(msg);
                 }
                 JobEvent::DeliverDone(Err(e)) => {
                     self.busy = None;
+                    self.on_funding_deliver(false);
                     self.fail(e);
                 }
                 JobEvent::QuietDeliver(Ok(msg)) => {
@@ -388,14 +395,15 @@ impl App {
                     self.busy = None;
                     self.fail(e);
                 }
-                JobEvent::ChainDone(Ok(Some(hex))) => {
+                JobEvent::ChainDone(Ok(Some((txid, confirmed, hex)))) => {
                     self.chain_busy = false;
                     self.pay.funding_tx_hex = hex;
+                    self.pay_chain_line = spanish_chain_status(Some(&txid), Some(confirmed));
                     self.pay_note_chain_found();
                 }
                 JobEvent::ChainDone(Ok(None)) => {
                     self.chain_busy = false;
-                    self.pay_chain_line = "Esperando el fondeo en Signet…".into();
+                    self.pay_chain_line = spanish_chain_status(None, None);
                 }
                 JobEvent::ChainDone(Err(e)) => {
                     self.chain_busy = false;
@@ -825,17 +833,33 @@ impl App {
         }
         if let Some(hex) = funding_wire_hex(&json).or_else(|| hex_from_artifact(&json)) {
             if name.contains("onesig") || (name.contains("signed") && name.contains("psbt")) {
-                self.pay.onesig_hex = hex;
+                self.pay.onesig_hex = prefer_funding_psbt(&self.pay.onesig_hex, &hex);
+                self.pay.onesig_from_peer = true;
+                self.pay.fund_mark.raise(FundMark::OneSigFromPeer);
                 self.pay.awaiting_chain = true;
-                self.pay_chain_line = "Esperando el fondeo en Signet…".into();
+                self.pay.send_failed = false;
+                self.pay.pending_send = None;
+                self.pay_chain_line =
+                    "Firma la segunda en Electrum y difunde. Luego comprueba.".into();
                 self.note(
-                    "Llegó un PSBT con una firma. Ábrelo en Electrum / Sparrow, firma y difunde.",
+                    "Llegó un PSBT con una firma. Expórtalo, fírmalo en Electrum y difunde ahí.",
                 );
             } else if name.contains("partial") {
-                self.pay.unsigned_psbt_hex = hex;
-                self.note("Llegó un PSBT parcial. Completa con tu moneda en Pago.");
+                let next = prefer_funding_psbt(&self.pay.unsigned_psbt_hex, &hex);
+                if next != self.pay.unsigned_psbt_hex {
+                    self.pay.unsigned_psbt_hex = next;
+                    if classify_funding_psbt(&self.pay.unsigned_psbt_hex)
+                        .map(|c| c.0)
+                        .unwrap_or(0)
+                        < 2
+                    {
+                        self.pay.fund_mark.raise(FundMark::PartialReady);
+                        self.note("Llegó un PSBT parcial. Completa con tu moneda en Pago.");
+                    }
+                }
             } else if name.contains("unsigned") || name.contains("psbt") {
-                self.pay.unsigned_psbt_hex = hex;
+                self.pay.unsigned_psbt_hex = prefer_funding_psbt(&self.pay.unsigned_psbt_hex, &hex);
+                self.pay.fund_mark.raise(FundMark::CompleteReady);
                 self.note("Llegó el PSBT completo. Expórtalo a Electrum / Sparrow para firmar.");
             } else {
                 self.pay.funding_tx_hex = hex;
@@ -2081,22 +2105,23 @@ impl App {
             .map(|c| c.1)
             .unwrap_or(0)
             .max(onesig_class.map(|c| c.1).unwrap_or(0));
-        let step = fund_handshake_step(
+        let step = fund_handshake_step(&FundView {
             has_watch,
-            self.watch_scan.is_some(),
-            our_coin.is_some(),
-            class.map(|c| c.0),
+            has_scan: self.watch_scan.is_some(),
+            has_our_coin: our_coin.is_some(),
+            inputs: class.map(|c| c.0),
             sigs,
-            we_own,
-            self.pay.awaiting_chain,
-        );
+            we_own_partial_input: we_own,
+            mark: self.pay.fund_mark,
+            send_failed: self.pay.send_failed,
+            pending_send: self.pay.pending_send,
+            onesig_from_peer: self.pay.onesig_from_peer,
+        });
         let show_coins = matches!(
             step,
-            FundHandshakeStep::ScanCoins
-                | FundHandshakeStep::PickCoin
-                | FundHandshakeStep::SendPartial
-                | FundHandshakeStep::CompleteIncoming
+            FundHandshakeStep::ScanCoins | FundHandshakeStep::PickCoin
         );
+        let fee_locked = self.pay.fund_mark >= FundMark::PartialReady;
 
         panel_card(ui, dark, |ui| {
             ui.label(RichText::new("Fondeo — boleta + partida 1").strong());
@@ -2122,8 +2147,12 @@ impl App {
             }
             ui.horizontal(|ui| {
                 ui.label("Comisión");
-                show_field(ui, &mut self.pay.fee_sats, "500", dark, 80.0);
-                ui.label(RichText::new("sats (sale del cambio)").small().weak());
+                if fee_locked {
+                    ui.label(RichText::new(format!("{} sats", self.pay.fee_sats)).small());
+                } else {
+                    show_field(ui, &mut self.pay.fee_sats, "500", dark, 80.0);
+                    ui.label(RichText::new("sats (sale del cambio)").small().weak());
+                }
                 if let Some(n) = need {
                     ui.label(RichText::new(format!("Tu parte ≈ {n} sats")).small());
                 }
@@ -2135,7 +2164,7 @@ impl App {
                 ui.label(
                     RichText::new(format!("Usando {} · {} sats", c.outpoint, c.sats))
                         .small()
-                        .weak(),
+                        .color(accent_green(dark)),
                 );
             }
 
@@ -2177,27 +2206,47 @@ impl App {
                         self.pay_complete_partial(slug, role, project);
                     }
                 }
+                FundHandshakeStep::RetrySend => {
+                    ui.label(
+                        RichText::new(
+                            "No llegó (¿el otro está desconectado?). El PSBT sigue aquí.",
+                        )
+                        .color(accent_amber(dark)),
+                    );
+                    if primary_btn(ui, "Reenviar", dark).clicked() {
+                        self.pay_resend_funding(slug, role, fee);
+                    }
+                }
                 FundHandshakeStep::ExportAndSign => {
                     ui.label(
-                        "PSBT completo (2 inputs). Cópialo, fírmalo en Electrum / Sparrow, pega el de 1 firma.",
+                        "PSBT completo (sin firmar). Expórtalo y fírmalo en Electrum / Sparrow.",
                     );
-                    ui.label(RichText::new("Para exportar — no difundir todavía").small());
-                    show_multiline(
+                    self.show_psbt_share(
                         ui,
-                        &mut self.pay.unsigned_psbt_hex,
-                        "PSBT…",
-                        dark,
-                        ui.available_width().min(720.0),
-                        3,
+                        slug,
+                        "funding-unsigned.psbt",
+                        &self.pay.unsigned_psbt_hex.clone(),
+                        false,
                     );
-                    ui.label(RichText::new("Pega el PSBT con TU firma").small());
-                    show_multiline(
+                    if primary_btn(ui, "Exportar archivo", dark).clicked() {
+                        self.pay_export_psbt(
+                            slug,
+                            "funding-unsigned.psbt",
+                            &self.pay.unsigned_psbt_hex.clone(),
+                        );
+                    }
+                    ui.add_space(6.0);
+                    ui.label("Luego importa el PSBT con 1 firma (archivo o texto).");
+                    self.show_onesig_import(ui, slug);
+                }
+                FundHandshakeStep::SendOneSig => {
+                    ui.label("PSBT con tu firma. Mándalo al otro. No difundas todavía.");
+                    self.show_psbt_share(
                         ui,
-                        &mut self.pay.onesig_hex,
-                        "PSBT firmado…",
-                        dark,
-                        ui.available_width().min(720.0),
-                        2,
+                        slug,
+                        "funding-1sig.psbt",
+                        &self.pay.onesig_hex.clone(),
+                        true,
                     );
                     if primary_btn(ui, "Enviar PSBT de 1 firma", dark).clicked() {
                         self.pay_send_onesig(slug, role, fee);
@@ -2206,19 +2255,18 @@ impl App {
                 FundHandshakeStep::WaitChain => {
                     ui.label(
                         RichText::new(
-                            "Firma y difusión en Electrum / Sparrow. La app mira Signet sola.",
+                            "Firma la segunda en Electrum, difunde ahí, luego comprueba.",
                         )
                         .color(accent_amber(dark)),
                     );
                     if !self.pay.onesig_hex.is_empty() {
                         ui.label(RichText::new("PSBT de 1 firma (para Electrum)").small());
-                        show_multiline(
+                        self.show_psbt_share(
                             ui,
-                            &mut self.pay.onesig_hex,
-                            "PSBT…",
-                            dark,
-                            ui.available_width().min(720.0),
-                            2,
+                            slug,
+                            "funding-1sig.psbt",
+                            &self.pay.onesig_hex.clone(),
+                            true,
                         );
                     }
                     if !self.pay_chain_line.is_empty() {
@@ -2230,7 +2278,7 @@ impl App {
                             ui.label("Consultando Signet…");
                         });
                     }
-                    if primary_btn(ui, "Buscar fondeo ahora", dark).clicked() {
+                    if primary_btn(ui, "Comprobar transacción", dark).clicked() {
                         self.pay_poll_chain(slug, true);
                     }
                     ui.collapsing("Avanzado: pegar tx hex (rescate)", |ui| {
@@ -2247,6 +2295,30 @@ impl App {
                         }
                     });
                 }
+            }
+
+            if self.pay.fund_mark >= FundMark::PartialReady {
+                ui.add_space(8.0);
+                ui.collapsing("Avanzado: empezar de nuevo", |ui| {
+                    ui.label("Borra este PSBT. La moneda elegida se queda.");
+                    if !self.restart_confirm {
+                        if ui.button("Empezar de nuevo").clicked() {
+                            self.restart_confirm = true;
+                        }
+                    } else {
+                        ui.label(
+                            RichText::new("¿Seguro? Se pierde el PSBT actual.").color(theme_red()),
+                        );
+                        ui.horizontal(|ui| {
+                            if ui.button("Sí, borrar el PSBT").clicked() {
+                                self.pay_restart_handshake(slug);
+                            }
+                            if ui.small_button("Cancelar").clicked() {
+                                self.restart_confirm = false;
+                            }
+                        });
+                    }
+                });
             }
         });
     }
@@ -2315,6 +2387,74 @@ impl App {
         }
     }
 
+    fn show_psbt_share(
+        &mut self,
+        ui: &mut egui::Ui,
+        slug: &str,
+        filename: &str,
+        hex: &str,
+        offer_export: bool,
+    ) {
+        let dark = self.prefs.dark;
+        ui.horizontal(|ui| {
+            if offer_export && ui.button("Exportar archivo").clicked() {
+                self.pay_export_psbt(slug, filename, hex);
+            }
+            if ui.button("Copiar texto").clicked() {
+                match psbt_display_text(hex) {
+                    Ok(text) => {
+                        ui.output_mut(|o| o.copied_text = text);
+                        self.note("PSBT copiado (base64). Pégalo en Electrum / Sparrow.");
+                    }
+                    Err(e) => self.fail(e),
+                }
+            }
+            let label = if self.pay.show_psbt_text {
+                "Ocultar texto"
+            } else {
+                "Ver texto"
+            };
+            if ui.small_button(label).clicked() {
+                self.pay.show_psbt_text = !self.pay.show_psbt_text;
+            }
+        });
+        if self.pay.show_psbt_text {
+            let text = psbt_display_text(hex).unwrap_or_else(|_| hex.to_string());
+            let mut view = text;
+            show_multiline(
+                ui,
+                &mut view,
+                "PSBT…",
+                dark,
+                ui.available_width().min(720.0),
+                3,
+            );
+        }
+    }
+
+    fn show_onesig_import(&mut self, ui: &mut egui::Ui, slug: &str) {
+        let dark = self.prefs.dark;
+        ui.horizontal(|ui| {
+            if ui.button("Importar archivo").clicked() {
+                self.pay_import_onesig_file(slug);
+            }
+        });
+        ui.label(RichText::new("O pega el texto (base64 / hex)").small());
+        show_multiline(
+            ui,
+            &mut self.pay.onesig_hex,
+            "PSBT firmado…",
+            dark,
+            ui.available_width().min(720.0),
+            2,
+        );
+        if !self.pay.onesig_hex.trim().is_empty() {
+            if ui.small_button("Usar este texto").clicked() {
+                self.pay_take_onesig(slug, self.pay.onesig_hex.clone(), false);
+            }
+        }
+    }
+
     fn our_saved_coin(&self, slug: &str, role: Role) -> Option<OfferedCoin> {
         let coins = self.store.load_pay_coins(slug).ok()?;
         match role {
@@ -2343,6 +2483,7 @@ impl App {
                     return self.fail(e);
                 }
                 self.pay.selected_outpoint = utxo.outpoint.clone();
+                self.pay.fund_mark.raise(FundMark::CoinPicked);
                 let _ = self.store.save_pay_draft(slug, &self.pay);
                 self.note(format!("Elegí {} ({} sats).", utxo.outpoint, utxo.sats));
             }
@@ -2405,9 +2546,12 @@ impl App {
         match build_our_partial(project, role, &coin, fee) {
             Ok(psbt) => {
                 self.pay.unsigned_psbt_hex = psbt_to_hex(&psbt);
+                self.pay.fund_mark.raise(FundMark::PartialReady);
                 let _ = self.store.save_pay_draft(slug, &self.pay);
                 self.note("Parcial armado. Lo mando; el otro añade su moneda.");
-                self.spawn_deliver(
+                self.pay_deliver_funding(
+                    slug,
+                    FundingSendKind::Partial,
                     NetMessage::Artifact {
                         name: ART_PARTIAL.into(),
                         json: funding_wire(&self.pay.unsigned_psbt_hex, role, fee),
@@ -2430,9 +2574,12 @@ impl App {
         match complete_incoming_partial(project, role, &coin, fee, &self.pay.unsigned_psbt_hex) {
             Ok(psbt) => {
                 self.pay.unsigned_psbt_hex = psbt_to_hex(&psbt);
+                self.pay.fund_mark.raise(FundMark::CompleteReady);
                 let _ = self.store.save_pay_draft(slug, &self.pay);
                 self.note("PSBT completo (2 inputs). Lo devuelvo. Ahora se firma fuera.");
-                self.spawn_deliver(
+                self.pay_deliver_funding(
+                    slug,
+                    FundingSendKind::Complete,
                     NetMessage::Artifact {
                         name: ART_PSBT.into(),
                         json: funding_wire(&self.pay.unsigned_psbt_hex, role, fee),
@@ -2447,26 +2594,176 @@ impl App {
     fn pay_send_onesig(&mut self, slug: &str, role: Role, fee: u64) {
         let hex = self.pay.onesig_hex.trim().to_string();
         if hex.is_empty() {
-            return self.fail("Pega el PSBT que firmaste en Electrum / Sparrow.");
+            return self.fail("Importa el PSBT que firmaste en Electrum / Sparrow.");
         }
         match classify_funding_psbt(&hex) {
             Ok((_, sigs)) if sigs >= 1 => {}
             Ok(_) => {
-                return self.fail("Ese PSBT no tiene firma. Fírmalo fuera y pégalo de nuevo.");
+                return self.fail("Ese PSBT no tiene firma. Fírmalo fuera e impórtalo de nuevo.");
             }
             Err(e) => return self.fail(e),
         }
         self.pay.onesig_hex = hex.clone();
-        self.pay.awaiting_chain = true;
+        self.pay.fund_mark.raise(FundMark::OneSigReady);
         let _ = self.store.save_pay_draft(slug, &self.pay);
-        self.spawn_deliver(
+        self.pay_deliver_funding(
+            slug,
+            FundingSendKind::OneSig,
             NetMessage::Artifact {
                 name: ART_ONESIG.into(),
                 json: funding_wire(&hex, role, fee),
             },
             "PSBT de 1 firma enviado. El otro firma y difunde en Electrum.",
         );
-        self.pay_chain_line = "Esperando el fondeo en Signet…".into();
+    }
+
+    fn pay_resend_funding(&mut self, slug: &str, role: Role, fee: u64) {
+        let Some(kind) = self.pay.pending_send else {
+            return self.fail("No hay nada pendiente de reenviar.");
+        };
+        let (name, hex, ok) = match kind {
+            FundingSendKind::Partial => (
+                ART_PARTIAL,
+                self.pay.unsigned_psbt_hex.clone(),
+                "PSBT parcial reenviado.",
+            ),
+            FundingSendKind::Complete => (
+                ART_PSBT,
+                self.pay.unsigned_psbt_hex.clone(),
+                "PSBT completo reenviado.",
+            ),
+            FundingSendKind::OneSig => (
+                ART_ONESIG,
+                self.pay.onesig_hex.clone(),
+                "PSBT de 1 firma reenviado.",
+            ),
+        };
+        if hex.trim().is_empty() {
+            return self.fail("El PSBT local está vacío. No se puede reenviar.");
+        }
+        self.pay_deliver_funding(
+            slug,
+            kind,
+            NetMessage::Artifact {
+                name: name.into(),
+                json: funding_wire(&hex, role, fee),
+            },
+            ok,
+        );
+    }
+
+    fn pay_deliver_funding(
+        &mut self,
+        slug: &str,
+        kind: FundingSendKind,
+        msg: NetMessage,
+        ok_note: &str,
+    ) {
+        self.funding_in_flight = Some(kind);
+        self.pay.pending_send = Some(kind);
+        self.pay.send_failed = false;
+        let _ = self.store.save_pay_draft(slug, &self.pay);
+        if !self.spawn_deliver(msg, ok_note) {
+            self.funding_in_flight = None;
+            self.pay.send_failed = true;
+            let _ = self.store.save_pay_draft(slug, &self.pay);
+        }
+    }
+
+    fn on_funding_deliver(&mut self, ok: bool) {
+        let Some(kind) = self.funding_in_flight.take() else {
+            return;
+        };
+        let Some(slug) = self.selected.clone() else {
+            return;
+        };
+        if ok {
+            self.pay.send_failed = false;
+            self.pay.pending_send = None;
+            match kind {
+                FundingSendKind::Partial => self.pay.fund_mark.raise(FundMark::PartialSent),
+                FundingSendKind::Complete => self.pay.fund_mark.raise(FundMark::CompleteSent),
+                FundingSendKind::OneSig => {
+                    self.pay.fund_mark.raise(FundMark::OneSigSent);
+                    self.pay.awaiting_chain = true;
+                    self.pay_chain_line = spanish_chain_status(None, None);
+                }
+            }
+        } else {
+            self.pay.send_failed = true;
+            self.pay.pending_send = Some(kind);
+        }
+        let _ = self.store.save_pay_draft(&slug, &self.pay);
+    }
+
+    fn pay_export_psbt(&mut self, slug: &str, filename: &str, hex: &str) {
+        let bytes = match psbt_file_bytes(hex) {
+            Ok(b) => b,
+            Err(e) => return self.fail(e),
+        };
+        let fallback = self.store.pay_dir(slug).join(filename);
+        if let Err(e) = std::fs::create_dir_all(self.store.pay_dir(slug)) {
+            return self.fail(e);
+        }
+        if let Err(e) = std::fs::write(&fallback, &bytes) {
+            return self.fail(e);
+        }
+        if let Some(path) = rfd::FileDialog::new()
+            .add_filter("PSBT", &["psbt"])
+            .set_file_name(filename)
+            .save_file()
+        {
+            match std::fs::write(&path, &bytes) {
+                Ok(()) => self.note(format!("PSBT exportado a {}", path.display())),
+                Err(e) => self.fail(e),
+            }
+        } else {
+            self.note(format!("PSBT guardado en {}", fallback.display()));
+        }
+    }
+
+    fn pay_import_onesig_file(&mut self, slug: &str) {
+        let Some(path) = rfd::FileDialog::new()
+            .add_filter("PSBT", &["psbt", "txt"])
+            .pick_file()
+        else {
+            return;
+        };
+        match std::fs::read(&path) {
+            Ok(bytes) => match parse_psbt_bytes(&bytes) {
+                Ok(psbt) => self.pay_take_onesig(slug, psbt_to_hex(&psbt), false),
+                Err(e) => self.fail(e),
+            },
+            Err(e) => self.fail(e),
+        }
+    }
+
+    fn pay_take_onesig(&mut self, slug: &str, raw: String, from_peer: bool) {
+        match classify_funding_psbt(&raw) {
+            Ok((_, sigs)) if sigs >= 1 => {}
+            Ok(_) => {
+                return self.fail("Ese PSBT no tiene firma. Fírmalo en Electrum e impórtalo.");
+            }
+            Err(e) => return self.fail(e),
+        }
+        self.pay.onesig_hex = raw;
+        if from_peer {
+            self.pay.onesig_from_peer = true;
+            self.pay.fund_mark.raise(FundMark::OneSigFromPeer);
+            self.pay.awaiting_chain = true;
+        } else {
+            self.pay.fund_mark.raise(FundMark::OneSigReady);
+        }
+        let _ = self.store.save_pay_draft(slug, &self.pay);
+        self.note("PSBT de 1 firma listo.");
+    }
+
+    fn pay_restart_handshake(&mut self, slug: &str) {
+        self.pay.reset_funding_handshake();
+        self.restart_confirm = false;
+        self.pay_chain_line.clear();
+        let _ = self.store.save_pay_draft(slug, &self.pay);
+        self.note("PSBT borrado. Puedes armar uno nuevo.");
     }
 
     fn maybe_poll_funding_chain(&mut self) {
@@ -2525,11 +2822,13 @@ impl App {
                 let base = esplora_try_bases(&refs, socks).map_err(|e| e.to_string())?;
                 let txs =
                     esplora_address_txs(&base, socks, &bond_addr).map_err(|e| e.to_string())?;
-                let Some(txid) = find_dual_amount_txid(&txs, bond_sats, p1_sats) else {
+                let Some(hit) = find_dual_amount(&txs, bond_sats, p1_sats) else {
                     return Ok(None);
                 };
-                let hex = esplora_tx_hex(&base, socks, txid).map_err(|e| e.to_string())?;
-                Ok(Some(hex))
+                let txid = hit.txid.clone();
+                let confirmed = hit.confirmed;
+                let hex = esplora_tx_hex(&base, socks, &txid).map_err(|e| e.to_string())?;
+                Ok(Some((txid, confirmed, hex)))
             })();
             let _ = tx.send(JobEvent::ChainDone(r));
         });
@@ -3287,28 +3586,37 @@ impl App {
         self.spawn_deliver(NetMessage::Offer { offer }, "Propuesta enviada.");
     }
 
-    fn spawn_deliver(&mut self, msg: NetMessage, ok_note: &str) {
+    fn spawn_deliver(&mut self, msg: NetMessage, ok_note: &str) -> bool {
+        if self.busy.is_some() {
+            self.fail("Espera a que termine el envío anterior.");
+            return false;
+        }
         let Some(o) = self.overlay.clone() else {
-            return self.fail("Primero pulsa Conectarme");
+            self.fail("No estás conectado. Pulsa Conectarme y luego Reenviar.");
+            return false;
         };
         let dest_raw = if !self.peer_onion.trim().is_empty() {
             self.peer_onion.clone()
         } else {
-            return self
-                .fail("Todavía no encuentro a la otra persona. Busca la obra o pega el código.");
+            self.fail("Todavía no encuentro a la otra persona. Conéctate y pulsa Reenviar.");
+            return false;
         };
         let dest = match PeerAddr::parse_flexible(&dest_raw) {
             Ok(p) => p,
-            Err(_) => return self.fail("El código de la otra persona no se entiende"),
+            Err(_) => {
+                self.fail("El código de la otra persona no se entiende");
+                return false;
+            }
         };
         let note = ok_note.to_string();
         self.start_job("enviando", move |tx| {
             let r = o
                 .deliver(&dest, &msg)
                 .map(|_| note)
-                .map_err(|e| format!("No pude enviar ({e})"));
+                .map_err(|e| format!("No pude enviar ({e}). El PSBT sigue aquí: pulsa Reenviar."));
             let _ = tx.send(JobEvent::DeliverDone(r));
         });
+        true
     }
 
     fn spawn_fx(&mut self) {

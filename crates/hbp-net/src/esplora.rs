@@ -123,15 +123,20 @@ pub fn esplora_tx_hex(base: &str, socks: Option<SocketAddr>, txid: &str) -> crat
 }
 
 /// First tx that pays both quoted escrow amounts (boleta + partida).
-pub fn find_dual_amount_txid(txs: &[EsploraTx], bond_sats: u64, partida_sats: u64) -> Option<&str> {
-    for t in txs {
+pub fn find_dual_amount<'a>(
+    txs: &'a [EsploraTx],
+    bond_sats: u64,
+    partida_sats: u64,
+) -> Option<&'a EsploraTx> {
+    txs.iter().find(|t| {
         let has_bond = t.vout.iter().any(|o| o.value == bond_sats);
         let has_p1 = t.vout.iter().any(|o| o.value == partida_sats);
-        if has_bond && has_p1 {
-            return Some(t.txid.as_str());
-        }
-    }
-    None
+        has_bond && has_p1
+    })
+}
+
+pub fn find_dual_amount_txid(txs: &[EsploraTx], bond_sats: u64, partida_sats: u64) -> Option<&str> {
+    find_dual_amount(txs, bond_sats, partida_sats).map(|t| t.txid.as_str())
 }
 
 #[cfg(test)]

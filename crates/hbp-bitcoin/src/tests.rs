@@ -763,6 +763,8 @@ fn partial_then_complete_funding_psbt_balances() {
         .map(|o| o.value.to_sat())
         .sum();
     assert_eq!(ins - outs, 200);
+    let bytes = partial.serialize();
+    bitcoin::psbt::Psbt::deserialize(&bytes).expect("complete PSBT must round-trip");
     let _ = (s1, s2);
 }
 

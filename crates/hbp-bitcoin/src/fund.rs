@@ -347,6 +347,18 @@ pub fn complete_partial_funding_psbt(
         ));
     }
     let need = funding_share(bond.1, partida.1, fee, role)?;
+    if coin.sats < need {
+        return Err(Error::msg(format!(
+            "input {} < need {need} (share + fee)",
+            coin.sats
+        )));
+    }
+    let leftover = coin.sats - need;
+    if leftover > 0 && leftover < DUST {
+        return Err(Error::msg(
+            "change would be dust; pick a larger coin or a higher fee",
+        ));
+    }
     psbt.unsigned_tx.input.push(TxIn {
         previous_output: coin.outpoint,
         script_sig: ScriptBuf::new(),
@@ -360,22 +372,12 @@ pub fn complete_partial_funding_psbt(
         }),
         ..Default::default()
     });
-    if coin.sats < need {
-        return Err(Error::msg(format!(
-            "input {} < need {need} (share + fee)",
-            coin.sats
-        )));
-    }
-    let leftover = coin.sats - need;
     if leftover >= DUST {
         psbt.unsigned_tx.output.push(TxOut {
             value: Amount::from_sat(leftover),
             script_pubkey: change.script_pubkey(),
         });
-    } else if leftover != 0 {
-        return Err(Error::msg(
-            "change would be dust; pick a larger coin or a higher fee",
-        ));
+        psbt.outputs.push(bitcoin::psbt::Output::default());
     }
     Ok(())
 }

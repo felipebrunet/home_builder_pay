@@ -55,7 +55,9 @@ pub enum FundHandshakeStep {
     SendPartial,
     WaitPeerComplete,
     CompleteIncoming,
+    RetrySend,
     ExportAndSign,
+    SendOneSig,
     WaitChain,
 }
 
@@ -68,36 +70,153 @@ impl FundHandshakeStep {
             Self::SendPartial => "Armar / enviar parcial",
             Self::WaitPeerComplete => "Esperar / completar",
             Self::CompleteIncoming => "Esperar / completar",
+            Self::RetrySend => "Reenviar",
             Self::ExportAndSign => "Firmar",
+            Self::SendOneSig => "Enviar 1 firma",
             Self::WaitChain => "Esperando en cadena",
         }
     }
 }
 
-/// Decide the single funding step from local watch / PSBT / chain flags.
-pub fn fund_handshake_step(
-    has_watch: bool,
-    has_scan: bool,
-    has_our_coin: bool,
-    inputs: Option<usize>,
-    sigs: usize,
-    we_own_partial_input: bool,
-    awaiting_chain: bool,
-) -> FundHandshakeStep {
-    if !has_watch {
-        return FundHandshakeStep::NeedWatch;
+/// Forward-only progress. Never walk this backwards except "Empezar de nuevo".
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum FundMark {
+    #[default]
+    Start,
+    CoinPicked,
+    PartialReady,
+    PartialSent,
+    CompleteReady,
+    CompleteSent,
+    OneSigReady,
+    OneSigSent,
+    OneSigFromPeer,
+}
+
+impl FundMark {
+    pub fn raise(&mut self, to: Self) {
+        if to > *self {
+            *self = to;
+        }
     }
-    if awaiting_chain || sigs >= 1 {
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FundingSendKind {
+    Partial,
+    Complete,
+    OneSig,
+}
+
+#[derive(Debug, Clone)]
+pub struct FundView {
+    pub has_watch: bool,
+    pub has_scan: bool,
+    pub has_our_coin: bool,
+    pub inputs: Option<usize>,
+    pub sigs: usize,
+    pub we_own_partial_input: bool,
+    pub mark: FundMark,
+    pub send_failed: bool,
+    pub pending_send: Option<FundingSendKind>,
+    pub onesig_from_peer: bool,
+}
+
+/// Decide the single funding step. A later mark wins over stale UI flags.
+pub fn fund_handshake_step(v: &FundView) -> FundHandshakeStep {
+    if v.send_failed && v.pending_send.is_some() {
+        return FundHandshakeStep::RetrySend;
+    }
+    if v.onesig_from_peer || v.mark >= FundMark::OneSigSent || v.awaiting_like() {
         return FundHandshakeStep::WaitChain;
     }
+    if v.sigs >= 1 || v.mark == FundMark::OneSigReady {
+        return FundHandshakeStep::SendOneSig;
+    }
+    let inputs = effective_inputs(v);
+    if inputs.unwrap_or(0) >= 2 || v.mark >= FundMark::CompleteReady {
+        return FundHandshakeStep::ExportAndSign;
+    }
+    if !v.has_watch && v.mark <= FundMark::CoinPicked && inputs.is_none() {
+        return FundHandshakeStep::NeedWatch;
+    }
     match inputs {
-        Some(n) if n >= 2 => FundHandshakeStep::ExportAndSign,
-        Some(1) if we_own_partial_input => FundHandshakeStep::WaitPeerComplete,
-        Some(1) if has_our_coin => FundHandshakeStep::CompleteIncoming,
+        Some(1) if v.we_own_partial_input || v.mark >= FundMark::PartialSent => {
+            FundHandshakeStep::WaitPeerComplete
+        }
+        Some(1) if v.has_our_coin => FundHandshakeStep::CompleteIncoming,
         Some(1) => FundHandshakeStep::PickCoin,
-        _ if has_our_coin => FundHandshakeStep::SendPartial,
-        _ if has_scan => FundHandshakeStep::PickCoin,
+        _ if v.has_our_coin => FundHandshakeStep::SendPartial,
+        _ if v.has_scan => FundHandshakeStep::PickCoin,
         _ => FundHandshakeStep::ScanCoins,
+    }
+}
+
+impl FundView {
+    fn awaiting_like(&self) -> bool {
+        self.mark >= FundMark::OneSigSent || self.onesig_from_peer
+    }
+}
+
+fn effective_inputs(v: &FundView) -> Option<usize> {
+    match v.mark {
+        FundMark::CompleteReady
+        | FundMark::CompleteSent
+        | FundMark::OneSigReady
+        | FundMark::OneSigSent
+        | FundMark::OneSigFromPeer => Some(v.inputs.unwrap_or(2).max(2)),
+        FundMark::PartialReady | FundMark::PartialSent => Some(v.inputs.unwrap_or(1).max(1)),
+        _ => v.inputs,
+    }
+}
+
+/// Keep the more advanced PSBT (more sigs, then more inputs). Never downgrade.
+pub fn prefer_funding_psbt(current: &str, incoming: &str) -> String {
+    let inc = incoming.trim();
+    if inc.is_empty() {
+        return current.to_string();
+    }
+    let cur = current.trim();
+    if cur.is_empty() {
+        return inc.to_string();
+    }
+    let a = classify_funding_psbt(cur).unwrap_or((0, 0));
+    let b = classify_funding_psbt(inc).unwrap_or((0, 0));
+    if (b.1, b.0) > (a.1, a.0) {
+        inc.to_string()
+    } else {
+        cur.to_string()
+    }
+}
+
+pub fn psbt_to_base64(psbt: &Psbt) -> String {
+    STANDARD.encode(psbt.serialize())
+}
+
+pub fn psbt_display_text(raw: &str) -> Result<String> {
+    Ok(psbt_to_base64(&parse_psbt(raw)?))
+}
+
+pub fn psbt_file_bytes(raw: &str) -> Result<Vec<u8>> {
+    Ok(parse_psbt(raw)?.serialize())
+}
+
+pub fn parse_psbt_bytes(bytes: &[u8]) -> Result<Psbt> {
+    if let Ok(p) = Psbt::deserialize(bytes) {
+        return Ok(p);
+    }
+    let text = std::str::from_utf8(bytes).context("PSBT archivo (binario, hex o base64)")?;
+    parse_psbt(text)
+}
+
+pub fn spanish_chain_status(txid: Option<&str>, confirmed: Option<bool>) -> String {
+    match (txid, confirmed) {
+        (Some(id), Some(true)) => format!("Confirmada en Signet. txid {id}"),
+        (Some(id), Some(false)) => format!("Vista en mempool (sin confirmar). txid {id}"),
+        (Some(id), None) => format!("Vista en Signet. txid {id}"),
+        _ => "Aún no aparece en Signet.".into(),
     }
 }
 
@@ -141,6 +260,16 @@ pub struct PayUiDraft {
     pub onesig_hex: String,
     #[serde(default)]
     pub awaiting_chain: bool,
+    #[serde(default)]
+    pub send_failed: bool,
+    #[serde(default)]
+    pub pending_send: Option<FundingSendKind>,
+    #[serde(default)]
+    pub fund_mark: FundMark,
+    #[serde(default)]
+    pub onesig_from_peer: bool,
+    #[serde(default)]
+    pub show_psbt_text: bool,
 }
 
 fn default_fee() -> String {
@@ -169,7 +298,26 @@ impl Default for PayUiDraft {
             selected_outpoint: String::new(),
             onesig_hex: String::new(),
             awaiting_chain: false,
+            send_failed: false,
+            pending_send: None,
+            fund_mark: FundMark::Start,
+            onesig_from_peer: false,
+            show_psbt_text: false,
         }
+    }
+}
+
+impl PayUiDraft {
+    pub fn reset_funding_handshake(&mut self) {
+        self.unsigned_psbt_hex.clear();
+        self.onesig_hex.clear();
+        self.funding_tx_hex.clear();
+        self.awaiting_chain = false;
+        self.send_failed = false;
+        self.pending_send = None;
+        self.fund_mark = FundMark::Start;
+        self.onesig_from_peer = false;
+        self.show_psbt_text = false;
     }
 }
 
@@ -505,10 +653,9 @@ pub fn parse_psbt(raw: &str) -> Result<Psbt> {
     if s.is_empty() {
         bail!("pega el PSBT (hex o base64)");
     }
-    if let Ok(bytes) = hex::decode(s) {
-        if let Ok(psbt) = Psbt::deserialize(&bytes) {
-            return Ok(psbt);
-        }
+    if s.chars().all(|c| c.is_ascii_hexdigit()) && s.len() % 2 == 0 {
+        let bytes = hex::decode(s).context("PSBT hex")?;
+        return Psbt::deserialize(&bytes).context("PSBT");
     }
     let bytes = STANDARD.decode(s).context("PSBT hex o base64")?;
     Psbt::deserialize(&bytes).context("PSBT")
@@ -1190,44 +1337,240 @@ mod tests {
         assert!(!partida_ui_enabled(&project, 2));
     }
 
+    fn view(
+        has_watch: bool,
+        has_scan: bool,
+        has_our_coin: bool,
+        inputs: Option<usize>,
+        sigs: usize,
+        we_own: bool,
+        mark: FundMark,
+        send_failed: bool,
+        pending: Option<FundingSendKind>,
+        from_peer: bool,
+    ) -> FundView {
+        FundView {
+            has_watch,
+            has_scan,
+            has_our_coin,
+            inputs,
+            sigs,
+            we_own_partial_input: we_own,
+            mark,
+            send_failed,
+            pending_send: pending,
+            onesig_from_peer: from_peer,
+        }
+    }
+
     #[test]
     fn fund_handshake_steps_are_sequential() {
         use FundHandshakeStep::*;
+        use FundMark::*;
         assert_eq!(
-            fund_handshake_step(false, false, false, None, 0, false, false),
+            fund_handshake_step(&view(
+                false, false, false, None, 0, false, Start, false, None, false
+            )),
             NeedWatch
         );
         assert_eq!(
-            fund_handshake_step(true, false, false, None, 0, false, false),
+            fund_handshake_step(&view(
+                true, false, false, None, 0, false, Start, false, None, false
+            )),
             ScanCoins
         );
         assert_eq!(
-            fund_handshake_step(true, true, false, None, 0, false, false),
+            fund_handshake_step(&view(
+                true, true, false, None, 0, false, Start, false, None, false
+            )),
             PickCoin
         );
         assert_eq!(
-            fund_handshake_step(true, true, true, None, 0, false, false),
+            fund_handshake_step(&view(
+                true, true, true, None, 0, false, CoinPicked, false, None, false
+            )),
             SendPartial
         );
         assert_eq!(
-            fund_handshake_step(true, true, true, Some(1), 0, true, false),
+            fund_handshake_step(&view(
+                true,
+                true,
+                true,
+                Some(1),
+                0,
+                true,
+                PartialSent,
+                false,
+                None,
+                false
+            )),
             WaitPeerComplete
         );
         assert_eq!(
-            fund_handshake_step(true, true, true, Some(1), 0, false, false),
+            fund_handshake_step(&view(
+                true,
+                true,
+                true,
+                Some(1),
+                0,
+                false,
+                PartialReady,
+                false,
+                None,
+                false
+            )),
             CompleteIncoming
         );
         assert_eq!(
-            fund_handshake_step(true, true, true, Some(2), 0, false, false),
+            fund_handshake_step(&view(
+                true,
+                true,
+                true,
+                Some(2),
+                0,
+                false,
+                CompleteReady,
+                false,
+                None,
+                false
+            )),
             ExportAndSign
         );
         assert_eq!(
-            fund_handshake_step(true, true, true, Some(2), 1, false, false),
+            fund_handshake_step(&view(
+                true,
+                true,
+                true,
+                Some(2),
+                1,
+                false,
+                OneSigReady,
+                false,
+                None,
+                false
+            )),
+            SendOneSig
+        );
+        assert_eq!(
+            fund_handshake_step(&view(
+                true,
+                true,
+                true,
+                Some(2),
+                1,
+                false,
+                OneSigSent,
+                false,
+                None,
+                false
+            )),
             WaitChain
         );
         assert_eq!(
-            fund_handshake_step(true, true, true, Some(2), 0, false, true),
+            fund_handshake_step(&view(
+                true,
+                true,
+                true,
+                Some(2),
+                1,
+                false,
+                CompleteReady,
+                false,
+                None,
+                true
+            )),
             WaitChain
         );
+    }
+
+    #[test]
+    fn complete_mark_locks_out_armar_and_picker() {
+        use FundHandshakeStep::*;
+        use FundMark::*;
+        // Stale 1-in hex or missing classify must not reopen "Armar parcial".
+        assert_eq!(
+            fund_handshake_step(&view(
+                true,
+                true,
+                true,
+                Some(1),
+                0,
+                false,
+                CompleteReady,
+                false,
+                None,
+                false
+            )),
+            ExportAndSign
+        );
+        assert_eq!(
+            fund_handshake_step(&view(
+                true,
+                true,
+                true,
+                None,
+                0,
+                false,
+                CompleteSent,
+                false,
+                None,
+                false
+            )),
+            ExportAndSign
+        );
+        assert_eq!(
+            fund_handshake_step(&view(
+                true,
+                true,
+                true,
+                Some(2),
+                0,
+                true,
+                CompleteReady,
+                true,
+                Some(FundingSendKind::Complete),
+                false
+            )),
+            RetrySend
+        );
+    }
+
+    #[test]
+    fn prefer_funding_psbt_never_downgrades() {
+        let (m, c) = pair_ids();
+        let signed = signed_two_partidas(&m, &c);
+        let mut project = Project::from_signed(signed.clone()).unwrap();
+        let q = sign_our_quote(
+            &c,
+            &signed,
+            sign_our_quote(
+                &m,
+                &signed,
+                draft_quote(&signed, Some(8_000_000), "fx").unwrap(),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        lock_quote_if_ready(&mut project, &q).unwrap();
+        let m_coin = dummy_coin(Role::Mandante, 1, 5_000_000);
+        let c_coin = dummy_coin(Role::Contratista, 2, 5_000_000);
+        let partial =
+            psbt_to_hex(&build_our_partial(&project, Role::Mandante, &m_coin, 400).unwrap());
+        let complete = psbt_to_hex(
+            &complete_incoming_partial(&project, Role::Contratista, &c_coin, 400, &partial)
+                .unwrap(),
+        );
+        assert_eq!(prefer_funding_psbt(&complete, &partial), complete);
+        assert_eq!(prefer_funding_psbt("", &partial), partial);
+        assert_eq!(prefer_funding_psbt(&partial, &complete), complete);
+    }
+
+    #[test]
+    fn spanish_chain_status_is_plain() {
+        assert!(spanish_chain_status(None, None).contains("Aún no"));
+        let s = spanish_chain_status(Some("abcd"), Some(false));
+        assert!(s.contains("mempool"));
+        assert!(s.contains("abcd"));
+        assert!(spanish_chain_status(Some("abcd"), Some(true)).contains("Confirmada"));
     }
 }

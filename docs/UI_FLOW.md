@@ -64,13 +64,13 @@ After **Trato cerrado**, the next-step card is **Ir a Pago**. Status lines:
 
 **Quote.** Use the local xpub/watch if present (never sent). Price: **Yadio → CoinGecko → CoinMarketCap**, or a manual BTC price both sides confirm. GUI drafts `Quote` (all partidas, because the protocol requires it) but the banner only highlights boleta + P1 sats. Each side signs (`sign_quote`); both signatures required before `set_quote`. Wired as `NetMessage::Quote` over Tor, same as offer/accept.
 
-**Funding (PSBT handshake).** Primary path is watch-only xpub + Esplora (blockstream → mempool Signet), not paste-both-outpoints. One green button per stage.
+**Funding (PSBT handshake).** Primary path is watch-only xpub + Esplora (blockstream → mempool Signet), not paste-both-outpoints. One green button per stage. Prior steps lock (no competing “Armar de nuevo”); **Empezar de nuevo** is behind Avanzado with confirm. If Tor deliver fails, the PSBT stays local and the CTA is **Reenviar**.
 
-1. **Mis monedas** — `Buscar mis monedas` scans the local xpub. App auto-selects the smallest confirmed UTXO that covers share + fee; user can pick another.
+1. **Mis monedas** — `Buscar mis monedas` scans the local xpub. App auto-selects the smallest confirmed UTXO that covers share + fee; user can pick another. After a partial exists the picker hides (only “Usando …”).
 2. **Armar/enviar parcial** — either side builds a 1-input PSBT (their coin + change) that already has exact **boleta + P1** outputs. Wired as `Artifact` `06-funding.partial.json`.
-3. **Completar** — peer picks their UTXO the same way, adds the second input, sends back the complete unsigned 2-in PSBT (`06-funding.unsigned.json`).
-4. **Firmar** — export hex/base64 → Electrum/Sparrow. Paste the **1-signature** PSBT; app sends `07-onesig.psbt.json`. Counterparty signs and **broadcasts in Electrum**.
-5. **En cadena** — both apps poll Esplora on the boleta address until a tx with both quoted amounts appears, then mark **Partida 1 en curso**. Manual tx-hex verify stays as rescue.
+3. **Completar** — peer picks their UTXO the same way, adds the second input, sends back the complete unsigned 2-in PSBT (`06-funding.unsigned.json`). Incoming older partials cannot overwrite a complete PSBT.
+4. **Firmar** — **Exportar archivo** (`.psbt`) and **Copiar / ver texto** (base64). Sign in Electrum/Sparrow. **Importar archivo** or paste the **1-signature** PSBT; app sends `07-onesig.psbt.json` (Reenviar if that fails). Peer exports that 1-sig (file + text), signs the second input in Electrum, **broadcasts there**.
+5. **En cadena** — **Comprobar transacción** (plus background Esplora poll). Status in Spanish with txid (mempool / confirmada). Manual tx-hex verify stays as rescue.
 
 Boleta and partida 1 are **distinct** Taproot addresses (fee-burn key-path + unique tagged merkle tweak per output id). Later partidas stay grey until P1 is terminal.
 
@@ -80,7 +80,7 @@ Persisted under `{obra}/pay/` (`state.json`, `02-quote.json`, `coins.json`, `08-
 
 ## What this slice verified vs two Signet laptops
 
-**Covered by `cargo test --workspace`:** quote both-sign + lock; Spanish stages; P2 stays blocked until P1 is terminal; boleta ≠ P1 ≠ P2 Taproot addresses; partial→complete PSBT balances and verifies; constructed P1 fund/verify; Esplora JSON helpers; existing bitcoin tests (`quote_signatures_roundtrip`, `funding_partida_only_mandante_pays_fee`, `cannot_fund_segunda_before_primera`).
+**Covered by `cargo test --workspace`:** quote both-sign + lock; Spanish stages; P2 stays blocked until P1 is terminal; boleta ≠ P1 ≠ P2 Taproot addresses; partial→complete PSBT balances and verifies; constructed P1 fund/verify; complete mark never reopens “Armar”; prefer-PSBT never downgrades; chain status Spanish; Esplora JSON helpers; existing bitcoin tests (`quote_signatures_roundtrip`, `funding_partida_only_mandante_pays_fee`, `cannot_fund_segunda_before_primera`).
 
 **Needs two live Signet wallets (not claimed here):** Esplora listing real xpub UTXOs, Tor partial-PSBT exchange, Electrum/Sparrow signing + broadcast, chain detect on a mined funding tx, live MuSig2 close.
 
