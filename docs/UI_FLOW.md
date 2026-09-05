@@ -78,15 +78,17 @@ After **Trato cerrado**, the next-step card is **Ir a Pago**. Status lines:
 
 Boleta and partida 1 are **distinct** Taproot addresses (fee-burn key-path + unique tagged merkle tweak per output id). Later partidas stay grey until P1 is terminal.
 
-**Reception.** When P1 is locked: dest + MuSig2 (`coop-propose` / `coop-sign` / `coop-finish`). Primary buttons: **Proponer cobro** / **Firmar cobro** / **Marcar cobrada**. Finish marks P1 `Paid` and unlocks the P2 row. P2 funding itself is **not** on this screen (CLI `--partida-only`).
+**Reception (P1).** When P1 is locked: dest + cooperative close. One green button: **Proponer cobro** → wait → **Firmar cobro** → **Marcar cobrada**. Finish marks P1 `Paid`. Incoming CoopFiles **merge** both sides’ parts. Each laptop **reuses** its nonce seed for that sighash (a second Proponer/Firmar does not rotate it). That was the `invalid signer index 0` / `falta nonce del mandante` bug when both proposed over Tor.
 
-Persisted under `{obra}/pay/` (`state.json`, `02-quote.json`, `coins.json`, `08-coop.json`, `nonces.json`, `session.json`).
+**Detener obra y devolver boleta.** Visible on Pago (and Trato) once boleta+P1 are confirmed. Wizard: confirm → if P1 still locked, pay P1 first → destino boleta (contratista Electrum) → Proponer devolución → Firmar devolución → Terminar y devolver → Comprobar en la red. Bond close is `kind: bond` (`08-coop-bond.json`), same merge/reuse rules. `mark_bond_released` sets the project **Closed** (if P1 was paid) or **Cancelled**; later partidas stay closed. PSBT funding stays hidden after confirm.
+
+Persisted under `{obra}/pay/` (`state.json`, `02-quote.json`, `coins.json`, `08-coop.json`, `08-coop-bond.json`, `nonces.json`, `session.json`).
 
 ## What this slice verified vs two Signet laptops
 
-**Covered by `cargo test --workspace`:** quote both-sign + lock; Spanish stages; P2 stays blocked until P1 is terminal; boleta ≠ P1 ≠ P2 Taproot addresses; partial→complete PSBT balances and verifies; constructed P1 fund/verify; complete mark never reopens “Armar”; prefer-PSBT never downgrades; chain status Spanish; Esplora JSON helpers; existing bitcoin tests (`quote_signatures_roundtrip`, `funding_partida_only_mandante_pays_fee`, `cannot_fund_segunda_before_primera`).
+**Covered by `cargo test --workspace`:** quote both-sign + lock; Spanish stages; P2 stays blocked until P1 is terminal; boleta ≠ P1 ≠ P2 Taproot addresses; partial→complete PSBT balances and verifies; constructed P1 fund/verify; complete mark never reopens “Armar”; prefer-PSBT never downgrades; chain status Spanish; Esplora JSON helpers; **both-propose then sign reuses seed and finishes**; rotating the seed is rejected; **bond coop after P1 paid closes later partidas**; existing bitcoin tests (`quote_signatures_roundtrip`, `funding_partida_only_mandante_pays_fee`, `cannot_fund_segunda_before_primera`).
 
-**Needs two live Signet wallets (not claimed here):** Esplora listing real xpub UTXOs, Tor partial-PSBT exchange, Electrum/Sparrow signing + broadcast, chain detect on a mined funding tx, live MuSig2 close.
+**Needs two live Signet wallets (not claimed here):** Esplora listing real xpub UTXOs, Tor partial-PSBT exchange, Electrum/Sparrow signing + broadcast, chain detect on a mined funding tx, live P1 close and bond-return close.
 
 ## Retest (two obras, same mandante)
 

@@ -7,19 +7,20 @@ use std::time::Duration;
 use eframe::egui::{self, Color32, RichText, Vec2};
 use hbp_app::{
     agreed_fx_line, apply_incoming_quote, apply_verified_p1_funding, build_our_partial,
-    can_recotizar, classify_funding_psbt, coin_from_watched, complete_incoming_partial,
-    completed_steps, contract_bond_minor, contratista_accept, coop_finish, coop_propose, coop_sign,
-    default_works_root, draft_equal_stages, draft_quote, escrow_addrs, export_backup,
-    format_unix_local_es, fund_handshake_step, funding_wire, funding_wire_hex, hex_artifact,
-    hex_from_artifact, import_backup, import_signed, lock_quote_if_ready, mandante_commit,
-    next_step, obra_amount_pair, our_funding_need, parse_fee, parse_psbt, parse_psbt_bytes,
-    partida_spec_minor, partida_ui_enabled, party_role, pay_stage, prefer_funding_psbt,
-    preview_quote_sats, psbt_display_text, psbt_file_bytes, psbt_to_hex, quote_fully_signed,
-    quote_price_minor, read_backup_file, recotizar_if_unfunded, show_main_fund_ui, sign_our_quote,
+    can_open_stop_wizard, can_recotizar, classify_funding_psbt, coin_from_watched,
+    complete_incoming_partial, completed_steps, contract_bond_minor, contratista_accept,
+    coop_action, coop_finish, coop_propose_on, default_works_root, draft_equal_stages, draft_quote,
+    escrow_addrs, export_backup, format_unix_local_es, fund_handshake_step, funding_wire,
+    funding_wire_hex, hex_artifact, hex_from_artifact, import_backup, import_signed,
+    lock_quote_if_ready, mandante_commit, next_step, obra_amount_pair, our_funding_need,
+    p1_blocks_bond_return, parse_fee, parse_psbt, parse_psbt_bytes, partida_spec_minor,
+    partida_ui_enabled, party_role, pay_stage, prefer_funding_psbt, preview_quote_sats,
+    psbt_display_text, psbt_file_bytes, psbt_to_hex, quote_fully_signed, quote_price_minor,
+    read_backup_file, recotizar_if_unfunded, show_main_fund_ui, sign_our_quote,
     spanish_chain_status, spanish_now, suggest_watched, validate_deadline_order, write_backup_file,
-    DeadlineFields, FundHandshakeStep, FundMark, FundView, FundingSendKind, NextKind, PayStage,
-    PayUiDraft, UiPrefs, WorkEntry, WorkProgress, WorkStore, ART_COOP, ART_ONESIG, ART_PARTIAL,
-    ART_PSBT, ART_TX, MONTHS_ES,
+    CoopAction, DeadlineFields, FundHandshakeStep, FundMark, FundView, FundingSendKind, NextKind,
+    PayStage, PayUiDraft, StopStep, UiPrefs, WorkEntry, WorkProgress, WorkStore, ART_COOP,
+    ART_ONESIG, ART_PARTIAL, ART_PSBT, ART_TX, KIND_BOND, KIND_PARTIDA, MONTHS_ES,
 };
 use hbp_bitcoin::{
     address_at, default_esplora_urls, scan_watch, sign_body, CoopFile, Identity, OfferedCoin,
@@ -832,14 +833,21 @@ impl App {
         }
         if name.contains("coop") {
             match serde_json::from_value::<CoopFile>(json) {
-                Ok(coop) => {
-                    if let Err(e) = self.store.save_pay_coop(&slug, &coop) {
-                        return self.fail(e);
+                Ok(coop) => match self.store.save_pay_coop(&slug, &coop) {
+                    Ok(merged) => {
+                        self.pay.coop_paste =
+                            serde_json::to_string_pretty(&merged).unwrap_or_default();
+                        if merged.kind == KIND_BOND {
+                            self.pay.stop_open = true;
+                            self.pay.stop_step = StopStep::ReturnBond;
+                            self.note("Llegó la devolución de la boleta. Ábrela en Pago.");
+                        } else {
+                            self.note("Llegó un cobro. Fírmalo o termínalo en Pago.");
+                        }
+                        self.tab = MainTab::Pago;
                     }
-                    self.pay.coop_paste = serde_json::to_string_pretty(&coop).unwrap_or_default();
-                    self.note("Llegó un cobro. Fírmalo en Pago.");
-                    self.tab = MainTab::Pago;
-                }
+                    Err(e) => self.fail(e),
+                },
                 Err(e) => self.fail(format!("cierre: {e}")),
             }
             return;
@@ -1432,6 +1440,18 @@ impl App {
                 self.accept_from_store(&slug, &id);
             }
         }
+        if has_signed {
+            if let Ok(project) = self.store.ensure_pay_project(&slug) {
+                if can_open_stop_wizard(&project) {
+                    ui.add_space(10.0);
+                    if primary_btn(ui, "Detener obra y devolver boleta", self.prefs.dark).clicked()
+                    {
+                        self.open_stop_wizard(&slug, &project);
+                        self.tab = MainTab::Pago;
+                    }
+                }
+            }
+        }
     }
 
     fn show_proposal_review(&self, ui: &mut egui::Ui, slug: &str) {
@@ -1964,6 +1984,10 @@ impl App {
             self.show_pay_watch(ui, slug);
             return;
         }
+        if self.pay.stop_open && (can_open_stop_wizard(project) || project.is_stopped()) {
+            self.show_stop_wizard(ui, slug, id, project);
+            return;
+        }
         match stage {
             PayStage::NeedQuote | PayStage::NeedQuoteSig => {
                 self.show_pay_quote(ui, slug, id, signed, project, pending);
@@ -1972,22 +1996,29 @@ impl App {
                 self.show_pay_fund(ui, slug, id, project);
             }
             PayStage::PartidaInCourse => {
-                self.show_pay_coop(ui, slug, id, project);
+                self.show_pay_coop(ui, slug, id, project, KIND_PARTIDA);
+                self.show_stop_entry(ui, slug, project);
             }
             PayStage::UnlockNext => {
                 panel_card(ui, dark, |ui| {
                     ui.label(RichText::new("Partida 1 lista").strong());
-                    ui.label("La siguiente partida ya se puede ver. Esta pantalla cubre boleta + partida 1.");
+                    ui.label(
+                        "Si la obra sigue, la partida 2 se ve después. Si no, devuelve la boleta.",
+                    );
                 });
+                self.show_stop_entry(ui, slug, project);
             }
             PayStage::AllClosed => {
                 panel_card(ui, dark, |ui| {
                     ui.label(
-                        RichText::new("Trato cerrado.")
+                        RichText::new(spanish_now(Some(project), pending))
                             .color(accent_green(dark))
                             .strong(),
                     );
                 });
+                if can_open_stop_wizard(project) {
+                    self.show_stop_entry(ui, slug, project);
+                }
             }
             _ => {}
         }
@@ -3059,45 +3090,243 @@ impl App {
         &mut self,
         ui: &mut egui::Ui,
         slug: &str,
-        _id: &Identity,
-        _project: &hbp_core::Project,
+        id: &Identity,
+        project: &hbp_core::Project,
+        kind: &str,
     ) {
         let dark = self.prefs.dark;
+        let bond = kind == KIND_BOND;
+        let coop = self.store.load_pay_coop_kind(slug, kind).ok().flatten();
+        let role = party_role(id, &project.contract.body).ok();
+        let action = role
+            .map(|r| coop_action(coop.as_ref(), r))
+            .unwrap_or(CoopAction::Propose);
+        let title = if bond {
+            "Devolver la boleta"
+        } else {
+            "Cobrar la partida 1"
+        };
+        let hint = if bond {
+            "Cuenta del contratista (Electrum Signet)"
+        } else {
+            "Dónde recibir la plata de la partida 1"
+        };
         panel_card(ui, dark, |ui| {
-            ui.label(RichText::new("Partida 1 en curso").strong());
+            ui.label(RichText::new(title).strong());
             ui.label(
-                RichText::new("Cuando ambos están de acuerdo, cobra la plata de la partida 1.")
-                    .small()
-                    .weak(),
+                RichText::new(if bond {
+                    "Los dos tienen que estar de acuerdo. La boleta vuelve al contratista."
+                } else {
+                    "Cuando ambos están de acuerdo, se paga la partida 1 al contratista."
+                })
+                .small()
+                .weak(),
             );
             ui.horizontal(|ui| {
-                ui.label("Dónde recibir la plata");
-                show_field(
-                    ui,
-                    &mut self.pay.dest,
-                    "tu cuenta de Electrum (Signet)",
-                    dark,
-                    280.0,
-                );
+                ui.label(hint);
+                if bond {
+                    show_field(
+                        ui,
+                        &mut self.pay.bond_dest,
+                        "cuenta Signet del contratista",
+                        dark,
+                        260.0,
+                    );
+                } else {
+                    show_field(
+                        ui,
+                        &mut self.pay.dest,
+                        "tu cuenta de Electrum (Signet)",
+                        dark,
+                        260.0,
+                    );
+                }
             });
-            if let Ok(Some(_)) = self.store.load_pay_coop(slug) {
-                ui.label(
-                    RichText::new("Hay un cobro en curso.")
-                        .small()
-                        .color(accent_amber(dark)),
-                );
-            }
-            ui.add_space(4.0);
-            if primary_btn(ui, "Proponer cobro", dark).clicked() {
-                self.pay_coop_propose(slug);
-            }
-            if ui.button("Firmar cobro").clicked() {
-                self.pay_coop_sign(slug);
-            }
-            if ui.button("Marcar cobrada").clicked() {
-                self.pay_coop_finish(slug);
+            match action {
+                CoopAction::WaitPeer => {
+                    ui.label(
+                        RichText::new("Ya enviaste tu parte. Espera al otro.")
+                            .color(accent_amber(dark)),
+                    );
+                }
+                CoopAction::Propose => {
+                    let label = if bond {
+                        "Proponer devolución"
+                    } else {
+                        "Proponer cobro"
+                    };
+                    if primary_btn(ui, label, dark).clicked() {
+                        self.pay_coop_act(slug, kind, CoopAction::Propose);
+                    }
+                }
+                CoopAction::Sign => {
+                    let label = if bond {
+                        "Firmar devolución"
+                    } else {
+                        "Firmar cobro"
+                    };
+                    if primary_btn(ui, label, dark).clicked() {
+                        self.pay_coop_act(slug, kind, CoopAction::Sign);
+                    }
+                }
+                CoopAction::Finish => {
+                    let label = if bond {
+                        "Terminar y devolver"
+                    } else {
+                        "Marcar cobrada"
+                    };
+                    if primary_btn(ui, label, dark).clicked() {
+                        self.pay_coop_act(slug, kind, CoopAction::Finish);
+                    }
+                }
             }
         });
+    }
+
+    fn show_stop_entry(&mut self, ui: &mut egui::Ui, slug: &str, project: &hbp_core::Project) {
+        if !can_open_stop_wizard(project) {
+            return;
+        }
+        ui.add_space(8.0);
+        if primary_btn(ui, "Detener obra y devolver boleta", self.prefs.dark).clicked() {
+            self.open_stop_wizard(slug, project);
+        }
+    }
+
+    fn open_stop_wizard(&mut self, slug: &str, project: &hbp_core::Project) {
+        self.pay.stop_open = true;
+        self.pay.stop_step = if p1_blocks_bond_return(project) {
+            StopStep::Confirm
+        } else {
+            StopStep::Confirm
+        };
+        if self.pay.bond_dest.trim().is_empty() {
+            if let Ok(Some(acc)) = self.store.load_watch(slug, Some(self.passphrase.as_str())) {
+                if let Ok(a) = address_at(&acc.receive_descriptor, 0, PRODUCT_NETWORK) {
+                    if matches!(self.prefs.role, Role::Contratista) {
+                        self.pay.bond_dest = a.to_string();
+                    }
+                }
+            }
+        }
+        let _ = self.store.save_pay_draft(slug, &self.pay);
+    }
+
+    fn show_stop_wizard(
+        &mut self,
+        ui: &mut egui::Ui,
+        slug: &str,
+        id: &Identity,
+        project: &hbp_core::Project,
+    ) {
+        let dark = self.prefs.dark;
+        if project.is_stopped() {
+            panel_card(ui, dark, |ui| {
+                ui.label(
+                    RichText::new("Obra detenida. La boleta volvió al contratista.")
+                        .color(accent_green(dark))
+                        .strong(),
+                );
+                if ui.small_button("Cerrar").clicked() {
+                    self.pay.stop_open = false;
+                }
+            });
+            return;
+        }
+        match self.pay.stop_step {
+            StopStep::Confirm => {
+                panel_card(ui, dark, |ui| {
+                    ui.label(
+                        RichText::new("Detener obra y devolver boleta")
+                            .strong()
+                            .size(16.0),
+                    );
+                    ui.label("Se para la obra. La boleta vuelve al contratista. Las partidas que siguen quedan cerradas.");
+                    if p1_blocks_bond_return(project) {
+                        ui.label(
+                            RichText::new(
+                                "Primero hay que pagar la partida 1 (el trabajo ya hecho).",
+                            )
+                            .color(accent_amber(dark)),
+                        );
+                    } else {
+                        ui.label(
+                            RichText::new("La partida 1 ya está cobrada. Sigue la boleta.")
+                                .color(accent_green(dark)),
+                        );
+                    }
+                    ui.add_space(6.0);
+                    if primary_btn(ui, "Continuar", dark).clicked() {
+                        self.pay.stop_step = if p1_blocks_bond_return(project) {
+                            StopStep::PayP1
+                        } else {
+                            StopStep::DestBond
+                        };
+                        let _ = self.store.save_pay_draft(slug, &self.pay);
+                    }
+                    if ui.small_button("Volver").clicked() {
+                        self.pay.stop_open = false;
+                    }
+                });
+            }
+            StopStep::PayP1 => {
+                if !p1_blocks_bond_return(project) {
+                    self.pay.stop_step = StopStep::DestBond;
+                    let _ = self.store.save_pay_draft(slug, &self.pay);
+                    self.show_stop_wizard(ui, slug, id, project);
+                    return;
+                }
+                self.show_pay_coop(ui, slug, id, project, KIND_PARTIDA);
+                ui.add_space(6.0);
+                if !p1_blocks_bond_return(project) {
+                    if primary_btn(ui, "Partida 1 cobrada — seguir a la boleta", dark).clicked() {
+                        self.pay.stop_step = StopStep::DestBond;
+                        let _ = self.store.save_pay_draft(slug, &self.pay);
+                    }
+                } else {
+                    ui.label(
+                        RichText::new("Cuando la partida 1 esté cobrada, sigue a la boleta.")
+                            .small()
+                            .weak(),
+                    );
+                }
+            }
+            StopStep::DestBond => {
+                panel_card(ui, dark, |ui| {
+                    ui.label(RichText::new("Destino de la boleta").strong());
+                    ui.label("Cuenta del contratista, donde vuelve la plata de la boleta.");
+                    show_field(
+                        ui,
+                        &mut self.pay.bond_dest,
+                        "cuenta Signet del contratista",
+                        dark,
+                        280.0,
+                    );
+                    ui.horizontal(|ui| {
+                        ui.label("Comisión de red");
+                        show_field(ui, &mut self.pay.fee_sats, "250", dark, 64.0);
+                        ui.label(RichText::new("(~250)").small().weak());
+                    });
+                    if primary_btn(ui, "Continuar", dark).clicked() {
+                        if self.pay.bond_dest.trim().is_empty() {
+                            self.fail("Escribe la cuenta del contratista.");
+                        } else {
+                            self.pay.stop_step = StopStep::ReturnBond;
+                            let _ = self.store.save_pay_draft(slug, &self.pay);
+                        }
+                    }
+                });
+            }
+            StopStep::ReturnBond => {
+                self.show_pay_coop(ui, slug, id, project, KIND_BOND);
+                if !self.pay_chain_line.is_empty() {
+                    ui.label(RichText::new(&self.pay_chain_line).small());
+                }
+                if ui.button("Comprobar en la red").clicked() {
+                    self.pay_poll_chain(slug, true);
+                }
+            }
+        }
     }
 
     fn pay_price_minor(&self, contract_unit: Unit) -> Option<u64> {
@@ -3235,14 +3464,22 @@ impl App {
         }
         match serde_json::from_str::<CoopFile>(raw) {
             Ok(coop) => match self.store.save_pay_coop(slug, &coop) {
-                Ok(()) => self.note("Ronda guardada."),
+                Ok(_) => self.note("Archivo guardado."),
                 Err(e) => self.fail(e),
             },
             Err(e) => self.fail(e),
         }
     }
 
-    fn pay_coop_propose(&mut self, slug: &str) {
+    fn pay_coop_act(&mut self, slug: &str, kind: &str, want: CoopAction) {
+        match want {
+            CoopAction::Propose | CoopAction::Sign => self.pay_coop_contribute(slug, kind),
+            CoopAction::Finish => self.pay_coop_finish_kind(slug, kind),
+            CoopAction::WaitPeer => {}
+        }
+    }
+
+    fn pay_coop_contribute(&mut self, slug: &str, kind: &str) {
         let id = match self.store.load_identity(slug) {
             Ok(id) => id,
             Err(e) => return self.fail(e),
@@ -3255,84 +3492,62 @@ impl App {
             Ok(f) => f,
             Err(e) => return self.fail(e),
         };
-        if self.pay.dest.trim().is_empty() {
-            return self.fail("Escribe la dirección Signet de cobro.");
+        let dest = if kind == KIND_BOND {
+            self.pay.bond_dest.clone()
+        } else {
+            self.pay.dest.clone()
+        };
+        if dest.trim().is_empty() {
+            return self.fail(if kind == KIND_BOND {
+                "Escribe la cuenta del contratista."
+            } else {
+                "Escribe dónde recibir la plata."
+            });
         }
+        let existing = self.store.load_pay_coop_kind(slug, kind).ok().flatten();
         let mut journal = match self.store.load_pay_nonces(slug) {
             Ok(j) => j,
             Err(e) => return self.fail(e),
         };
-        match coop_propose(&id, &project, &self.pay.dest, fee, &mut journal) {
+        match coop_propose_on(&id, &project, &dest, fee, &mut journal, kind, existing) {
             Ok(coop) => {
                 if let Err(e) = self.store.save_pay_nonces(slug, &journal) {
                     return self.fail(e);
                 }
-                if let Err(e) = self.store.save_pay_coop(slug, &coop) {
-                    return self.fail(e);
-                }
-                self.pay.coop_paste = serde_json::to_string_pretty(&coop).unwrap_or_default();
-                let json = match serde_json::to_value(&coop) {
+                let merged = match self.store.save_pay_coop(slug, &coop) {
+                    Ok(c) => c,
+                    Err(e) => return self.fail(e),
+                };
+                self.pay.coop_paste = serde_json::to_string_pretty(&merged).unwrap_or_default();
+                let json = match serde_json::to_value(&merged) {
                     Ok(v) => v,
                     Err(e) => return self.fail(e),
                 };
-                self.note("Ronda propuesta. El otro debe firmar.");
+                let ok = if kind == KIND_BOND {
+                    "Devolución enviada."
+                } else {
+                    "Cobro enviado."
+                };
+                self.note(
+                    if merged.contratista_partial.is_some() || merged.mandante_partial.is_some() {
+                        "Tu parte quedó lista. El otro debe terminar o firmar."
+                    } else {
+                        "Tu parte salió. Espera al otro."
+                    },
+                );
                 self.spawn_deliver(
                     NetMessage::Artifact {
                         name: ART_COOP.into(),
                         json,
                     },
-                    "Cierre enviado.",
+                    ok,
                 );
             }
             Err(e) => self.fail(e),
         }
     }
 
-    fn pay_coop_sign(&mut self, slug: &str) {
-        let id = match self.store.load_identity(slug) {
-            Ok(id) => id,
-            Err(e) => return self.fail(e),
-        };
-        let project = match self.store.ensure_pay_project(slug) {
-            Ok(p) => p,
-            Err(e) => return self.fail(e),
-        };
-        let coop = match self.store.load_pay_coop(slug) {
-            Ok(Some(c)) => c,
-            Ok(None) => return self.fail("No hay ronda. Pégala o espera la del otro."),
-            Err(e) => return self.fail(e),
-        };
-        let mut journal = match self.store.load_pay_nonces(slug) {
-            Ok(j) => j,
-            Err(e) => return self.fail(e),
-        };
-        match coop_sign(&id, &project, coop, &mut journal) {
-            Ok(coop) => {
-                if let Err(e) = self.store.save_pay_nonces(slug, &journal) {
-                    return self.fail(e);
-                }
-                if let Err(e) = self.store.save_pay_coop(slug, &coop) {
-                    return self.fail(e);
-                }
-                self.pay.coop_paste = serde_json::to_string_pretty(&coop).unwrap_or_default();
-                let json = match serde_json::to_value(&coop) {
-                    Ok(v) => v,
-                    Err(e) => return self.fail(e),
-                };
-                self.note("Ronda firmada. Devuélvela para terminar.");
-                self.spawn_deliver(
-                    NetMessage::Artifact {
-                        name: ART_COOP.into(),
-                        json,
-                    },
-                    "Firma de cierre enviada.",
-                );
-            }
-            Err(e) => self.fail(e),
-        }
-    }
-
-    fn pay_coop_finish(&mut self, slug: &str) {
+    fn pay_coop_finish_kind(&mut self, slug: &str, kind: &str) {
         let id = match self.store.load_identity(slug) {
             Ok(id) => id,
             Err(e) => return self.fail(e),
@@ -3341,9 +3556,9 @@ impl App {
             Ok(p) => p,
             Err(e) => return self.fail(e),
         };
-        let coop = match self.store.load_pay_coop(slug) {
+        let coop = match self.store.load_pay_coop_kind(slug, kind) {
             Ok(Some(c)) => c,
-            Ok(None) => return self.fail("No hay ronda para terminar."),
+            Ok(None) => return self.fail("No hay envío para terminar. Espera al otro o pégalo."),
             Err(e) => return self.fail(e),
         };
         let mut journal = match self.store.load_pay_nonces(slug) {
@@ -3359,16 +3574,24 @@ impl App {
                     return self.fail(e);
                 }
                 self.pay.funding_tx_hex = hex.clone();
+                if kind == KIND_BOND {
+                    self.pay.stop_open = true;
+                    self.note(
+                        "Boleta lista para devolver. Publícala en Electrum y comprueba en la red.",
+                    );
+                } else {
+                    self.note("Partida 1 cobrada. Publícala en Electrum. Luego puedes devolver la boleta.");
+                    if self.pay.stop_open {
+                        self.pay.stop_step = StopStep::DestBond;
+                    }
+                }
                 let _ = self.store.save_pay_draft(slug, &self.pay);
-                self.note(
-                    "Partida 1 pagada. Difunde el tx de cierre en Signet. Partida 2 queda desbloqueada.",
-                );
                 self.spawn_deliver(
                     NetMessage::Artifact {
                         name: ART_TX.into(),
                         json: hex_artifact(&hex),
                     },
-                    "Cierre enviado.",
+                    "Listo para publicar en Electrum.",
                 );
             }
             Err(e) => self.fail(e),

@@ -383,6 +383,26 @@ impl Project {
         Ok(())
     }
 
+    pub fn bond_utxo(&self) -> Option<(&str, u32, u64)> {
+        match &self.bond {
+            BondStatus::Funded {
+                txid, vout, sats, ..
+            } => Some((txid, *vout, *sats)),
+            _ => None,
+        }
+    }
+
+    pub fn bond_is_funded(&self) -> bool {
+        matches!(self.bond, BondStatus::Funded { .. })
+    }
+
+    pub fn is_stopped(&self) -> bool {
+        matches!(
+            self.status,
+            ProjectStatus::Cancelled | ProjectStatus::Closed
+        ) && !matches!(self.bond, BondStatus::Funded { .. })
+    }
+
     pub fn has_open_onchain_partida(&self) -> bool {
         self.partidas.iter().any(|p| {
             matches!(

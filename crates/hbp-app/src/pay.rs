@@ -21,8 +21,8 @@ use hbp_bitcoin::{
 };
 use hbp_core::{
     bond_minor, btc_price_to_minor, fiat_minor_to_sats, format_major_amount, minor_from_major,
-    NonceJournal, PartidaQuote, PartidaStatus, Project, Quote, Role, SignedContract, Unit,
-    PRODUCT_NETWORK,
+    BondStatus, NonceJournal, PartidaQuote, PartidaStatus, Project, ProjectStatus, Quote, Role,
+    SignedContract, Unit, PRODUCT_NETWORK,
 };
 use serde::{Deserialize, Serialize};
 
@@ -82,6 +82,27 @@ impl FundHandshakeStep {
 /// PSBT export / import / reenviar stay on the main path only while still funding.
 pub fn show_main_fund_ui(stage: PayStage) -> bool {
     matches!(stage, PayStage::FundBondP1)
+}
+
+pub const KIND_PARTIDA: &str = "partida";
+pub const KIND_BOND: &str = "bond";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CoopAction {
+    Propose,
+    WaitPeer,
+    Sign,
+    Finish,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum StopStep {
+    #[default]
+    Confirm,
+    PayP1,
+    DestBond,
+    ReturnBond,
 }
 
 /// Forward-only progress. Never walk this backwards except "Empezar de nuevo".
@@ -276,6 +297,12 @@ pub struct PayUiDraft {
     pub onesig_from_peer: bool,
     #[serde(default)]
     pub show_psbt_text: bool,
+    #[serde(default)]
+    pub stop_open: bool,
+    #[serde(default)]
+    pub stop_step: StopStep,
+    #[serde(default)]
+    pub bond_dest: String,
 }
 
 fn default_fee() -> String {
@@ -309,6 +336,9 @@ impl Default for PayUiDraft {
             fund_mark: FundMark::Start,
             onesig_from_peer: false,
             show_psbt_text: false,
+            stop_open: false,
+            stop_step: StopStep::Confirm,
+            bond_dest: String::new(),
         }
     }
 }
@@ -363,6 +393,9 @@ pub fn pay_stage(project: Option<&Project>, pending_quote: Option<&Quote>) -> Pa
     let Some(project) = project else {
         return PayStage::NeedContract;
     };
+    if project.is_stopped() {
+        return PayStage::AllClosed;
+    }
     let locked = project
         .quote
         .as_ref()
@@ -412,7 +445,16 @@ pub fn spanish_now(project: Option<&Project>, pending_quote: Option<&Quote>) -> 
             let next = project.and_then(|p| p.active_partida_id()).unwrap_or(2);
             format!("Partida 1 cerrada. Ahora puedes ver la partida {next}.")
         }
-        PayStage::AllClosed => "Todas las partidas de este trato están cerradas.".into(),
+        PayStage::AllClosed => {
+            if project.is_some_and(|p| {
+                matches!(p.status, ProjectStatus::Cancelled)
+                    || matches!(p.bond, BondStatus::Released { .. })
+            }) {
+                "Obra detenida. La boleta volvió al contratista.".into()
+            } else {
+                "Todas las partidas de este trato están cerradas.".into()
+            }
+        }
     }
 }
 
@@ -456,7 +498,26 @@ pub fn partida_spec_minor(body: &hbp_core::ContractBody, id: u32) -> Option<u64>
 
 /// Later partidas stay grey until the previous one is Paid / Unwound / FeeBurnT2.
 pub fn partida_ui_enabled(project: &Project, id: u32) -> bool {
+    if project.is_stopped() {
+        return false;
+    }
     project.active_partida_id() == Some(id)
+}
+
+pub fn can_open_stop_wizard(project: &Project) -> bool {
+    project.bond_is_funded()
+}
+
+pub fn p1_blocks_bond_return(project: &Project) -> bool {
+    project.has_open_onchain_partida()
+}
+
+pub fn coop_filename(kind: &str) -> &'static str {
+    if kind == KIND_BOND {
+        "08-coop-bond.json"
+    } else {
+        "08-coop.json"
+    }
 }
 
 pub fn price_minor_from_major(major: &str) -> Result<u64> {
@@ -1022,6 +1083,7 @@ fn coop_unsigned(
     project: &Project,
     dest: &str,
     fee: u64,
+    kind: &str,
 ) -> Result<(
     hbp_bitcoin::Escrow,
     bitcoin::secp256k1::PublicKey,
@@ -1031,15 +1093,29 @@ fn coop_unsigned(
     String,
     u64,
 )> {
-    let p1 = project.partida(FIRST_PARTIDA)?;
-    let (txid, vout, sats) = p1
-        .locked_utxo()
-        .context("la partida 1 aún no está fondeada / locked")?;
-    let outpoint = format!("{txid}:{vout}");
     let body = &project.contract.body;
+    let (txid, vout, sats, escrow) = match kind {
+        KIND_BOND => {
+            let (txid, vout, sats) = project
+                .bond_utxo()
+                .context("la boleta aún no está fondeada")?;
+            let named = project.named_arbiter_pubkey()?;
+            let escrow = bond_escrow_from_body(body, named)?;
+            (txid.to_string(), vout, sats, escrow)
+        }
+        KIND_PARTIDA => {
+            let p1 = project.partida(FIRST_PARTIDA)?;
+            let (txid, vout, sats) = p1
+                .locked_utxo()
+                .context("la partida 1 aún no está fondeada / locked")?;
+            let named = project.named_arbiter_pubkey()?;
+            let escrow = partida_escrow_from_body(body, FIRST_PARTIDA, named)?;
+            (txid.to_string(), vout, sats, escrow)
+        }
+        other => bail!("cierre desconocido: {other}"),
+    };
+    let outpoint = format!("{txid}:{vout}");
     let (m_pk, c_pk) = keys_from_body(body)?;
-    let named = project.named_arbiter_pubkey()?;
-    let escrow = partida_escrow_from_body(body, FIRST_PARTIDA, named)?;
     let net = to_btc_network(body.network);
     let dest = Address::from_str(dest.trim())
         .map_err(|e| anyhow::anyhow!("{e}"))?
@@ -1054,27 +1130,120 @@ fn coop_unsigned(
     Ok((escrow, m_pk, c_pk, unsigned, sighash, outpoint, sats))
 }
 
-pub fn coop_propose(
-    id: &Identity,
+fn session_seed(journal: &mut NonceJournal, sighash: &str) -> Result<[u8; 32]> {
+    if let Some(seed) = journal.pending_seed(sighash) {
+        return Ok(seed);
+    }
+    let seed = new_nonce_seed(journal)?;
+    journal.stash_pending(sighash, &seed);
+    Ok(seed)
+}
+
+fn our_nonce<'a>(coop: &'a CoopFile, role: Role) -> Option<&'a str> {
+    match role {
+        Role::Mandante => coop.mandante_pubnonce.as_deref(),
+        Role::Contratista => coop.contratista_pubnonce.as_deref(),
+    }
+}
+
+fn peer_nonce<'a>(coop: &'a CoopFile, role: Role) -> Option<&'a str> {
+    match role {
+        Role::Mandante => coop.contratista_pubnonce.as_deref(),
+        Role::Contratista => coop.mandante_pubnonce.as_deref(),
+    }
+}
+
+fn our_partial<'a>(coop: &'a CoopFile, role: Role) -> Option<&'a str> {
+    match role {
+        Role::Mandante => coop.mandante_partial.as_deref(),
+        Role::Contratista => coop.contratista_partial.as_deref(),
+    }
+}
+
+fn peer_partial<'a>(coop: &'a CoopFile, role: Role) -> Option<&'a str> {
+    match role {
+        Role::Mandante => coop.contratista_partial.as_deref(),
+        Role::Contratista => coop.mandante_partial.as_deref(),
+    }
+}
+
+fn set_our_nonce(coop: &mut CoopFile, role: Role, pn: String) {
+    match role {
+        Role::Mandante => coop.mandante_pubnonce = Some(pn),
+        Role::Contratista => coop.contratista_pubnonce = Some(pn),
+    }
+}
+
+fn set_our_partial(coop: &mut CoopFile, role: Role, ps: String) {
+    match role {
+        Role::Mandante => coop.mandante_partial = Some(ps),
+        Role::Contratista => coop.contratista_partial = Some(ps),
+    }
+}
+
+/// Keep both sides' nonces and partials. A later dest/fee (new sighash) replaces.
+pub fn merge_coop_file(local: Option<CoopFile>, incoming: CoopFile) -> CoopFile {
+    let Some(mut a) = local else {
+        return incoming;
+    };
+    if a.contract_id != incoming.contract_id || a.kind != incoming.kind {
+        return incoming;
+    }
+    if a.sighash != incoming.sighash {
+        return incoming;
+    }
+    if a.mandante_pubnonce.is_none() {
+        a.mandante_pubnonce = incoming.mandante_pubnonce;
+    }
+    if a.contratista_pubnonce.is_none() {
+        a.contratista_pubnonce = incoming.contratista_pubnonce;
+    }
+    if a.mandante_partial.is_none() {
+        a.mandante_partial = incoming.mandante_partial;
+    }
+    if a.contratista_partial.is_none() {
+        a.contratista_partial = incoming.contratista_partial;
+    }
+    a
+}
+
+pub fn coop_action(coop: Option<&CoopFile>, role: Role) -> CoopAction {
+    let Some(c) = coop else {
+        return CoopAction::Propose;
+    };
+    if peer_partial(c, role).is_some() && peer_nonce(c, role).is_some() {
+        return CoopAction::Finish;
+    }
+    if peer_nonce(c, role).is_some() && our_partial(c, role).is_none() {
+        return CoopAction::Sign;
+    }
+    if our_nonce(c, role).is_some() && peer_nonce(c, role).is_none() {
+        return CoopAction::WaitPeer;
+    }
+    if our_nonce(c, role).is_none() {
+        return CoopAction::Propose;
+    }
+    CoopAction::WaitPeer
+}
+
+fn blank_coop(
     project: &Project,
+    kind: &str,
     dest: &str,
     fee: u64,
-    journal: &mut NonceJournal,
+    outpoint: String,
+    sats: u64,
+    tx_hex: String,
+    sighash: String,
 ) -> Result<CoopFile> {
-    let role = party_role(id, &project.contract.body)?;
-    let (escrow, m_pk, c_pk, unsigned, sighash, outpoint, sats) =
-        coop_unsigned(project, dest, fee)?;
-    let idx = signer_index(role);
-    let seed = new_nonce_seed(journal)?;
-    let sh = hex::encode(sighash);
-    journal.stash_pending(&sh, &seed);
-    let ctx = tweaked_key_agg(&escrow, &m_pk, &c_pk)?;
-    let (_, pubn) = start_round(ctx, &id.secret()?, idx, seed, &sighash)?;
-    let pn = encode_pubnonce(&pubn);
-    let mut coop = CoopFile {
+    Ok(CoopFile {
         contract_id: project.contract.id()?,
-        kind: "partida".into(),
-        partida_id: Some(FIRST_PARTIDA),
+        kind: kind.to_string(),
+        partida_id: if kind == KIND_PARTIDA {
+            Some(FIRST_PARTIDA)
+        } else {
+            None
+        },
         outpoint,
         sats,
         dest: dest.trim().to_string(),
@@ -1082,73 +1251,124 @@ pub fn coop_propose(
         refund: false,
         pay_sats: None,
         refund_dest: None,
-        tx_hex: serialize_hex(&unsigned),
-        sighash: sh,
+        tx_hex,
+        sighash,
         mandante_pubnonce: None,
         contratista_pubnonce: None,
         mandante_partial: None,
         contratista_partial: None,
+    })
+}
+
+fn require_kind(coop: &CoopFile, kind: &str) -> Result<()> {
+    if coop.kind != kind {
+        bail!("este archivo es de {} , no de {kind}", coop.kind);
+    }
+    if kind == KIND_PARTIDA && coop.partida_id != Some(FIRST_PARTIDA) {
+        bail!("esta ronda no es el cierre de la partida 1");
+    }
+    Ok(())
+}
+
+/// Add our nonce. If the peer already sent theirs, also add our partial.
+/// Reuses the pending seed so a second click does not invalidate the peer.
+pub fn coop_contribute(
+    id: &Identity,
+    project: &Project,
+    dest: &str,
+    fee: u64,
+    journal: &mut NonceJournal,
+    kind: &str,
+    existing: Option<CoopFile>,
+) -> Result<CoopFile> {
+    let role = party_role(id, &project.contract.body)?;
+    let dest_use = existing
+        .as_ref()
+        .map(|c| c.dest.clone())
+        .filter(|d| !d.trim().is_empty())
+        .unwrap_or_else(|| dest.trim().to_string());
+    let fee_use = existing.as_ref().map(|c| c.fee).unwrap_or(fee);
+    let (escrow, m_pk, c_pk, unsigned, sighash, outpoint, sats) =
+        coop_unsigned(project, &dest_use, fee_use, kind)?;
+    let sh = hex::encode(sighash);
+    let mut coop = match existing {
+        Some(c) if c.sighash == sh && c.kind == kind => c,
+        Some(_) | None => blank_coop(
+            project,
+            kind,
+            &dest_use,
+            fee_use,
+            outpoint,
+            sats,
+            serialize_hex(&unsigned),
+            sh.clone(),
+        )?,
     };
-    match role {
-        Role::Mandante => coop.mandante_pubnonce = Some(pn),
-        Role::Contratista => coop.contratista_pubnonce = Some(pn),
+    if project.contract.id()? != coop.contract_id {
+        bail!("el archivo de cierre es de otro trato");
+    }
+    require_kind(&coop, kind)?;
+    let idx = signer_index(role);
+    let seed = session_seed(journal, &sh)?;
+    let ctx = tweaked_key_agg(&escrow, &m_pk, &c_pk)?;
+    let (_, pubn) = start_round(ctx, &id.secret()?, idx, seed, &sighash)?;
+    let pn = encode_pubnonce(&pubn);
+    if let Some(prev) = our_nonce(&coop, role) {
+        if prev != pn {
+            bail!("tu parte ya estaba armada. No empieces de nuevo; espera al otro y continúa.");
+        }
+    }
+    set_our_nonce(&mut coop, role, pn);
+    if let Some(peer_n) = peer_nonce(&coop, role) {
+        let peer_idx = 1 - idx;
+        let partial = our_partial_signature(
+            &m_pk,
+            &c_pk,
+            &escrow,
+            &id.secret()?,
+            idx,
+            seed,
+            peer_idx,
+            &parse_pubnonce(peer_n)?,
+            &sighash,
+        )?;
+        set_our_partial(&mut coop, role, encode_partial(&partial));
     }
     Ok(coop)
+}
+
+pub fn coop_propose(
+    id: &Identity,
+    project: &Project,
+    dest: &str,
+    fee: u64,
+    journal: &mut NonceJournal,
+) -> Result<CoopFile> {
+    coop_contribute(id, project, dest, fee, journal, KIND_PARTIDA, None)
+}
+
+pub fn coop_propose_on(
+    id: &Identity,
+    project: &Project,
+    dest: &str,
+    fee: u64,
+    journal: &mut NonceJournal,
+    kind: &str,
+    existing: Option<CoopFile>,
+) -> Result<CoopFile> {
+    coop_contribute(id, project, dest, fee, journal, kind, existing)
 }
 
 pub fn coop_sign(
     id: &Identity,
     project: &Project,
-    mut coop: CoopFile,
+    coop: CoopFile,
     journal: &mut NonceJournal,
 ) -> Result<CoopFile> {
-    if coop.kind != "partida" || coop.partida_id != Some(FIRST_PARTIDA) {
-        bail!("esta ronda no es el cierre de la partida 1");
-    }
-    if project.contract.id()? != coop.contract_id {
-        bail!("el archivo de cierre es de otro trato");
-    }
-    let role = party_role(id, &project.contract.body)?;
-    let (escrow, m_pk, c_pk, _tx, sighash, _, _) = coop_unsigned(project, &coop.dest, coop.fee)?;
-    if hex::encode(sighash) != coop.sighash {
-        bail!("el sighash del cierre no coincide; revisen destino y comisión");
-    }
-    let idx = signer_index(role);
-    let peer_idx = 1 - idx;
-    let peer_n = match role {
-        Role::Mandante => coop.contratista_pubnonce.as_deref(),
-        Role::Contratista => coop.mandante_pubnonce.as_deref(),
-    }
-    .context("falta el nonce del otro; que proponga primero")?;
-    let seed = new_nonce_seed(journal)?;
-    journal.stash_pending(&coop.sighash, &seed);
-    let ctx = tweaked_key_agg(&escrow, &m_pk, &c_pk)?;
-    let (_, pubn) = start_round(ctx, &id.secret()?, idx, seed, &sighash)?;
-    let peer = parse_pubnonce(peer_n)?;
-    let partial = our_partial_signature(
-        &m_pk,
-        &c_pk,
-        &escrow,
-        &id.secret()?,
-        idx,
-        seed,
-        peer_idx,
-        &peer,
-        &sighash,
-    )?;
-    let pn = encode_pubnonce(&pubn);
-    let ps = encode_partial(&partial);
-    match role {
-        Role::Mandante => {
-            coop.mandante_pubnonce = Some(pn);
-            coop.mandante_partial = Some(ps);
-        }
-        Role::Contratista => {
-            coop.contratista_pubnonce = Some(pn);
-            coop.contratista_partial = Some(ps);
-        }
-    }
-    Ok(coop)
+    let dest = coop.dest.clone();
+    let fee = coop.fee;
+    let kind = coop.kind.clone();
+    coop_contribute(id, project, &dest, fee, journal, &kind, Some(coop))
 }
 
 pub fn coop_finish(
@@ -1157,36 +1377,32 @@ pub fn coop_finish(
     coop: &CoopFile,
     journal: &mut NonceJournal,
 ) -> Result<String> {
-    if coop.kind != "partida" || coop.partida_id != Some(FIRST_PARTIDA) {
-        bail!("esta ronda no es el cierre de la partida 1");
-    }
     let role = party_role(id, &project.contract.body)?;
+    require_kind(coop, &coop.kind)?;
+    if project.contract.id()? != coop.contract_id {
+        bail!("el archivo de cierre es de otro trato");
+    }
     let (escrow, m_pk, c_pk, unsigned, sighash, _, _) =
-        coop_unsigned(project, &coop.dest, coop.fee)?;
+        coop_unsigned(project, &coop.dest, coop.fee, &coop.kind)?;
     if hex::encode(sighash) != coop.sighash {
         bail!("el sighash del cierre no coincide");
     }
     let idx = signer_index(role);
     let peer_idx = 1 - idx;
-    let (peer_n, peer_p) = match role {
-        Role::Mandante => (
-            coop.contratista_pubnonce
-                .as_deref()
-                .context("falta nonce del contratista")?,
-            coop.contratista_partial
-                .as_deref()
-                .context("falta firma parcial del contratista")?,
-        ),
-        Role::Contratista => (
-            coop.mandante_pubnonce
-                .as_deref()
-                .context("falta nonce del mandante")?,
-            coop.mandante_partial
-                .as_deref()
-                .context("falta firma parcial del mandante")?,
-        ),
-    };
-    let seed = journal.peek_pending(&coop.sighash)?;
+    let peer_n = peer_nonce(coop, role).context("falta la parte del otro")?;
+    let peer_p = peer_partial(coop, role).context("falta la firma del otro")?;
+    let seed = journal
+        .pending_seed(&coop.sighash)
+        .context("falta tu parte guardada; pulsa Proponer o Firmar primero")?;
+    if let Some(ours) = our_nonce(coop, role) {
+        let ctx = tweaked_key_agg(&escrow, &m_pk, &c_pk)?;
+        let (_, pubn) = start_round(ctx, &id.secret()?, idx, seed, &sighash)?;
+        if encode_pubnonce(&pubn) != ours {
+            bail!(
+                "tu parte no coincide con este archivo. No armes otra: usa el mismo envío del otro."
+            );
+        }
+    }
     let sig = combine_partials(
         &m_pk,
         &c_pk,
@@ -1203,8 +1419,16 @@ pub fn coop_finish(
     let signed = apply_key_spend_sig(unsigned, &sig);
     let hex = serialize_hex(&signed);
     let txid = signed.compute_txid().to_string();
-    let _ = project.propose_reception(FIRST_PARTIDA);
-    project.mark_paid(FIRST_PARTIDA, txid)?;
+    match coop.kind.as_str() {
+        KIND_PARTIDA => {
+            let _ = project.propose_reception(FIRST_PARTIDA);
+            project.mark_paid(FIRST_PARTIDA, txid)?;
+        }
+        KIND_BOND => {
+            project.mark_bond_released(txid)?;
+        }
+        other => bail!("cierre desconocido: {other}"),
+    }
     Ok(hex)
 }
 
@@ -1805,5 +2029,138 @@ mod tests {
         assert!(!fx.contains("USD/BTC"));
         assert!(show_main_fund_ui(PayStage::FundBondP1));
         assert!(!show_main_fund_ui(PayStage::PartidaInCourse));
+    }
+
+    fn funded_p1(m: &Identity, c: &Identity) -> (Project, Quote) {
+        let signed = signed_two_partidas(m, c);
+        let mut project = Project::from_signed(signed.clone()).unwrap();
+        let q = sign_our_quote(
+            c,
+            &signed,
+            sign_our_quote(
+                m,
+                &signed,
+                draft_quote(&signed, Some(8_000_000), "fx").unwrap(),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        lock_quote_if_ready(&mut project, &q).unwrap();
+        let m_coin = dummy_coin(Role::Mandante, 1, 5_000_000);
+        let c_coin = dummy_coin(Role::Contratista, 2, 5_000_000);
+        let psbt = build_p1_funding_psbt(&project, &m_coin, &c_coin, 400).unwrap();
+        apply_verified_p1_funding(&mut project, &serialize_hex(&psbt.unsigned_tx)).unwrap();
+        (project, q)
+    }
+
+    #[test]
+    fn merge_coop_keeps_both_nonces() {
+        let a = CoopFile {
+            contract_id: "x".into(),
+            kind: KIND_PARTIDA.into(),
+            partida_id: Some(1),
+            outpoint: "aa:0".into(),
+            sats: 1,
+            dest: "d".into(),
+            fee: 250,
+            refund: false,
+            pay_sats: None,
+            refund_dest: None,
+            tx_hex: "00".into(),
+            sighash: "sh".into(),
+            mandante_pubnonce: Some("m".into()),
+            contratista_pubnonce: None,
+            mandante_partial: None,
+            contratista_partial: None,
+        };
+        let mut b = a.clone();
+        b.mandante_pubnonce = None;
+        b.contratista_pubnonce = Some("c".into());
+        let m = merge_coop_file(Some(a), b);
+        assert_eq!(m.mandante_pubnonce.as_deref(), Some("m"));
+        assert_eq!(m.contratista_pubnonce.as_deref(), Some("c"));
+    }
+
+    #[test]
+    fn coop_both_propose_then_sign_reuses_seed_and_finishes() {
+        let (m, c) = pair_ids();
+        let (mut project, _q) = funded_p1(&m, &c);
+        let dest = dummy_coin(Role::Contratista, 9, 1_000).address;
+        let mut jm = NonceJournal::default();
+        let mut jc = NonceJournal::default();
+        let a = coop_propose_on(&m, &project, &dest, 250, &mut jm, KIND_PARTIDA, None).unwrap();
+        let b = coop_propose_on(&c, &project, &dest, 250, &mut jc, KIND_PARTIDA, None).unwrap();
+        assert_eq!(a.sighash, b.sighash);
+        let m_nonce = a.mandante_pubnonce.clone();
+        let merged = merge_coop_file(Some(a), b);
+        assert!(merged.mandante_pubnonce.is_some());
+        assert!(merged.contratista_pubnonce.is_some());
+        let signed_c = coop_sign(&c, &project, merged.clone(), &mut jc).unwrap();
+        assert_eq!(signed_c.mandante_pubnonce, m_nonce);
+        let signed_m = coop_sign(&m, &project, signed_c, &mut jm).unwrap();
+        assert_eq!(signed_m.mandante_pubnonce, m_nonce);
+        assert!(signed_m.contratista_partial.is_some());
+        assert!(signed_m.mandante_partial.is_some());
+        let hex = coop_finish(&m, &mut project, &signed_m, &mut jm).unwrap();
+        assert!(!hex.is_empty());
+        assert!(matches!(
+            project.partida(1).unwrap().state,
+            PartidaStatus::Paid { .. }
+        ));
+        assert!(!show_main_fund_ui(pay_stage(Some(&project), None)));
+        assert_eq!(
+            coop_action(Some(&signed_m), Role::Mandante),
+            CoopAction::Finish
+        );
+    }
+
+    #[test]
+    fn bond_coop_after_p1_paid_closes_later_partidas() {
+        let (m, c) = pair_ids();
+        let (mut project, _q) = funded_p1(&m, &c);
+        let dest = dummy_coin(Role::Contratista, 9, 1_000).address;
+        let mut jm = NonceJournal::default();
+        let mut jc = NonceJournal::default();
+        let p1 = coop_propose_on(&m, &project, &dest, 250, &mut jm, KIND_PARTIDA, None).unwrap();
+        let p1 = coop_sign(&c, &project, p1, &mut jc).unwrap();
+        coop_finish(&m, &mut project, &p1, &mut jm).unwrap();
+        assert!(p1_blocks_bond_return(&project) == false);
+        assert!(can_open_stop_wizard(&project));
+
+        let mut jm2 = NonceJournal::default();
+        let mut jc2 = NonceJournal::default();
+        let bond = coop_propose_on(&c, &project, &dest, 250, &mut jc2, KIND_BOND, None).unwrap();
+        assert_eq!(bond.kind, KIND_BOND);
+        let bond = coop_sign(&m, &project, bond, &mut jm2).unwrap();
+        let hex = coop_finish(&c, &mut project, &bond, &mut jc2).unwrap();
+        assert!(!hex.is_empty());
+        assert!(matches!(project.bond, BondStatus::Released { .. }));
+        assert!(matches!(
+            project.status,
+            hbp_core::ProjectStatus::Closed | hbp_core::ProjectStatus::Cancelled
+        ));
+        assert_eq!(pay_stage(Some(&project), None), PayStage::AllClosed);
+        assert!(!partida_ui_enabled(&project, 2));
+        assert!(spanish_now(Some(&project), None).contains("detenida"));
+    }
+
+    #[test]
+    fn rotating_seed_is_rejected_on_finish() {
+        let (m, c) = pair_ids();
+        let (mut project, _q) = funded_p1(&m, &c);
+        let dest = dummy_coin(Role::Contratista, 9, 1_000).address;
+        let mut jm = NonceJournal::default();
+        let mut jc = NonceJournal::default();
+        let proposed =
+            coop_propose_on(&m, &project, &dest, 250, &mut jm, KIND_PARTIDA, None).unwrap();
+        let signed = coop_sign(&c, &project, proposed.clone(), &mut jc).unwrap();
+        // Simulate the old bug: mandante generates a new seed for the same sighash.
+        let rogue = new_nonce_seed(&mut jm).unwrap();
+        jm.stash_pending(&proposed.sighash, &rogue);
+        let err = coop_finish(&m, &mut project, &signed, &mut jm).unwrap_err();
+        assert!(
+            err.to_string().contains("no coincide") || err.to_string().contains("no armes"),
+            "{err}"
+        );
     }
 }

@@ -1,7 +1,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use crate::pay::{PayCoins, PayUiDraft};
+use crate::pay::{coop_filename, merge_coop_file, PayCoins, PayUiDraft};
 use anyhow::{bail, Context, Result};
 use hbp_bitcoin::{import_watch, CoopFile, Identity, OfferedCoin, WatchAccount};
 use hbp_core::{
@@ -563,17 +563,21 @@ impl WorkStore {
         Ok(read_json_opt(&self.pay_dir(slug).join("session.json"))?.unwrap_or_default())
     }
 
-    pub fn save_pay_coop(&self, slug: &str, coop: &CoopFile) -> Result<()> {
+    pub fn save_pay_coop(&self, slug: &str, coop: &CoopFile) -> Result<CoopFile> {
         let dir = self.ensure_pay_dir(slug)?;
-        fs::write(
-            dir.join("08-coop.json"),
-            serde_json::to_string_pretty(coop)?,
-        )?;
-        Ok(())
+        let path = dir.join(coop_filename(&coop.kind));
+        let prev = read_json_opt(&path)?;
+        let merged = merge_coop_file(prev, coop.clone());
+        fs::write(&path, serde_json::to_string_pretty(&merged)?)?;
+        Ok(merged)
     }
 
     pub fn load_pay_coop(&self, slug: &str) -> Result<Option<CoopFile>> {
-        read_json_opt(&self.pay_dir(slug).join("08-coop.json"))
+        self.load_pay_coop_kind(slug, "partida")
+    }
+
+    pub fn load_pay_coop_kind(&self, slug: &str, kind: &str) -> Result<Option<CoopFile>> {
+        read_json_opt(&self.pay_dir(slug).join(coop_filename(kind)))
     }
 
     pub fn save_pay_nonces(&self, slug: &str, journal: &NonceJournal) -> Result<()> {
