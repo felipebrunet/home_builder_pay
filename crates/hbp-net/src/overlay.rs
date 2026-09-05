@@ -167,11 +167,12 @@ impl OverlayHandle {
     }
 
     pub fn announce_work(&self, ann: &WorkAnnounce) -> crate::Result<[u8; 32]> {
+        // Persona is the product Buscar key. Obra title is secondary.
+        if !ann.person_name.trim().is_empty() {
+            self.store_record(person_topic_key(&ann.person_name), ann)?;
+        }
         let key = work_topic_key(&ann.work_name);
         self.store_record(key, ann)?;
-        if !ann.person_name.trim().is_empty() {
-            let _ = self.store_record(person_topic_key(&ann.person_name), ann);
-        }
         Ok(key)
     }
 
@@ -225,12 +226,13 @@ impl OverlayHandle {
         }
     }
 
-    /// DHT by obra name, then by mandante name, then public rendezvous.
+    /// Persona name first (primary), then obra title, then the public board.
+    /// DHT errors must not skip the board — two isolated onions rely on it.
     pub fn discover_work(&self, query: &str) -> crate::Result<Option<WorkAnnounce>> {
-        if let Some(ann) = self.lookup_work(query)? {
+        if let Ok(Some(ann)) = self.lookup_person(query) {
             return Ok(Some(ann));
         }
-        if let Some(ann) = self.lookup_person(query)? {
+        if let Ok(Some(ann)) = self.lookup_work(query) {
             return Ok(Some(ann));
         }
         crate::rendezvous::lookup_announce(self.socks(), query)
@@ -549,6 +551,33 @@ mod tests {
         assert_eq!(found.offer_id.as_deref(), Some("ab"));
         let by_person = b.lookup_person("don josé").unwrap().expect("person");
         assert_eq!(by_person.work_name, "Casa Norte");
+        let via_discover = b
+            .discover_work("Don José")
+            .unwrap()
+            .expect("persona primary");
+        assert_eq!(via_discover.work_name, "Casa Norte");
+    }
+
+    #[test]
+    fn discover_persona_name_opens_obra() {
+        let a = bind_local();
+        let b = bind_local();
+        let a_addr = PeerAddr::new("127.0.0.1", a.local_addr().port());
+        assert_eq!(b.bootstrap(&[a_addr]).unwrap(), 1);
+        a.announce_work(&WorkAnnounce {
+            work_name: "casa2".into(),
+            onion: "felipe.onion".into(),
+            offer_id: None,
+            role: "mandante".into(),
+            person_name: "Felipe".into(),
+        })
+        .unwrap();
+        let found = b.discover_work("Felipe").unwrap().expect("buscar Felipe");
+        assert_eq!(found.work_name, "casa2");
+        assert_eq!(found.person_name, "Felipe");
+        assert_eq!(found.onion, "felipe.onion");
+        let by_obra = b.discover_work("casa2").unwrap().expect("obra fallback");
+        assert_eq!(by_obra.person_name, "Felipe");
     }
 
     #[test]

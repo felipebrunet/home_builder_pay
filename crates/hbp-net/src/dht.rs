@@ -42,12 +42,14 @@ pub fn normalize_work_name(name: &str) -> String {
         .join(" ")
 }
 
+/// Obra title key: SHA-256(`hbp-work:{normalized}`), e.g. `hbp-work:casa2`. Secondary.
 pub fn work_topic_key(work_name: &str) -> [u8; 32] {
     let n = normalize_work_name(work_name);
     dht_key(&format!("hbp-work:{n}"))
 }
 
-/// Directory key: contratista looks up the mandante by their display name.
+/// Mandante persona key: SHA-256(`hbp-person:{normalized}`), e.g. `hbp-person:felipe`.
+/// Primary Buscar path — not the obra folder/title.
 pub fn person_topic_key(person_name: &str) -> [u8; 32] {
     let n = normalize_work_name(person_name);
     dht_key(&format!("hbp-person:{n}"))
@@ -80,6 +82,15 @@ mod tests {
         let old = r#"{"work_name":"Casa","onion":"a.onion","offer_id":null,"role":"mandante"}"#;
         let a: WorkAnnounce = serde_json::from_str(old).unwrap();
         assert!(a.person_name.is_empty());
+    }
+
+    #[test]
+    fn persona_announce_key_is_not_obra_key() {
+        assert_eq!(person_topic_key("Felipe"), dht_key("hbp-person:felipe"));
+        assert_eq!(person_topic_key("  FELIPE "), dht_key("hbp-person:felipe"));
+        assert_eq!(work_topic_key("casa2"), dht_key("hbp-work:casa2"));
+        assert_ne!(person_topic_key("Felipe"), work_topic_key("Felipe"));
+        assert_ne!(person_topic_key("Felipe"), work_topic_key("casa2"));
     }
 }
 

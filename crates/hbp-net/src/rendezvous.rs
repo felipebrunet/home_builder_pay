@@ -23,27 +23,49 @@ pub fn rendezvous_topic(work_name: &str) -> String {
     format!("hbp{}", hex::encode(&h[..12]))
 }
 
-pub fn publish_announce(socks: Option<SocketAddr>, ann: &WorkAnnounce) -> crate::Result<String> {
-    let body = serde_json::to_string(ann)?;
-    let mut topics = vec![rendezvous_topic(&ann.work_name)];
+/// ntfy topics for an announce. Persona first (primary Buscar), then obra title.
+pub fn announce_topics(ann: &WorkAnnounce) -> Vec<String> {
+    let mut topics = Vec::new();
     if !ann.person_name.trim().is_empty() {
         topics.push(rendezvous_topic(&ann.person_name));
     }
+    let work = rendezvous_topic(&ann.work_name);
+    if !topics.iter().any(|t| t == &work) {
+        topics.push(work);
+    }
+    topics
+}
+
+pub fn publish_announce(socks: Option<SocketAddr>, ann: &WorkAnnounce) -> crate::Result<String> {
+    let body = serde_json::to_string(ann)?;
+    let topics = announce_topics(ann);
     let mut last = crate::Error::msg("no rendezvous host");
-    let mut ok = None;
-    for topic in topics {
+    let mut primary_ok = None;
+    let mut any_ok = None;
+    for (i, topic) in topics.iter().enumerate() {
+        let mut topic_ok = None;
         for host in NTFY_HOSTS {
             let url = format!("{host}/{topic}");
             match put_text(socks, &url, &body) {
                 Ok(_) => {
-                    ok = Some(format!("{host}/{topic}"));
+                    topic_ok = Some(url);
                     break;
                 }
                 Err(e) => last = e,
             }
         }
+        if i == 0 {
+            primary_ok = topic_ok.clone();
+        }
+        if topic_ok.is_some() {
+            any_ok = topic_ok;
+        }
     }
-    ok.ok_or(last)
+    // Persona is the product path. Do not report success if only the obra board landed.
+    if !ann.person_name.trim().is_empty() {
+        return primary_ok.ok_or(last);
+    }
+    any_ok.ok_or(last)
 }
 
 pub fn lookup_announce(
@@ -108,6 +130,17 @@ mod tests {
         );
         assert!(rendezvous_topic("Casa Norte").starts_with("hbp"));
         assert_ne!(rendezvous_topic("Casa Norte"), rendezvous_topic("Casa Sur"));
+        assert_ne!(rendezvous_topic("Felipe"), rendezvous_topic("casa2"));
+        let ann = WorkAnnounce {
+            work_name: "casa2".into(),
+            onion: "x.onion".into(),
+            offer_id: None,
+            role: "mandante".into(),
+            person_name: "Felipe".into(),
+        };
+        let topics = announce_topics(&ann);
+        assert_eq!(topics[0], rendezvous_topic("Felipe"));
+        assert_eq!(topics[1], rendezvous_topic("casa2"));
     }
 
     #[test]

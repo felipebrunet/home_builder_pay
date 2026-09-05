@@ -30,7 +30,9 @@ pub use dht::{
 pub use fx::{fiat_ticker, preview_sats, quote_btc, FxQuote};
 pub use message::{NetMessage, FILE_FALLBACK};
 pub use overlay::{OverlayConfig, OverlayHandle};
-pub use rendezvous::{latest_announce, lookup_announce, publish_announce, rendezvous_topic};
+pub use rendezvous::{
+    announce_topics, latest_announce, lookup_announce, publish_announce, rendezvous_topic,
+};
 pub use tor::{
     bring_up_tor, bring_up_tor_with_hint, default_socks_addr, default_windows_tor_paths,
     discover_socks, find_tor_binary, probe_socks_port, read_onion_hostname, socks5_connect,

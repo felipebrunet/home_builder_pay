@@ -1669,13 +1669,17 @@ impl App {
         } else {
             self.own_onion.trim().to_string()
         };
+        let person = self.prefs.display_name().to_string();
+        if person.is_empty() {
+            return self.fail("Escribe tu nombre arriba (así te busca el maestro).");
+        }
         let slug = entry.slug.clone();
         let ann = WorkAnnounce {
             work_name: entry.name.clone(),
             onion,
             offer_id: None,
             role: "mandante".into(),
-            person_name: self.prefs.display_name().to_string(),
+            person_name: person,
         };
         self.start_job("publicando la obra", move |tx| {
             let dht = o.announce_work(&ann).map_err(|e| e.to_string());
