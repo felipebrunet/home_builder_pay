@@ -15,7 +15,10 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
-use crate::dht::{parse_node_id, work_topic_key, xor_distance, DhtRecord, PeerInfo, WorkAnnounce};
+use crate::dht::{
+    parse_node_id, person_topic_key, work_topic_key, xor_distance, DhtRecord, PeerInfo,
+    WorkAnnounce,
+};
 use crate::message::NetMessage;
 use crate::wire::{connect_peer, read_frame, write_frame, Op, PeerAddr, ResBody, WireMsg};
 
@@ -165,18 +168,24 @@ impl OverlayHandle {
 
     pub fn announce_work(&self, ann: &WorkAnnounce) -> crate::Result<[u8; 32]> {
         let key = work_topic_key(&ann.work_name);
-        let publisher = Some(self.advertised());
+        self.store_record(key, ann)?;
+        if !ann.person_name.trim().is_empty() {
+            let _ = self.store_record(person_topic_key(&ann.person_name), ann);
+        }
+        Ok(key)
+    }
+
+    fn store_record(&self, key: [u8; 32], ann: &WorkAnnounce) -> crate::Result<()> {
         let record = DhtRecord {
             key: hex::encode(key),
             value: serde_json::to_vec(ann)?,
-            publisher,
+            publisher: Some(self.advertised()),
             ttl_secs: 86_400,
         };
         {
             let mut s = self.state.lock().expect("dht");
             s.store.insert(key, record.clone());
         }
-        // Small overlay: replicate to every known peer, then the k-closest walk.
         let mut targets = self.peers();
         for p in self.iterative_find_node(key) {
             if targets.iter().all(|x| x.node_id != p.node_id) {
@@ -191,12 +200,19 @@ impl OverlayHandle {
                 },
             );
         }
-        Ok(key)
+        Ok(())
     }
 
     /// DHT lookup (normalized name). Does not hit the public rendezvous.
     pub fn lookup_work(&self, work_name: &str) -> crate::Result<Option<WorkAnnounce>> {
-        let key = work_topic_key(work_name);
+        self.lookup_key(work_topic_key(work_name))
+    }
+
+    pub fn lookup_person(&self, person_name: &str) -> crate::Result<Option<WorkAnnounce>> {
+        self.lookup_key(person_topic_key(person_name))
+    }
+
+    fn lookup_key(&self, key: [u8; 32]) -> crate::Result<Option<WorkAnnounce>> {
         match self.iterative_find_value(key)? {
             Some(rec) => Ok(Some(serde_json::from_slice(&rec.value)?)),
             None => {
@@ -209,12 +225,15 @@ impl OverlayHandle {
         }
     }
 
-    /// DHT first, then public rendezvous (ntfy via Tor SOCKS when configured).
-    pub fn discover_work(&self, work_name: &str) -> crate::Result<Option<WorkAnnounce>> {
-        if let Some(ann) = self.lookup_work(work_name)? {
+    /// DHT by obra name, then by mandante name, then public rendezvous.
+    pub fn discover_work(&self, query: &str) -> crate::Result<Option<WorkAnnounce>> {
+        if let Some(ann) = self.lookup_work(query)? {
             return Ok(Some(ann));
         }
-        crate::rendezvous::lookup_announce(self.socks(), work_name)
+        if let Some(ann) = self.lookup_person(query)? {
+            return Ok(Some(ann));
+        }
+        crate::rendezvous::lookup_announce(self.socks(), query)
     }
 
     /// Publish to the public name board. Best-effort; DHT announce is separate.
@@ -521,12 +540,15 @@ mod tests {
             onion: "alice.onion".into(),
             offer_id: Some("ab".into()),
             role: "mandante".into(),
+            person_name: "Don José".into(),
         })
         .unwrap();
         // B must learn the record via FIND_VALUE on A.
         let found = b.lookup_work("casa  NORTE").unwrap().expect("lookup");
         assert_eq!(found.onion, "alice.onion");
         assert_eq!(found.offer_id.as_deref(), Some("ab"));
+        let by_person = b.lookup_person("don josé").unwrap().expect("person");
+        assert_eq!(by_person.work_name, "Casa Norte");
     }
 
     #[test]
@@ -540,6 +562,7 @@ mod tests {
             onion: "x.onion".into(),
             offer_id: None,
             role: "mandante".into(),
+            person_name: String::new(),
         })
         .unwrap();
         let c = bind_local();
@@ -561,6 +584,7 @@ mod tests {
             onion: "a.onion".into(),
             offer_id: None,
             role: "mandante".into(),
+            person_name: String::new(),
         })
         .unwrap();
         let found = c.lookup_work("Obra").unwrap().expect("c finds via b→a");

@@ -23,7 +23,10 @@ pub use bundle::{
     download_expert_bundle, expert_bundle_url, expert_bundle_url_for, extract_expert_bundle,
     find_tor_in_dir, tor_cache_dir, TOR_BUNDLE_VERSION,
 };
-pub use dht::{dht_key, normalize_work_name, work_topic_key, DhtRecord, PeerInfo, WorkAnnounce};
+pub use dht::{
+    dht_key, normalize_work_name, person_topic_key, work_topic_key, DhtRecord, PeerInfo,
+    WorkAnnounce,
+};
 pub use fx::{fiat_ticker, preview_sats, quote_btc, FxQuote};
 pub use message::{NetMessage, FILE_FALLBACK};
 pub use overlay::{OverlayConfig, OverlayHandle};

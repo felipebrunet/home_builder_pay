@@ -19,6 +19,9 @@ pub struct WorkAnnounce {
     pub onion: String,
     pub offer_id: Option<String>,
     pub role: String,
+    /// Mandante display name (“Don José”). Empty on old records.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub person_name: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -44,6 +47,12 @@ pub fn work_topic_key(work_name: &str) -> [u8; 32] {
     dht_key(&format!("hbp-work:{n}"))
 }
 
+/// Directory key: contratista looks up the mandante by their display name.
+pub fn person_topic_key(person_name: &str) -> [u8; 32] {
+    let n = normalize_work_name(person_name);
+    dht_key(&format!("hbp-person:{n}"))
+}
+
 pub fn xor_distance(a: &[u8; 32], b: &[u8; 32]) -> [u8; 32] {
     let mut d = [0u8; 32];
     for i in 0..32 {
@@ -63,6 +72,14 @@ mod tests {
             work_topic_key("  casa   NORTE ")
         );
         assert_ne!(work_topic_key("Casa Norte"), work_topic_key("Casa Sur"));
+        assert_eq!(
+            person_topic_key("Don José"),
+            person_topic_key("  don   josé ")
+        );
+        assert_ne!(person_topic_key("Don José"), work_topic_key("Don José"));
+        let old = r#"{"work_name":"Casa","onion":"a.onion","offer_id":null,"role":"mandante"}"#;
+        let a: WorkAnnounce = serde_json::from_str(old).unwrap();
+        assert!(a.person_name.is_empty());
     }
 }
 

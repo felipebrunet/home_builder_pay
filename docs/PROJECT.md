@@ -66,6 +66,7 @@ Checkpoint de sesión. Actualizar **esta sección** cada vez que se cierre un hi
 | 2026-09-04 | UX: plazos en fecha/hora local (no unix). Un botón **Conectar red**. SOCKS 9050 **y** 9150 (Tor Browser). Tema claro/oscuro. Contraste de campos. Flujo obra vs técnico. | `hbp-app`, [WINDOWS.md](WINDOWS.md) |
 | 2026-09-04 | Un clic **encontrable**: descarga Expert Bundle oficial si falta, spawn HS, onion en el panel. 9150 = solo salida. | [NETWORK.md](NETWORK.md), [WINDOWS.md](WINDOWS.md) |
 | 2026-09-04 | Roles (mandante crea; contratista busca). DHT por nombre + ntfy. Oferta/aceptar/commit por Tor. xpub local. FX preview. UI no bloquea. | `hbp-app`, [NETWORK.md](NETWORK.md) |
+| 2026-09-05 | Step 1 UI: persona vs obra vs trato, hogares distintos, card «Qué hacer ahora», log quieto. | [UI_FLOW.md](UI_FLOW.md) |
 
 Default de **producto** = **`fee_burn`**. JSON viejo sin campo `dispute` sigue siendo `unwind` (catálogo). MAD y árbitro minados como legacy. Catálogo: **136 PASS**, **6 NO TEST** (humano). **0 FAIL**.
 

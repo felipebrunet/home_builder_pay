@@ -16,6 +16,9 @@ pub struct WorkEntry {
     pub slug: String,
     pub role: Role,
     pub network: Network,
+    /// Other party's display name (e.g. mandante “Don José”). Never a folder slug.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub peer_name: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -39,6 +42,13 @@ pub struct UiPrefs {
     /// Who is using this computer. Contratista never sees "Crear obra".
     #[serde(default)]
     pub role: Role,
+    #[serde(default)]
+    pub mandante_name: String,
+    #[serde(default)]
+    pub contratista_name: String,
+    /// Notes panel starts collapsed so it does not eat the obra view.
+    #[serde(default)]
+    pub log_open: bool,
 }
 
 fn default_dark() -> bool {
@@ -50,7 +60,35 @@ impl Default for UiPrefs {
         Self {
             dark: true,
             role: Role::Mandante,
+            mandante_name: String::new(),
+            contratista_name: String::new(),
+            log_open: false,
         }
+    }
+}
+
+impl UiPrefs {
+    pub fn display_name(&self) -> &str {
+        match self.role {
+            Role::Mandante => self.mandante_name.trim(),
+            Role::Contratista => self.contratista_name.trim(),
+        }
+    }
+
+    pub fn set_display_name(&mut self, name: impl Into<String>) {
+        let name = name.into().trim().to_string();
+        match self.role {
+            Role::Mandante => self.mandante_name = name,
+            Role::Contratista => self.contratista_name = name,
+        }
+    }
+
+    pub fn first_run(&self) -> bool {
+        self.mandante_name.trim().is_empty() && self.contratista_name.trim().is_empty()
+    }
+
+    pub fn needs_name(&self) -> bool {
+        self.display_name().is_empty()
     }
 }
 
@@ -177,6 +215,7 @@ impl WorkStore {
             slug,
             role,
             network,
+            peer_name: String::new(),
         };
         self.index.works.push(entry.clone());
         self.save_index()?;
@@ -342,12 +381,32 @@ impl WorkStore {
     }
 
     /// Contratista: open or create a local folder for a work found on the net.
-    pub fn ensure_contratista_work(&mut self, name: &str) -> Result<WorkEntry> {
+    pub fn ensure_contratista_work(
+        &mut self,
+        name: &str,
+        peer_name: Option<&str>,
+    ) -> Result<WorkEntry> {
         let slug = slugify(name);
-        if let Some(e) = self.index.works.iter().find(|w| w.slug == slug).cloned() {
-            return Ok(e);
+        let peer = peer_name
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(|s| s.to_string());
+        if let Some(pos) = self.index.works.iter().position(|w| w.slug == slug) {
+            if let Some(p) = peer {
+                self.index.works[pos].peer_name = p;
+                self.save_index()?;
+            }
+            return Ok(self.index.works[pos].clone());
         }
-        self.create_product_work(name, Role::Contratista, None)
+        let mut e = self.create_product_work(name, Role::Contratista, None)?;
+        if let Some(p) = peer {
+            if let Some(w) = self.index.works.iter_mut().find(|w| w.slug == e.slug) {
+                w.peer_name = p.clone();
+                e.peer_name = p;
+                self.save_index()?;
+            }
+        }
+        Ok(e)
     }
 }
 
@@ -566,6 +625,7 @@ mod tests {
                 slug: "x".into(),
                 role: Role::Mandante,
                 network: Network::Bitcoin,
+                peer_name: String::new(),
             },
             identity: id,
             draft: None,
@@ -619,10 +679,14 @@ mod tests {
             .save_prefs(&UiPrefs {
                 dark: false,
                 role: Role::Contratista,
+                contratista_name: "Don José".into(),
+                ..UiPrefs::default()
             })
             .unwrap();
-        assert!(!store.load_prefs().dark);
-        assert_eq!(store.load_prefs().role, Role::Contratista);
+        let back = store.load_prefs();
+        assert!(!back.dark);
+        assert_eq!(back.role, Role::Contratista);
+        assert_eq!(back.display_name(), "Don José");
         let _ = fs::remove_dir_all(&tmp);
     }
 
@@ -631,10 +695,16 @@ mod tests {
         let tmp = std::env::temp_dir().join(format!("hbp-app-ct-{}", std::process::id()));
         let _ = fs::remove_dir_all(&tmp);
         let mut store = WorkStore::open(tmp.join("a")).unwrap();
-        let e = store.ensure_contratista_work("Casa Norte").unwrap();
+        let e = store
+            .ensure_contratista_work("Casa Norte", Some("Doña Ana"))
+            .unwrap();
         assert_eq!(e.role, Role::Contratista);
+        assert_eq!(e.peer_name, "Doña Ana");
         assert_eq!(
-            store.ensure_contratista_work("Casa Norte").unwrap().slug,
+            store
+                .ensure_contratista_work("Casa Norte", None)
+                .unwrap()
+                .slug,
             e.slug
         );
         store.save_peer_onion(&e.slug, "abc.onion").unwrap();

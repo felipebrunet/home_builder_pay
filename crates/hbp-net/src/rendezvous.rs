@@ -24,17 +24,26 @@ pub fn rendezvous_topic(work_name: &str) -> String {
 }
 
 pub fn publish_announce(socks: Option<SocketAddr>, ann: &WorkAnnounce) -> crate::Result<String> {
-    let topic = rendezvous_topic(&ann.work_name);
     let body = serde_json::to_string(ann)?;
+    let mut topics = vec![rendezvous_topic(&ann.work_name)];
+    if !ann.person_name.trim().is_empty() {
+        topics.push(rendezvous_topic(&ann.person_name));
+    }
     let mut last = crate::Error::msg("no rendezvous host");
-    for host in NTFY_HOSTS {
-        let url = format!("{host}/{topic}");
-        match put_text(socks, &url, &body) {
-            Ok(_) => return Ok(format!("{host}/{topic}")),
-            Err(e) => last = e,
+    let mut ok = None;
+    for topic in topics {
+        for host in NTFY_HOSTS {
+            let url = format!("{host}/{topic}");
+            match put_text(socks, &url, &body) {
+                Ok(_) => {
+                    ok = Some(format!("{host}/{topic}"));
+                    break;
+                }
+                Err(e) => last = e,
+            }
         }
     }
-    Err(last)
+    ok.ok_or(last)
 }
 
 pub fn lookup_announce(
@@ -108,6 +117,7 @@ mod tests {
             onion: "abc.onion".into(),
             offer_id: None,
             role: "mandante".into(),
+            person_name: "Don José".into(),
         };
         let bare = serde_json::to_string(&ann).unwrap();
         assert_eq!(latest_announce(&bare).unwrap().onion, "abc.onion");
