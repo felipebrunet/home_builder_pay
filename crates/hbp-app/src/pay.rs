@@ -46,6 +46,61 @@ pub enum PayStage {
     AllClosed,
 }
 
+/// Staged funding handshake (one primary action each).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FundHandshakeStep {
+    NeedWatch,
+    ScanCoins,
+    PickCoin,
+    SendPartial,
+    WaitPeerComplete,
+    CompleteIncoming,
+    ExportAndSign,
+    WaitChain,
+}
+
+impl FundHandshakeStep {
+    pub fn title_es(self) -> &'static str {
+        match self {
+            Self::NeedWatch => "Guarda tu xpub",
+            Self::ScanCoins => "Mis monedas",
+            Self::PickCoin => "Mis monedas",
+            Self::SendPartial => "Armar / enviar parcial",
+            Self::WaitPeerComplete => "Esperar / completar",
+            Self::CompleteIncoming => "Esperar / completar",
+            Self::ExportAndSign => "Firmar",
+            Self::WaitChain => "Esperando en cadena",
+        }
+    }
+}
+
+/// Decide the single funding step from local watch / PSBT / chain flags.
+pub fn fund_handshake_step(
+    has_watch: bool,
+    has_scan: bool,
+    has_our_coin: bool,
+    inputs: Option<usize>,
+    sigs: usize,
+    we_own_partial_input: bool,
+    awaiting_chain: bool,
+) -> FundHandshakeStep {
+    if !has_watch {
+        return FundHandshakeStep::NeedWatch;
+    }
+    if awaiting_chain || sigs >= 1 {
+        return FundHandshakeStep::WaitChain;
+    }
+    match inputs {
+        Some(n) if n >= 2 => FundHandshakeStep::ExportAndSign,
+        Some(1) if we_own_partial_input => FundHandshakeStep::WaitPeerComplete,
+        Some(1) if has_our_coin => FundHandshakeStep::CompleteIncoming,
+        Some(1) => FundHandshakeStep::PickCoin,
+        _ if has_our_coin => FundHandshakeStep::SendPartial,
+        _ if has_scan => FundHandshakeStep::PickCoin,
+        _ => FundHandshakeStep::ScanCoins,
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PayUiDraft {
     #[serde(default)]
@@ -84,6 +139,8 @@ pub struct PayUiDraft {
     pub selected_outpoint: String,
     #[serde(default)]
     pub onesig_hex: String,
+    #[serde(default)]
+    pub awaiting_chain: bool,
 }
 
 fn default_fee() -> String {
@@ -111,6 +168,7 @@ impl Default for PayUiDraft {
             coop_paste: String::new(),
             selected_outpoint: String::new(),
             onesig_hex: String::new(),
+            awaiting_chain: false,
         }
     }
 }
@@ -1130,5 +1188,46 @@ mod tests {
             apply_verified_p1_funding(&mut project, &serialize_hex(&complete.unsigned_tx)).unwrap();
         assert!(!txid.is_empty());
         assert!(!partida_ui_enabled(&project, 2));
+    }
+
+    #[test]
+    fn fund_handshake_steps_are_sequential() {
+        use FundHandshakeStep::*;
+        assert_eq!(
+            fund_handshake_step(false, false, false, None, 0, false, false),
+            NeedWatch
+        );
+        assert_eq!(
+            fund_handshake_step(true, false, false, None, 0, false, false),
+            ScanCoins
+        );
+        assert_eq!(
+            fund_handshake_step(true, true, false, None, 0, false, false),
+            PickCoin
+        );
+        assert_eq!(
+            fund_handshake_step(true, true, true, None, 0, false, false),
+            SendPartial
+        );
+        assert_eq!(
+            fund_handshake_step(true, true, true, Some(1), 0, true, false),
+            WaitPeerComplete
+        );
+        assert_eq!(
+            fund_handshake_step(true, true, true, Some(1), 0, false, false),
+            CompleteIncoming
+        );
+        assert_eq!(
+            fund_handshake_step(true, true, true, Some(2), 0, false, false),
+            ExportAndSign
+        );
+        assert_eq!(
+            fund_handshake_step(true, true, true, Some(2), 1, false, false),
+            WaitChain
+        );
+        assert_eq!(
+            fund_handshake_step(true, true, true, Some(2), 0, false, true),
+            WaitChain
+        );
     }
 }

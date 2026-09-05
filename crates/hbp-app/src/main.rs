@@ -9,13 +9,14 @@ use hbp_app::{
     apply_incoming_quote, apply_verified_p1_funding, build_our_partial, classify_funding_psbt,
     coin_from_watched, complete_incoming_partial, completed_steps, contratista_accept, coop_finish,
     coop_propose, coop_sign, default_works_root, draft_equal_stages, draft_quote, escrow_addrs,
-    export_backup, format_unix_local_es, funding_wire, funding_wire_hex, hex_artifact,
-    hex_from_artifact, import_backup, import_signed, lock_quote_if_ready, mandante_commit,
-    next_step, our_funding_need, parse_fee, parse_psbt, partida_ui_enabled, party_role, pay_stage,
-    preview_quote_sats, price_minor_from_major, psbt_to_hex, quote_fully_signed, read_backup_file,
-    sign_our_quote, spanish_now, suggest_watched, validate_deadline_order, write_backup_file,
-    DeadlineFields, NextKind, PayStage, PayUiDraft, UiPrefs, WorkEntry, WorkProgress, WorkStore,
-    ART_COOP, ART_ONESIG, ART_PARTIAL, ART_PSBT, ART_TX, MONTHS_ES,
+    export_backup, format_unix_local_es, fund_handshake_step, funding_wire, funding_wire_hex,
+    hex_artifact, hex_from_artifact, import_backup, import_signed, lock_quote_if_ready,
+    mandante_commit, next_step, our_funding_need, parse_fee, parse_psbt, partida_ui_enabled,
+    party_role, pay_stage, preview_quote_sats, price_minor_from_major, psbt_to_hex,
+    quote_fully_signed, read_backup_file, sign_our_quote, spanish_now, suggest_watched,
+    validate_deadline_order, write_backup_file, DeadlineFields, FundHandshakeStep, NextKind,
+    PayStage, PayUiDraft, UiPrefs, WorkEntry, WorkProgress, WorkStore, ART_COOP, ART_ONESIG,
+    ART_PARTIAL, ART_PSBT, ART_TX, MONTHS_ES,
 };
 use hbp_bitcoin::{
     address_at, default_esplora_urls, scan_watch, sign_body, CoopFile, Identity, OfferedCoin,
@@ -362,6 +363,24 @@ impl App {
                     self.busy = None;
                     self.esplora_base = base.clone();
                     let n = scan.utxos.len();
+                    if self.pay.selected_outpoint.is_empty() {
+                        if let Some(slug) = self.selected.clone() {
+                            if let (Ok(project), Ok(id)) = (
+                                self.store.ensure_pay_project(&slug),
+                                self.store.load_identity(&slug),
+                            ) {
+                                if let Ok(role) = party_role(&id, &project.contract.body) {
+                                    let fee = parse_fee(&self.pay.fee_sats).unwrap_or(500);
+                                    if let Ok(need) = our_funding_need(&project, role, fee) {
+                                        if let Some(sug) = suggest_watched(&scan, need).cloned() {
+                                            let change = scan.change.clone();
+                                            self.pay_take_utxo(&slug, role, &sug, &change);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
                     self.watch_scan = Some(scan);
                     self.note(format!("Encontré {n} moneda(s) en Signet ({base})."));
                 }
@@ -807,6 +826,8 @@ impl App {
         if let Some(hex) = funding_wire_hex(&json).or_else(|| hex_from_artifact(&json)) {
             if name.contains("onesig") || (name.contains("signed") && name.contains("psbt")) {
                 self.pay.onesig_hex = hex;
+                self.pay.awaiting_chain = true;
+                self.pay_chain_line = "Esperando el fondeo en Signet…".into();
                 self.note(
                     "Llegó un PSBT con una firma. Ábrelo en Electrum / Sparrow, firma y difunde.",
                 );
@@ -1866,19 +1887,23 @@ impl App {
                     ui.label(RichText::new("Billetera watch-only").strong());
                     ui.label(RichText::new(format!("Dirección 0: {a}")).small().weak());
                     ui.label(
-                        RichText::new("No gasta sola. Pega outpoints de Sparrow / Electrum abajo.")
-                            .small()
-                            .weak(),
+                        RichText::new(
+                            "Local. Nadie más ve la xpub. En Pago: Buscar mis monedas (Esplora).",
+                        )
+                        .small()
+                        .weak(),
                     );
                 }
             }
             Ok(None) => {
-                ui.label(RichText::new("Falta la xpub / vpub (opcional, local)").strong());
+                ui.label(RichText::new("Falta la xpub / vpub (watch-only, local)").strong());
                 ui.label(
-                        RichText::new("Si la tienes, gárdala aquí. Nadie más la ve. El fondeo también funciona pegando outpoints.")
-                            .small()
-                            .weak(),
-                    );
+                    RichText::new(
+                        "Guárdala aquí. La app lista tus UTXO en Signet. No se envía al otro.",
+                    )
+                    .small()
+                    .weak(),
+                );
                 self.show_wallet(ui, slug);
             }
             Err(e) => {
@@ -2043,9 +2068,48 @@ impl App {
         } else {
             classify_funding_psbt(&psbt).ok()
         };
+        let onesig_class = if self.pay.onesig_hex.trim().is_empty() {
+            None
+        } else {
+            classify_funding_psbt(&self.pay.onesig_hex).ok()
+        };
+        let we_own = our_coin
+            .as_ref()
+            .map(|c| parse_psbt_has_outpoint(&psbt, &c.outpoint))
+            .unwrap_or(false);
+        let sigs = class
+            .map(|c| c.1)
+            .unwrap_or(0)
+            .max(onesig_class.map(|c| c.1).unwrap_or(0));
+        let step = fund_handshake_step(
+            has_watch,
+            self.watch_scan.is_some(),
+            our_coin.is_some(),
+            class.map(|c| c.0),
+            sigs,
+            we_own,
+            self.pay.awaiting_chain,
+        );
+        let show_coins = matches!(
+            step,
+            FundHandshakeStep::ScanCoins
+                | FundHandshakeStep::PickCoin
+                | FundHandshakeStep::SendPartial
+                | FundHandshakeStep::CompleteIncoming
+        );
 
         panel_card(ui, dark, |ui| {
             ui.label(RichText::new("Fondeo — boleta + partida 1").strong());
+            ui.label(
+                RichText::new(format!("Ahora: {}", step.title_es()))
+                    .color(accent_amber(dark))
+                    .strong(),
+            );
+            ui.label(
+                RichText::new("Mis monedas → parcial → completar → firmar fuera → en cadena.")
+                    .small()
+                    .weak(),
+            );
             if let Ok((bond, p1)) = escrow_addrs(project) {
                 ui.label(RichText::new(format!("Boleta: {bond}")).small());
                 ui.label(RichText::new(format!("Partida 1: {p1}")).small());
@@ -2065,107 +2129,59 @@ impl App {
                 }
             });
 
-            if !has_watch {
-                ui.label(
-                    RichText::new("Primero guarda tu xpub / vpub (watch-only, no se envía).")
-                        .color(accent_amber(dark)),
-                );
-                return;
-            }
-
-            ui.add_space(4.0);
-            if primary_btn(ui, "Buscar mis monedas", dark).clicked() {
-                self.pay_scan_coins(slug);
-            }
-            if let Some(scan) = &self.watch_scan {
-                if scan.utxos.is_empty() {
-                    ui.label(
-                        RichText::new("No hay UTXO en esta xpub. Recibe Signet y vuelve a buscar.")
-                            .weak(),
-                    );
-                } else {
-                    ui.label(RichText::new("Elige una moneda (la app sugiere la justa).").small());
-                    if let Some(n) = need {
-                        if let Some(sug) = suggest_watched(scan, n) {
-                            ui.label(
-                                RichText::new(format!(
-                                    "Sugerida: {} · {} sats{}",
-                                    sug.outpoint,
-                                    sug.sats,
-                                    if sug.confirmed {
-                                        ""
-                                    } else {
-                                        " (sin confirmar)"
-                                    }
-                                ))
-                                .small()
-                                .weak(),
-                            );
-                        }
-                    }
-                    let change = scan.change.clone();
-                    let utxos = scan.utxos.clone();
-                    for u in &utxos {
-                        let selected = self.pay.selected_outpoint == u.outpoint
-                            || our_coin
-                                .as_ref()
-                                .map(|c| c.outpoint == u.outpoint)
-                                .unwrap_or(false);
-                        let label = format!(
-                            "{} · {} sats{}",
-                            u.outpoint,
-                            u.sats,
-                            if u.confirmed { "" } else { " · mempool" }
-                        );
-                        if ui.selectable_label(selected, label).clicked() {
-                            self.pay_take_utxo(slug, role, u, &change);
-                        }
-                    }
-                }
-            }
-            if let Some(c) = &our_coin {
+            if show_coins {
+                self.show_pay_coin_picker(ui, slug, role, need.unwrap_or(0), our_coin.as_ref());
+            } else if let Some(c) = &our_coin {
                 ui.label(
                     RichText::new(format!("Usando {} · {} sats", c.outpoint, c.sats))
                         .small()
-                        .color(accent_green(dark)),
+                        .weak(),
                 );
             }
 
             ui.add_space(8.0);
-            match class {
-                None if our_coin.is_some() => {
-                    ui.label("Arma un PSBT solo con tu input y mándalo al otro.");
+            match step {
+                FundHandshakeStep::NeedWatch => {
+                    ui.label(
+                        RichText::new("Primero guarda tu xpub / vpub arriba (watch-only).")
+                            .color(accent_amber(dark)),
+                    );
+                }
+                FundHandshakeStep::ScanCoins => {
+                    ui.label("La app mira tu xpub en Signet (Esplora) y sugiere una moneda.");
+                    if primary_btn(ui, "Buscar mis monedas", dark).clicked() {
+                        self.pay_scan_coins(slug);
+                    }
+                }
+                FundHandshakeStep::PickCoin => {
+                    ui.label("Elige una moneda con suficientes sats (la app ya sugiere una).");
+                    if ui.small_button("Volver a buscar").clicked() {
+                        self.pay_scan_coins(slug);
+                    }
+                }
+                FundHandshakeStep::SendPartial => {
+                    ui.label("Arma un PSBT solo con tu input y mándalo al otro por Tor.");
                     if primary_btn(ui, "Armar y enviar parcial", dark).clicked() {
                         self.pay_start_partial(slug, role, project);
                     }
                 }
-                Some((1, _)) => {
-                    let ours = our_coin
-                        .as_ref()
-                        .and_then(|c| {
-                            classify_funding_psbt(&psbt)
-                                .ok()
-                                .map(|_| c.outpoint.clone())
-                        })
-                        .unwrap_or_default();
-                    let we_started = parse_psbt_has_outpoint(&psbt, &ours);
-                    if we_started {
-                        ui.label(
-                            RichText::new("Esperando que el otro complete el PSBT.")
-                                .color(accent_amber(dark)),
-                        );
-                    } else if our_coin.is_some() {
-                        ui.label("Llegó su parcial. Añade tu moneda.");
-                        if primary_btn(ui, "Completar y devolver", dark).clicked() {
-                            self.pay_complete_partial(slug, role, project);
-                        }
-                    } else {
-                        ui.label("Llegó un parcial. Elige tu moneda arriba.");
+                FundHandshakeStep::WaitPeerComplete => {
+                    ui.label(
+                        RichText::new("Parcial enviado. Esperando que el otro añada su moneda.")
+                            .color(accent_amber(dark)),
+                    );
+                }
+                FundHandshakeStep::CompleteIncoming => {
+                    ui.label("Llegó su parcial. Añade tu moneda y devuélvelo.");
+                    if primary_btn(ui, "Completar y devolver", dark).clicked() {
+                        self.pay_complete_partial(slug, role, project);
                     }
                 }
-                Some((n, 0)) if n >= 2 => {
-                    ui.label("PSBT completo (2 inputs). Expórtalo, fírmalo en Electrum / Sparrow.");
-                    ui.label(RichText::new("Hex / base64 — no difundir todavía").small());
+                FundHandshakeStep::ExportAndSign => {
+                    ui.label(
+                        "PSBT completo (2 inputs). Cópialo, fírmalo en Electrum / Sparrow, pega el de 1 firma.",
+                    );
+                    ui.label(RichText::new("Para exportar — no difundir todavía").small());
                     show_multiline(
                         ui,
                         &mut self.pay.unsigned_psbt_hex,
@@ -2174,10 +2190,7 @@ impl App {
                         ui.available_width().min(720.0),
                         3,
                     );
-                    if primary_btn(ui, "Tengo 1 firma — enviarla", dark).clicked() {
-                        self.pay_send_onesig_from_box(slug, role, fee);
-                    }
-                    ui.label(RichText::new("Pega aquí el PSBT con TU firma").small());
+                    ui.label(RichText::new("Pega el PSBT con TU firma").small());
                     show_multiline(
                         ui,
                         &mut self.pay.onesig_hex,
@@ -2186,64 +2199,120 @@ impl App {
                         ui.available_width().min(720.0),
                         2,
                     );
-                    if ui.button("Enviar PSBT de 1 firma").clicked() {
+                    if primary_btn(ui, "Enviar PSBT de 1 firma", dark).clicked() {
                         self.pay_send_onesig(slug, role, fee);
                     }
                 }
-                Some((_, sigs)) if sigs >= 1 => {
-                    ui.label("Este PSBT ya tiene firma(s). El otro firma y difunde en Electrum.");
-                    if primary_btn(ui, "Enviar al otro", dark).clicked() {
-                        self.pay_send_onesig(slug, role, fee);
-                    }
-                }
-                _ => {
+                FundHandshakeStep::WaitChain => {
                     ui.label(
-                        RichText::new("Elige una moneda y arma el parcial, o espera el del otro.")
-                            .weak(),
+                        RichText::new(
+                            "Firma y difusión en Electrum / Sparrow. La app mira Signet sola.",
+                        )
+                        .color(accent_amber(dark)),
                     );
+                    if !self.pay.onesig_hex.is_empty() {
+                        ui.label(RichText::new("PSBT de 1 firma (para Electrum)").small());
+                        show_multiline(
+                            ui,
+                            &mut self.pay.onesig_hex,
+                            "PSBT…",
+                            dark,
+                            ui.available_width().min(720.0),
+                            2,
+                        );
+                    }
+                    if !self.pay_chain_line.is_empty() {
+                        ui.label(RichText::new(&self.pay_chain_line).color(accent_amber(dark)));
+                    }
+                    if self.chain_busy {
+                        ui.horizontal(|ui| {
+                            ui.spinner();
+                            ui.label("Consultando Signet…");
+                        });
+                    }
+                    if primary_btn(ui, "Buscar fondeo ahora", dark).clicked() {
+                        self.pay_poll_chain(slug, true);
+                    }
+                    ui.collapsing("Avanzado: pegar tx hex (rescate)", |ui| {
+                        show_multiline(
+                            ui,
+                            &mut self.pay.funding_tx_hex,
+                            "tx hex…",
+                            dark,
+                            ui.available_width().min(720.0),
+                            2,
+                        );
+                        if ui.small_button("Verificar hex (rescate)").clicked() {
+                            self.pay_verify(slug);
+                        }
+                    });
                 }
             }
-
-            if !self.pay.onesig_hex.is_empty() && class.map(|c| c.0).unwrap_or(0) < 2 {
-                ui.label("PSBT de 1 firma listo para Electrum (el otro firma y difunde).");
-                show_multiline(
-                    ui,
-                    &mut self.pay.onesig_hex,
-                    "PSBT…",
-                    dark,
-                    ui.available_width().min(720.0),
-                    2,
-                );
-            }
-
-            ui.add_space(8.0);
-            ui.label(RichText::new("En cadena (Esplora)").small().strong());
-            if !self.pay_chain_line.is_empty() {
-                ui.label(RichText::new(&self.pay_chain_line).color(accent_amber(dark)));
-            }
-            if self.chain_busy {
-                ui.spinner();
-                ui.label("Consultando Signet…");
-            }
-            ui.horizontal(|ui| {
-                if ui.button("Buscar fondeo ahora").clicked() {
-                    self.pay_poll_chain(slug, true);
-                }
-                if ui.small_button("Verificar hex (rescate)").clicked() {
-                    self.pay_verify(slug);
-                }
-            });
-            ui.collapsing("Avanzado: pegar tx hex", |ui| {
-                show_multiline(
-                    ui,
-                    &mut self.pay.funding_tx_hex,
-                    "tx hex…",
-                    dark,
-                    ui.available_width().min(720.0),
-                    2,
-                );
-            });
         });
+    }
+
+    fn show_pay_coin_picker(
+        &mut self,
+        ui: &mut egui::Ui,
+        slug: &str,
+        role: Role,
+        need: u64,
+        our_coin: Option<&OfferedCoin>,
+    ) {
+        let dark = self.prefs.dark;
+        if let Some(scan) = &self.watch_scan {
+            if scan.utxos.is_empty() {
+                ui.label(
+                    RichText::new("No hay UTXO en esta xpub. Recibe Signet y vuelve a buscar.")
+                        .weak(),
+                );
+            } else {
+                ui.label(RichText::new("Elige una moneda (la app sugiere la justa).").small());
+                if need > 0 {
+                    if let Some(sug) = suggest_watched(scan, need) {
+                        ui.label(
+                            RichText::new(format!(
+                                "Sugerida: {} · {} sats{}",
+                                sug.outpoint,
+                                sug.sats,
+                                if sug.confirmed {
+                                    ""
+                                } else {
+                                    " (sin confirmar)"
+                                }
+                            ))
+                            .small()
+                            .weak(),
+                        );
+                    }
+                }
+                let change = scan.change.clone();
+                let utxos = scan.utxos.clone();
+                for u in &utxos {
+                    let selected = self.pay.selected_outpoint == u.outpoint
+                        || our_coin
+                            .as_ref()
+                            .map(|c| c.outpoint == u.outpoint)
+                            .unwrap_or(false);
+                    let label = format!(
+                        "{} · {} sats{}",
+                        u.outpoint,
+                        u.sats,
+                        if u.confirmed { "" } else { " · mempool" }
+                    );
+                    if ui.selectable_label(selected, label).clicked() {
+                        self.pay_take_utxo(slug, role, u, &change);
+                    }
+                }
+            }
+        }
+        if let Some(c) = our_coin {
+            ui.label(
+                RichText::new(format!("Usando {} · {} sats", c.outpoint, c.sats))
+                    .small()
+                    .color(accent_green(dark)),
+            );
+        }
     }
 
     fn our_saved_coin(&self, slug: &str, role: Role) -> Option<OfferedCoin> {
@@ -2375,23 +2444,20 @@ impl App {
         }
     }
 
-    fn pay_send_onesig_from_box(&mut self, slug: &str, role: Role, fee: u64) {
-        if self.pay.onesig_hex.trim().is_empty() {
-            self.pay.onesig_hex = self.pay.unsigned_psbt_hex.clone();
-        }
-        self.pay_send_onesig(slug, role, fee);
-    }
-
     fn pay_send_onesig(&mut self, slug: &str, role: Role, fee: u64) {
-        let hex = if !self.pay.onesig_hex.trim().is_empty() {
-            self.pay.onesig_hex.clone()
-        } else {
-            self.pay.unsigned_psbt_hex.clone()
-        };
-        if hex.trim().is_empty() {
-            return self.fail("Pega el PSBT firmado por ti.");
+        let hex = self.pay.onesig_hex.trim().to_string();
+        if hex.is_empty() {
+            return self.fail("Pega el PSBT que firmaste en Electrum / Sparrow.");
+        }
+        match classify_funding_psbt(&hex) {
+            Ok((_, sigs)) if sigs >= 1 => {}
+            Ok(_) => {
+                return self.fail("Ese PSBT no tiene firma. Fírmalo fuera y pégalo de nuevo.");
+            }
+            Err(e) => return self.fail(e),
         }
         self.pay.onesig_hex = hex.clone();
+        self.pay.awaiting_chain = true;
         let _ = self.store.save_pay_draft(slug, &self.pay);
         self.spawn_deliver(
             NetMessage::Artifact {

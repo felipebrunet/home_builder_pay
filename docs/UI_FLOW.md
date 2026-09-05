@@ -64,15 +64,15 @@ After **Trato cerrado**, the next-step card is **Ir a Pago**. Status lines:
 
 **Quote.** Use the local xpub/watch if present (never sent). Price: **Yadio → CoinGecko → CoinMarketCap**, or a manual BTC price both sides confirm. GUI drafts `Quote` (all partidas, because the protocol requires it) but the banner only highlights boleta + P1 sats. Each side signs (`sign_quote`); both signatures required before `set_quote`. Wired as `NetMessage::Quote` over Tor, same as offer/accept.
 
-**Funding (PSBT handshake).** Primary path is watch-only xpub + Esplora (blockstream → mempool Signet), not paste-both-outpoints.
+**Funding (PSBT handshake).** Primary path is watch-only xpub + Esplora (blockstream → mempool Signet), not paste-both-outpoints. One green button per stage.
 
-1. **Mis monedas** — `Buscar mis monedas` scans the local xpub. User picks a UTXO (app suggests the smallest confirmed that covers their share + fee).
+1. **Mis monedas** — `Buscar mis monedas` scans the local xpub. App auto-selects the smallest confirmed UTXO that covers share + fee; user can pick another.
 2. **Armar/enviar parcial** — either side builds a 1-input PSBT (their coin + change) that already has exact **boleta + P1** outputs. Wired as `Artifact` `06-funding.partial.json`.
-3. **Completar** — peer picks their UTXO the same way, adds the second input, sends back the complete unsigned 2-in PSBT.
-4. **Firmar** — export hex/base64 → Electrum/Sparrow. Import the **1-signature** PSBT; app sends it. Counterparty signs and **broadcasts in Electrum**.
+3. **Completar** — peer picks their UTXO the same way, adds the second input, sends back the complete unsigned 2-in PSBT (`06-funding.unsigned.json`).
+4. **Firmar** — export hex/base64 → Electrum/Sparrow. Paste the **1-signature** PSBT; app sends `07-onesig.psbt.json`. Counterparty signs and **broadcasts in Electrum**.
 5. **En cadena** — both apps poll Esplora on the boleta address until a tx with both quoted amounts appears, then mark **Partida 1 en curso**. Manual tx-hex verify stays as rescue.
 
-Boleta and partida 1 are **distinct** Taproot addresses (fee-burn key-path + unique tagged tweak per output). Later partidas stay grey until P1 is terminal.
+Boleta and partida 1 are **distinct** Taproot addresses (fee-burn key-path + unique tagged merkle tweak per output id). Later partidas stay grey until P1 is terminal.
 
 **Reception.** When P1 is locked: dest address + MuSig2 file/network rounds (`coop-propose` / `coop-sign` / `coop-finish`). Finish marks P1 `Paid` and unlocks the P2 row. P2 funding itself is **not** on this screen (CLI `--partida-only`).
 
@@ -97,4 +97,4 @@ Both online. No Avanzado for catalog.
 
 ## Out of this slice
 
-Full fee-burn arming wizard, MAD, all 10 partidas at once, mainnet, Android, P2 `--partida-only` GUI, Esplora auto-scan in the window.
+Full fee-burn arming wizard, MAD, all 10 partidas at once, mainnet, Android, P2 `--partida-only` GUI.
