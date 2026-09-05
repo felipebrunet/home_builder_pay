@@ -16,7 +16,9 @@ pub use pay::{
     contract_bond_minor, coop_action, coop_contribute, coop_filename, coop_finish, coop_propose,
     coop_propose_on, coop_sign, coop_tx_kind_from_artifact, coop_tx_wire, draft_quote, escrow_addrs,
     format_obra_money, fund_handshake_step, funding_wire, funding_wire_hex, hex_artifact,
-    hex_from_artifact, lock_quote_if_ready, needs_coop_publish,
+    hex_from_artifact, infer_coop_kind, lock_quote_if_ready, looks_like_signed_coop_hex,
+    needs_coop_publish, pago_coop_gate, recover_coop_tx_into_draft, restore_unconfirmed_bond,
+    spanish_now_pay, stash_finished_coop_hex, can_open_stop_or_redo, can_redo_bond_return,
     merge_coop_file, obra_amount_pair, our_funding_need, p1_blocks_bond_return, parse_fee,
     parse_psbt, parse_psbt_bytes, partida_spec_minor, partida_ui_enabled, party_role, pay_stage,
     prefer_funding_psbt, preview_quote_sats, price_minor_from_major, psbt_display_text,
@@ -24,7 +26,8 @@ pub use pay::{
     recotizar_if_unfunded, show_main_fund_ui, sign_our_quote, spanish_chain_status, spanish_now,
     suggest_watched, txid_from_tx_hex, verify_present_quote_sigs, CoopAction, FundHandshakeStep,
     FundMark, FundView,
-    FundingSendKind, PayCoins, PayStage, PayUiDraft, StopStep, ART_COIN, ART_COOP, ART_COOP_TX,
+    FundingSendKind, PagoCoopGate, PayCoins, PayStage, PayUiDraft, StopStep, ART_COIN, ART_COOP,
+    ART_COOP_TX,
     ART_ONESIG, ART_PARTIAL, ART_PSBT, ART_SIGNED, ART_TX, KIND_BOND, KIND_PARTIDA,
 };
 pub use protocol::{contratista_accept, import_signed, mandante_commit, require_signet_offer};

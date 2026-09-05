@@ -1,7 +1,10 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use crate::pay::{coop_filename, merge_coop_file, PayCoins, PayUiDraft};
+use crate::pay::{
+    coop_filename, coop_tx_kind_from_artifact, coop_tx_wire, hex_from_artifact, merge_coop_file,
+    PayCoins, PayUiDraft, ART_COOP_TX,
+};
 use anyhow::{bail, Context, Result};
 use hbp_bitcoin::{import_watch, CoopFile, Identity, OfferedCoin, WatchAccount};
 use hbp_core::{
@@ -578,6 +581,43 @@ impl WorkStore {
 
     pub fn load_pay_coop_kind(&self, slug: &str, kind: &str) -> Result<Option<CoopFile>> {
         read_json_opt(&self.pay_dir(slug).join(coop_filename(kind)))
+    }
+
+    pub fn clear_pay_coop_kind(&self, slug: &str, kind: &str) -> Result<()> {
+        let path = self.pay_dir(slug).join(coop_filename(kind));
+        if path.exists() {
+            fs::remove_file(path)?;
+        }
+        Ok(())
+    }
+
+    pub fn save_coop_tx(&self, slug: &str, hex: &str, kind: &str) -> Result<()> {
+        let dir = self.ensure_pay_dir(slug)?;
+        fs::write(
+            dir.join(ART_COOP_TX),
+            serde_json::to_string_pretty(&coop_tx_wire(hex, kind))?,
+        )?;
+        Ok(())
+    }
+
+    pub fn load_coop_tx(&self, slug: &str) -> Result<Option<(String, String)>> {
+        let Some(v) = read_json_opt::<serde_json::Value>(&self.pay_dir(slug).join(ART_COOP_TX))?
+        else {
+            return Ok(None);
+        };
+        let Some(hex) = hex_from_artifact(&v) else {
+            return Ok(None);
+        };
+        let kind = coop_tx_kind_from_artifact(&v).unwrap_or_default();
+        Ok(Some((hex, kind)))
+    }
+
+    pub fn clear_coop_tx(&self, slug: &str) -> Result<()> {
+        let path = self.pay_dir(slug).join(ART_COOP_TX);
+        if path.exists() {
+            fs::remove_file(path)?;
+        }
+        Ok(())
     }
 
     pub fn save_pay_nonces(&self, slug: &str, journal: &NonceJournal) -> Result<()> {

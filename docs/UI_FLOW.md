@@ -87,14 +87,23 @@ Boleta and partida 1 are **distinct** Taproot addresses (fee-burn key-path + uni
 
 **Click order after Terminar / Marcar cobrada / Terminar y devolver**
 
-Both sides must see this card (the peer gets `09-coop-tx.json` over Tor; **Enviar al otro** resends it). Status must not say “Obra detenida / Listo para publicar en Electrum” without a control.
+Status is **Firmado — falta publicar** until Signet sees the tx. The obra is **not** “detenida / boleta volvió” until then. Both sides must see the publish card (peer gets `09-coop-tx.json`; **Enviar al otro** resends it). Hex is also written to `{obra}/pay/09-coop-tx.json` and recovered from an old `funding_tx_hex` if needed.
 
 1. Green **Publicar en Signet** — POSTs the raw hex to Blockstream Signet Esplora (`/tx`), then mempool.space Signet. Same endpoint family as the coin scan.
 2. Or **Copiar texto** (tx hex) / **Exportar archivo** (`.hex` / `.txt`, fallback under `{obra}/pay/`).
 3. **Comprobar en la red** (also auto-polls) until **Ya está en Signet.**
 4. If the obra is stopping and that was the cobro: destino de la boleta → same three buttons for the devolución.
 
+If the hex is gone but the boleta UTXO is still on-chain: **Rehacer devolución de boleta** (clears the stuck coop file, restores a premature local “released”, back to Proponer → Firmar → Terminar → Publicar).
+
 The hex sits **under** Publicar en Signet, not only in Avanzado.
+
+**Already-finished devolución (pull this build, then):**
+
+1. Open the obra → **Pago**.
+2. If you see **Publicar en Signet**: press it (or Copiar / Exportar). Then **Comprobar en la red**.
+3. If you see **Rehacer devolución de boleta**: press it → cuenta del contratista → **Proponer devolución**. The other person **Firma**. Either **Terminar y devolver**. Then **Publicar en Signet**.
+4. Contratista stuck on “espera”: same Pago. Publish if the hex appeared; otherwise Rehacer. Ask the other to press **Enviar al otro** if they already have Publicar.
 
 **Detener obra y devolver boleta.** Visible on Pago (and Trato) once boleta+P1 are confirmed. Wizard: confirm → if P1 still locked, pay P1 first (including **Publicar en Signet**) → destino boleta (cuenta Signet del contratista) → Proponer devolución → Firmar devolución → Terminar y devolver → **Publicar en Signet** → Comprobar. Bond close is `kind: bond` (`08-coop-bond.json`), same merge/reuse rules. `mark_bond_released` sets the project **Closed** (if P1 was paid) or **Cancelled**; later partidas stay closed. PSBT funding stays hidden after confirm.
 

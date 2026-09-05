@@ -1426,21 +1426,8 @@ pub fn coop_finish(
         parse_partial(peer_p)?,
         &sighash,
     )?;
-    let _ = journal.take_pending(&coop.sighash);
     let signed = apply_key_spend_sig(unsigned, &sig);
-    let hex = serialize_hex(&signed);
-    let txid = signed.compute_txid().to_string();
-    match coop.kind.as_str() {
-        KIND_PARTIDA => {
-            let _ = project.propose_reception(FIRST_PARTIDA);
-            project.mark_paid(FIRST_PARTIDA, txid)?;
-        }
-        KIND_BOND => {
-            project.mark_bond_released(txid)?;
-        }
-        other => bail!("cierre desconocido: {other}"),
-    }
-    Ok(hex)
+    Ok(serialize_hex(&signed))
 }
 
 pub fn hex_artifact(hex: &str) -> serde_json::Value {
@@ -1483,6 +1470,156 @@ pub fn txid_from_tx_hex(hex: &str) -> Result<String> {
 
 pub fn needs_coop_publish(draft: &PayUiDraft) -> bool {
     !draft.coop_tx_hex.trim().is_empty() && !draft.coop_tx_published
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PagoCoopGate {
+    ShowPublish,
+    ShowRedoBond,
+    ShowStopped,
+}
+
+/// What Pago must show after a coop finish. Testable without egui.
+pub fn pago_coop_gate(
+    project: Option<&Project>,
+    draft: &PayUiDraft,
+    bond_coop: Option<&CoopFile>,
+) -> Option<PagoCoopGate> {
+    if needs_coop_publish(draft) {
+        return Some(PagoCoopGate::ShowPublish);
+    }
+    let Some(project) = project else {
+        return None;
+    };
+    if draft.coop_tx_published && project.is_stopped() {
+        return Some(PagoCoopGate::ShowStopped);
+    }
+    if can_redo_bond_return(project, draft, bond_coop.is_some()) {
+        return Some(PagoCoopGate::ShowRedoBond);
+    }
+    None
+}
+
+pub fn can_redo_bond_return(project: &Project, draft: &PayUiDraft, has_bond_coop: bool) -> bool {
+    if needs_coop_publish(draft) || draft.coop_tx_published {
+        return false;
+    }
+    if p1_blocks_bond_return(project) {
+        return false;
+    }
+    let spendable = project.bond_is_funded() || matches!(project.bond, BondStatus::Released { .. });
+    if !spendable {
+        return false;
+    }
+    project.is_stopped() || has_bond_coop
+}
+
+pub fn can_open_stop_or_redo(project: &Project, draft: &PayUiDraft) -> bool {
+    project.bond_is_funded()
+        || (matches!(project.bond, BondStatus::Released { .. }) && !draft.coop_tx_published)
+}
+
+pub fn looks_like_signed_coop_hex(hex: &str) -> bool {
+    let Ok(raw) = hex::decode(hex.trim()) else {
+        return false;
+    };
+    let Ok(tx) = deserialize::<Transaction>(&raw) else {
+        return false;
+    };
+    tx.input.len() == 1 && tx.output.len() == 1
+}
+
+pub fn infer_coop_kind(project: &Project, draft: &PayUiDraft) -> String {
+    if draft.coop_tx_kind == KIND_PARTIDA || draft.coop_tx_kind == KIND_BOND {
+        return draft.coop_tx_kind.clone();
+    }
+    if p1_blocks_bond_return(project) {
+        KIND_PARTIDA.into()
+    } else {
+        KIND_BOND.into()
+    }
+}
+
+/// Pull a leftover signed coop tx back into the draft (old finish stored it in funding hex).
+pub fn recover_coop_tx_into_draft(
+    draft: &mut PayUiDraft,
+    project: &Project,
+    disk: Option<&(String, String)>,
+) -> bool {
+    if !draft.coop_tx_hex.trim().is_empty() {
+        if draft.coop_tx_kind.trim().is_empty() {
+            draft.coop_tx_kind = infer_coop_kind(project, draft);
+        }
+        return true;
+    }
+    if let Some((hex, kind)) = disk {
+        if !hex.trim().is_empty() {
+            draft.coop_tx_hex = hex.trim().to_string();
+            draft.coop_tx_kind = if kind.trim().is_empty() {
+                infer_coop_kind(project, draft)
+            } else {
+                kind.clone()
+            };
+            return true;
+        }
+    }
+    if looks_like_signed_coop_hex(&draft.funding_tx_hex) {
+        draft.coop_tx_hex = draft.funding_tx_hex.trim().to_string();
+        draft.coop_tx_kind = infer_coop_kind(project, draft);
+        return true;
+    }
+    false
+}
+
+pub fn stash_finished_coop_hex(draft: &mut PayUiDraft, hex: &str, kind: &str) {
+    draft.coop_tx_hex = hex.trim().to_string();
+    draft.coop_tx_kind = kind.to_string();
+    draft.coop_tx_published = false;
+}
+
+pub fn parse_coop_outpoint(outpoint: &str) -> Result<(String, u32)> {
+    let (txid, vout) = outpoint.split_once(':').context("outpoint")?;
+    Ok((txid.to_string(), vout.parse().context("vout")?))
+}
+
+/// Undo a local mark_bond_released that happened before the tx hit Signet.
+pub fn restore_unconfirmed_bond(project: &mut Project, coop: Option<&CoopFile>) -> Result<bool> {
+    if project.bond_is_funded() {
+        return Ok(false);
+    }
+    let Some(coop) = coop.filter(|c| c.kind == KIND_BOND && !c.outpoint.is_empty() && c.sats > 0)
+    else {
+        bail!("no hay datos para rehacer la devolución");
+    };
+    let (txid, vout) = parse_coop_outpoint(&coop.outpoint)?;
+    project.bond = BondStatus::Funded {
+        txid,
+        vout,
+        sats: coop.sats,
+        confirmations: 1,
+    };
+    if matches!(
+        project.status,
+        ProjectStatus::Closed | ProjectStatus::Cancelled
+    ) {
+        project.status = ProjectStatus::Active;
+    }
+    Ok(true)
+}
+
+pub fn spanish_now_pay(
+    project: Option<&Project>,
+    pending_quote: Option<&Quote>,
+    draft: &PayUiDraft,
+    bond_coop: Option<&CoopFile>,
+) -> String {
+    match pago_coop_gate(project, draft, bond_coop) {
+        Some(PagoCoopGate::ShowPublish) => "Firmado — falta publicar".into(),
+        Some(PagoCoopGate::ShowRedoBond) => {
+            "La devolución quedó a medias. Vuelve a hacerla.".into()
+        }
+        _ => spanish_now(project, pending_quote),
+    }
 }
 
 /// Apply a finished coop spend on the peer who did not press Terminar.
@@ -2165,21 +2302,31 @@ mod tests {
         let hex = coop_finish(&m, &mut project, &signed_m, &mut jm).unwrap();
         assert!(!hex.is_empty());
         assert!(txid_from_tx_hex(&hex).is_ok());
+        assert!(looks_like_signed_coop_hex(&hex));
         let wire = coop_tx_wire(&hex, KIND_PARTIDA);
         assert_eq!(coop_tx_kind_from_artifact(&wire).as_deref(), Some(KIND_PARTIDA));
         assert!(hex_from_artifact(&wire).is_some());
         let mut draft = PayUiDraft::default();
-        draft.coop_tx_hex = hex.clone();
-        draft.coop_tx_kind = KIND_PARTIDA.into();
+        stash_finished_coop_hex(&mut draft, &hex, KIND_PARTIDA);
         assert!(needs_coop_publish(&draft));
+        assert_eq!(
+            pago_coop_gate(Some(&project), &draft, None),
+            Some(PagoCoopGate::ShowPublish)
+        );
+        assert_eq!(
+            spanish_now_pay(Some(&project), None, &draft, None),
+            "Firmado — falta publicar"
+        );
+        assert!(
+            !matches!(
+                project.partida(1).unwrap().state,
+                PartidaStatus::Paid { .. }
+            ),
+            "finish must not mark paid before Signet"
+        );
+        apply_finished_coop_hex(&mut project, &hex, KIND_PARTIDA).unwrap();
         draft.coop_tx_published = true;
         assert!(!needs_coop_publish(&draft));
-        draft.coop_tx_published = false;
-        assert!(matches!(
-            project.partida(1).unwrap().state,
-            PartidaStatus::Paid { .. }
-        ));
-        apply_finished_coop_hex(&mut project, &hex, KIND_PARTIDA).unwrap();
         assert!(!show_main_fund_ui(pay_stage(Some(&project), None)));
         assert_eq!(
             coop_action(Some(&signed_m), Role::Mandante),
@@ -2196,7 +2343,8 @@ mod tests {
         let mut jc = NonceJournal::default();
         let p1 = coop_propose_on(&m, &project, &dest, 250, &mut jm, KIND_PARTIDA, None).unwrap();
         let p1 = coop_sign(&c, &project, p1, &mut jc).unwrap();
-        coop_finish(&m, &mut project, &p1, &mut jm).unwrap();
+        let p1_hex = coop_finish(&m, &mut project, &p1, &mut jm).unwrap();
+        apply_finished_coop_hex(&mut project, &p1_hex, KIND_PARTIDA).unwrap();
         assert!(p1_blocks_bond_return(&project) == false);
         assert!(can_open_stop_wizard(&project));
 
@@ -2208,7 +2356,16 @@ mod tests {
         let hex = coop_finish(&c, &mut project, &bond, &mut jc2).unwrap();
         assert!(!hex.is_empty());
         assert!(txid_from_tx_hex(&hex).is_ok());
+        assert!(!project.is_stopped(), "finish must not stop before Signet");
+        let mut draft = PayUiDraft::default();
+        stash_finished_coop_hex(&mut draft, &hex, KIND_BOND);
+        assert!(needs_coop_publish(&draft));
+        assert_eq!(
+            pago_coop_gate(Some(&project), &draft, Some(&bond)),
+            Some(PagoCoopGate::ShowPublish)
+        );
         apply_finished_coop_hex(&mut project, &hex, KIND_BOND).unwrap();
+        draft.coop_tx_published = true;
         assert!(matches!(project.bond, BondStatus::Released { .. }));
         assert!(matches!(
             project.status,
@@ -2217,6 +2374,59 @@ mod tests {
         assert_eq!(pay_stage(Some(&project), None), PayStage::AllClosed);
         assert!(!partida_ui_enabled(&project, 2));
         assert!(spanish_now(Some(&project), None).contains("detenida"));
+        assert_eq!(
+            pago_coop_gate(Some(&project), &draft, None),
+            Some(PagoCoopGate::ShowStopped)
+        );
+    }
+
+    #[test]
+    fn gate_exposes_publish_or_redo_if_stopped_without_signet() {
+        let (m, c) = pair_ids();
+        let (mut project, _q) = funded_p1(&m, &c);
+        let dest = dummy_coin(Role::Contratista, 9, 1_000).address;
+        let mut jm = NonceJournal::default();
+        let mut jc = NonceJournal::default();
+        let p1 = coop_propose_on(&m, &project, &dest, 250, &mut jm, KIND_PARTIDA, None).unwrap();
+        let p1 = coop_sign(&c, &project, p1, &mut jc).unwrap();
+        let p1_hex = coop_finish(&m, &mut project, &p1, &mut jm).unwrap();
+        apply_finished_coop_hex(&mut project, &p1_hex, KIND_PARTIDA).unwrap();
+        let mut jm2 = NonceJournal::default();
+        let mut jc2 = NonceJournal::default();
+        let bond = coop_propose_on(&c, &project, &dest, 250, &mut jc2, KIND_BOND, None).unwrap();
+        let bond = coop_sign(&m, &project, bond, &mut jm2).unwrap();
+        let hex = coop_finish(&c, &mut project, &bond, &mut jc2).unwrap();
+
+        let mut draft = PayUiDraft::default();
+        stash_finished_coop_hex(&mut draft, &hex, KIND_BOND);
+        assert_eq!(
+            pago_coop_gate(Some(&project), &draft, Some(&bond)),
+            Some(PagoCoopGate::ShowPublish)
+        );
+
+        // Old bug: local state says stopped, hex still in the funding field.
+        apply_finished_coop_hex(&mut project, &hex, KIND_BOND).unwrap();
+        assert!(project.is_stopped());
+        draft.coop_tx_hex.clear();
+        draft.funding_tx_hex = hex.clone();
+        assert!(recover_coop_tx_into_draft(&mut draft, &project, None));
+        assert!(needs_coop_publish(&draft));
+        assert_eq!(
+            pago_coop_gate(Some(&project), &draft, Some(&bond)),
+            Some(PagoCoopGate::ShowPublish)
+        );
+
+        // Hex lost entirely: must still expose Rehacer, not a silent "detenida".
+        draft.coop_tx_hex.clear();
+        draft.funding_tx_hex.clear();
+        draft.coop_tx_published = false;
+        assert_eq!(
+            pago_coop_gate(Some(&project), &draft, Some(&bond)),
+            Some(PagoCoopGate::ShowRedoBond)
+        );
+        assert!(restore_unconfirmed_bond(&mut project, Some(&bond)).unwrap());
+        assert!(project.bond_is_funded());
+        assert!(!project.is_stopped());
     }
 
     #[test]

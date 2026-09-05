@@ -7,21 +7,23 @@ use std::time::Duration;
 use eframe::egui::{self, Color32, RichText, Vec2};
 use hbp_app::{
     agreed_fx_line, apply_finished_coop_hex, apply_incoming_quote, apply_verified_p1_funding,
-    build_our_partial, can_open_stop_wizard, can_recotizar, classify_funding_psbt, coin_from_watched,
-    complete_incoming_partial, completed_steps, contract_bond_minor, contratista_accept,
-    coop_action, coop_finish, coop_propose_on, coop_tx_kind_from_artifact, coop_tx_wire,
-    default_works_root, draft_equal_stages, draft_quote, escrow_addrs, export_backup,
-    format_unix_local_es, fund_handshake_step, funding_wire, funding_wire_hex, hex_from_artifact,
-    import_backup, import_signed, lock_quote_if_ready, mandante_commit, needs_coop_publish,
-    next_step, obra_amount_pair, our_funding_need, p1_blocks_bond_return, parse_fee, parse_psbt,
-    parse_psbt_bytes, partida_spec_minor, partida_ui_enabled, party_role, pay_stage,
-    prefer_funding_psbt, preview_quote_sats, psbt_display_text, psbt_file_bytes, psbt_to_hex,
-    quote_fully_signed, quote_price_minor, read_backup_file, recotizar_if_unfunded,
-    show_main_fund_ui, sign_our_quote, spanish_chain_status, spanish_now, suggest_watched,
+    build_our_partial, can_open_stop_or_redo, can_recotizar,
+    classify_funding_psbt, coin_from_watched, complete_incoming_partial, completed_steps,
+    contract_bond_minor, contratista_accept, coop_action, coop_finish, coop_propose_on,
+    coop_tx_kind_from_artifact, coop_tx_wire, default_works_root, draft_equal_stages, draft_quote,
+    escrow_addrs, export_backup, format_unix_local_es, fund_handshake_step, funding_wire,
+    funding_wire_hex, hex_from_artifact, import_backup, import_signed, infer_coop_kind,
+    lock_quote_if_ready, looks_like_signed_coop_hex, mandante_commit, needs_coop_publish,
+    next_step, obra_amount_pair, our_funding_need, p1_blocks_bond_return, pago_coop_gate,
+    parse_fee, parse_psbt, parse_psbt_bytes, partida_spec_minor, partida_ui_enabled, party_role,
+    pay_stage, prefer_funding_psbt, preview_quote_sats, psbt_display_text, psbt_file_bytes,
+    psbt_to_hex, quote_fully_signed, quote_price_minor, read_backup_file, recover_coop_tx_into_draft,
+    recotizar_if_unfunded, restore_unconfirmed_bond, show_main_fund_ui, sign_our_quote,
+    spanish_chain_status, spanish_now_pay, stash_finished_coop_hex, suggest_watched,
     txid_from_tx_hex, validate_deadline_order, write_backup_file, CoopAction, DeadlineFields,
-    FundHandshakeStep, FundMark, FundView, FundingSendKind, NextKind, PayStage, PayUiDraft,
-    StopStep, UiPrefs, WorkEntry, WorkProgress, WorkStore, ART_COOP, ART_COOP_TX, ART_ONESIG,
-    ART_PARTIAL, ART_PSBT, KIND_BOND, KIND_PARTIDA, MONTHS_ES,
+    FundHandshakeStep, FundMark, FundView, FundingSendKind, NextKind, PagoCoopGate, PayStage,
+    PayUiDraft, StopStep, UiPrefs, WorkEntry, WorkProgress, WorkStore, ART_COOP, ART_COOP_TX,
+    ART_ONESIG, ART_PARTIAL, ART_PSBT, KIND_BOND, KIND_PARTIDA, MONTHS_ES,
 };
 use hbp_bitcoin::{
     address_at, default_esplora_urls, scan_watch, sign_body, CoopFile, Identity, OfferedCoin,
@@ -431,7 +433,7 @@ impl App {
                     self.pay_chain_line = "Ya está en Signet.".into();
                     self.note("Ya está en Signet.");
                     if let Some(slug) = self.selected.clone() {
-                        let _ = self.store.save_pay_draft(&slug, &self.pay);
+                        self.confirm_coop_if_needed(&slug);
                     }
                 }
                 JobEvent::CoopSeen(Err(e)) => {
@@ -451,7 +453,7 @@ impl App {
                     let _ = (txid, base);
                     self.note("Publicada en Signet.");
                     if let Some(slug) = self.selected.clone() {
-                        let _ = self.store.save_pay_draft(&slug, &self.pay);
+                        self.confirm_coop_if_needed(&slug);
                         self.pay_poll_coop(&slug, false);
                     }
                 }
@@ -463,7 +465,7 @@ impl App {
                         self.pay_chain_line = "Ya está en Signet.".into();
                         self.note("Ya está en Signet.");
                         if let Some(slug) = self.selected.clone() {
-                            let _ = self.store.save_pay_draft(&slug, &self.pay);
+                            self.confirm_coop_if_needed(&slug);
                             self.pay_poll_coop(&slug, false);
                         }
                     } else {
@@ -941,6 +943,13 @@ impl App {
                 self.pay.unsigned_psbt_hex = prefer_funding_psbt(&self.pay.unsigned_psbt_hex, &hex);
                 self.pay.fund_mark.raise(FundMark::CompleteReady);
                 self.note("Llegó el envío completo. Expórtalo para firmar en Electrum.");
+            } else if looks_like_signed_coop_hex(&hex) {
+                if let Ok(project) = self.store.ensure_pay_project(&slug) {
+                    let kind = infer_coop_kind(&project, &self.pay);
+                    self.take_finished_coop(&slug, hex, &kind);
+                    return;
+                }
+                self.pay.funding_tx_hex = hex;
             } else {
                 self.pay.funding_tx_hex = hex;
                 self.note("Llegó el comprobante de red. Lo anoto si hace falta.");
@@ -980,6 +989,20 @@ impl eframe::App for App {
                     self.peer_onion.clear();
                 }
                 self.pay = self.store.load_pay_draft(&slug).unwrap_or_default();
+                if let Ok(project) = self.store.ensure_pay_project(&slug) {
+                    let disk = self.store.load_coop_tx(&slug).ok().flatten();
+                    if recover_coop_tx_into_draft(&mut self.pay, &project, disk.as_ref()) {
+                        if self.pay.coop_tx_kind.trim().is_empty() {
+                            self.pay.coop_tx_kind = infer_coop_kind(&project, &self.pay);
+                        }
+                        let _ = self.store.save_pay_draft(&slug, &self.pay);
+                        let _ = self.store.save_coop_tx(
+                            &slug,
+                            &self.pay.coop_tx_hex,
+                            &self.pay.coop_tx_kind,
+                        );
+                    }
+                }
                 self.watch_scan = None;
                 self.pay_chain_line.clear();
             } else {
@@ -1509,7 +1532,7 @@ impl App {
         }
         if has_signed {
             if let Ok(project) = self.store.ensure_pay_project(&slug) {
-                if can_open_stop_wizard(&project) {
+                if can_open_stop_or_redo(&project, &self.pay) {
                     ui.add_space(10.0);
                     if primary_btn(ui, "Detener obra y devolver boleta", self.prefs.dark).clicked()
                     {
@@ -1981,6 +2004,17 @@ impl App {
                 return;
             }
         };
+        if self.pay.coop_tx_hex.trim().is_empty() {
+            let disk = self.store.load_coop_tx(&slug).ok().flatten();
+            if recover_coop_tx_into_draft(&mut self.pay, &project, disk.as_ref()) {
+                let _ = self.store.save_pay_draft(&slug, &self.pay);
+                let _ = self.store.save_coop_tx(
+                    &slug,
+                    &self.pay.coop_tx_hex,
+                    &self.pay.coop_tx_kind,
+                );
+            }
+        }
         let pending_q = self.store.load_pay_quote(&slug).ok().flatten();
         let stage = pay_stage(Some(&project), pending_q.as_ref());
         let have_watch = matches!(
@@ -2023,22 +2057,34 @@ impl App {
         have_watch: bool,
     ) {
         let dark = self.prefs.dark;
-        let now = spanish_now(Some(project), pending);
-        let status_color = match stage {
-            PayStage::PartidaInCourse | PayStage::UnlockNext | PayStage::AllClosed => {
-                accent_green(dark)
+        let bond_coop = self.store.load_pay_coop_kind(slug, KIND_BOND).ok().flatten();
+        let gate = pago_coop_gate(Some(project), &self.pay, bond_coop.as_ref());
+        let now = spanish_now_pay(Some(project), pending, &self.pay, bond_coop.as_ref());
+        let status_color = match gate {
+            Some(PagoCoopGate::ShowPublish) | Some(PagoCoopGate::ShowRedoBond) => {
+                accent_amber(dark)
             }
-            PayStage::FundBondP1 => accent_green(dark),
-            _ => accent_amber(dark),
+            Some(PagoCoopGate::ShowStopped) => accent_green(dark),
+            None => match stage {
+                PayStage::PartidaInCourse | PayStage::UnlockNext | PayStage::AllClosed => {
+                    accent_green(dark)
+                }
+                PayStage::FundBondP1 => accent_green(dark),
+                _ => accent_amber(dark),
+            },
         };
         panel_card(ui, dark, |ui| {
             ui.label(RichText::new("Qué hacer ahora").strong().size(22.0));
             ui.label(RichText::new(now).color(status_color).strong().size(18.0));
         });
         ui.add_space(8.0);
-        if !self.pay.coop_tx_hex.trim().is_empty() {
+        if matches!(gate, Some(PagoCoopGate::ShowPublish)) || needs_coop_publish(&self.pay) {
             self.show_coop_publish(ui, slug);
-            if needs_coop_publish(&self.pay) {
+            return;
+        }
+        if matches!(gate, Some(PagoCoopGate::ShowRedoBond)) {
+            self.show_redo_bond(ui, slug, project);
+            if project.is_stopped() {
                 return;
             }
             ui.add_space(8.0);
@@ -2047,7 +2093,7 @@ impl App {
             self.show_pay_watch(ui, slug);
             return;
         }
-        if self.pay.stop_open && (can_open_stop_wizard(project) || project.is_stopped()) {
+        if self.pay.stop_open && can_open_stop_or_redo(project, &self.pay) {
             self.show_stop_wizard(ui, slug, id, project);
             return;
         }
@@ -2072,14 +2118,18 @@ impl App {
                 self.show_stop_entry(ui, slug, project);
             }
             PayStage::AllClosed => {
-                panel_card(ui, dark, |ui| {
-                    ui.label(
-                        RichText::new(spanish_now(Some(project), pending))
-                            .color(accent_green(dark))
-                            .strong(),
-                    );
-                });
-                if can_open_stop_wizard(project) {
+                if matches!(gate, Some(PagoCoopGate::ShowStopped))
+                    || (project.is_stopped() && self.pay.coop_tx_published)
+                {
+                    panel_card(ui, dark, |ui| {
+                        ui.label(
+                            RichText::new("Obra detenida. La boleta volvió al contratista.")
+                                .color(accent_green(dark))
+                                .strong(),
+                        );
+                    });
+                }
+                if can_open_stop_or_redo(project, &self.pay) && !self.pay.coop_tx_published {
                     self.show_stop_entry(ui, slug, project);
                 }
             }
@@ -3218,14 +3268,14 @@ impl App {
             });
             match action {
                 CoopAction::WaitPeer => {
-                    if needs_coop_publish(&self.pay) && self.pay.coop_tx_kind == kind {
+                    if needs_coop_publish(&self.pay) {
                         ui.label(
                             RichText::new(if bond {
                                 "La devolución ya está firmada. Publícala en Signet."
                             } else {
                                 "El cobro ya está firmado. Publícalo en Signet."
                             })
-                            .color(accent_green(dark)),
+                            .color(accent_amber(dark)),
                         );
                     } else if self.pay.coop_tx_published && self.pay.coop_tx_kind == kind {
                         ui.label(
@@ -3233,8 +3283,10 @@ impl App {
                         );
                     } else {
                         ui.label(
-                            RichText::new("Ya enviaste tu parte. Espera al otro.")
-                                .color(accent_amber(dark)),
+                            RichText::new(
+                                "Ya enviaste tu parte. Si el otro ya terminó, pide que pulse Enviar al otro — o Rehacer.",
+                            )
+                            .color(accent_amber(dark)),
                         );
                     }
                 }
@@ -3273,7 +3325,7 @@ impl App {
     }
 
     fn show_stop_entry(&mut self, ui: &mut egui::Ui, slug: &str, project: &hbp_core::Project) {
-        if !can_open_stop_wizard(project) {
+        if !can_open_stop_or_redo(project, &self.pay) {
             return;
         }
         ui.add_space(8.0);
@@ -3309,24 +3361,30 @@ impl App {
         project: &hbp_core::Project,
     ) {
         let dark = self.prefs.dark;
-        if needs_coop_publish(&self.pay) {
+        let bond_coop = self.store.load_pay_coop_kind(slug, KIND_BOND).ok().flatten();
+        let gate = pago_coop_gate(Some(project), &self.pay, bond_coop.as_ref());
+        if matches!(gate, Some(PagoCoopGate::ShowPublish)) || needs_coop_publish(&self.pay) {
             self.show_coop_publish(ui, slug);
             return;
         }
-        if project.is_stopped() {
+        if matches!(gate, Some(PagoCoopGate::ShowRedoBond)) {
+            self.show_redo_bond(ui, slug, project);
+            return;
+        }
+        if matches!(gate, Some(PagoCoopGate::ShowStopped))
+            || (project.is_stopped() && self.pay.coop_tx_published)
+        {
             panel_card(ui, dark, |ui| {
                 ui.label(
                     RichText::new("Obra detenida. La boleta volvió al contratista.")
                         .color(accent_green(dark))
                         .strong(),
                 );
-                if !self.pay.coop_tx_hex.trim().is_empty() && self.pay.coop_tx_published {
-                    ui.label(
-                        RichText::new("Ya está en Signet.")
-                            .small()
-                            .color(accent_green(dark)),
-                    );
-                }
+                ui.label(
+                    RichText::new("Ya está en Signet.")
+                        .small()
+                        .color(accent_green(dark)),
+                );
                 if ui.small_button("Cerrar").clicked() {
                     self.pay.stop_open = false;
                 }
@@ -3682,23 +3740,22 @@ impl App {
                 if let Err(e) = self.store.save_pay_project(slug, &project) {
                     return self.fail(e);
                 }
-                self.pay.coop_tx_hex = hex.clone();
-                self.pay.coop_tx_kind = kind.to_string();
-                self.pay.coop_tx_published = false;
+                stash_finished_coop_hex(&mut self.pay, &hex, kind);
                 if kind == KIND_BOND {
                     self.pay.stop_open = true;
                     self.pay.stop_step = StopStep::ReturnBond;
-                    self.note("La devolución ya está firmada. Publícala en Signet. No hace falta Electrum.");
+                    self.note("Firmado — falta publicar. Pulsa Publicar en Signet.");
                 } else {
-                    self.note("El cobro ya está firmado. Publícalo en Signet. No hace falta Electrum.");
+                    self.note("Firmado — falta publicar. Pulsa Publicar en Signet.");
                 }
+                let _ = self.store.save_coop_tx(slug, &hex, kind);
                 let _ = self.store.save_pay_draft(slug, &self.pay);
                 self.spawn_deliver(
                     NetMessage::Artifact {
                         name: ART_COOP_TX.into(),
                         json: coop_tx_wire(&hex, kind),
                     },
-                    "Listo para publicar en Signet.",
+                    "Firmado — falta publicar.",
                 );
             }
             Err(e) => self.fail(e),
@@ -3706,25 +3763,78 @@ impl App {
     }
 
     fn take_finished_coop(&mut self, slug: &str, hex: String, kind: &str) {
-        let same = self.pay.coop_tx_hex.trim() == hex.trim();
-        self.pay.coop_tx_hex = hex.clone();
-        self.pay.coop_tx_kind = kind.to_string();
-        if !same {
-            self.pay.coop_tx_published = false;
-        }
-        if let Ok(mut project) = self.store.ensure_pay_project(slug) {
-            if apply_finished_coop_hex(&mut project, &hex, kind).is_ok() {
-                let _ = self.store.save_pay_project(slug, &project);
-            }
-        }
+        stash_finished_coop_hex(&mut self.pay, &hex, kind);
         if kind == KIND_BOND {
             self.pay.stop_open = true;
             self.pay.stop_step = StopStep::ReturnBond;
-            self.note("La devolución ya está firmada. Publícala en Signet.");
-        } else {
-            self.note("El cobro ya está firmado. Publícalo en Signet.");
+        }
+        let _ = self.store.save_coop_tx(slug, &hex, kind);
+        let _ = self.store.save_pay_draft(slug, &self.pay);
+        self.note("Firmado — falta publicar. Pulsa Publicar en Signet.");
+        self.tab = MainTab::Pago;
+    }
+
+    fn confirm_coop_if_needed(&mut self, slug: &str) {
+        let hex = self.pay.coop_tx_hex.trim().to_string();
+        let mut kind = self.pay.coop_tx_kind.clone();
+        if hex.is_empty() {
+            return;
+        }
+        if let Ok(mut project) = self.store.ensure_pay_project(slug) {
+            if kind.trim().is_empty() {
+                kind = infer_coop_kind(&project, &self.pay);
+                self.pay.coop_tx_kind = kind.clone();
+            }
+            if apply_finished_coop_hex(&mut project, &hex, &kind).is_ok() {
+                let _ = self.store.save_pay_project(slug, &project);
+            }
         }
         let _ = self.store.save_pay_draft(slug, &self.pay);
+        let _ = self.store.save_coop_tx(slug, &hex, &kind);
+    }
+
+    fn show_redo_bond(&mut self, ui: &mut egui::Ui, slug: &str, _project: &hbp_core::Project) {
+        let dark = self.prefs.dark;
+        panel_card(ui, dark, |ui| {
+            ui.label(
+                RichText::new("Rehacer devolución de boleta")
+                    .strong()
+                    .size(18.0),
+            );
+            ui.label(
+                "El envío firmado no está aquí (o no se publicó). La boleta sigue en Signet. Empieza de nuevo: proponer, firmar, terminar, publicar.",
+            );
+            if primary_btn(ui, "Rehacer devolución de boleta", dark).clicked() {
+                self.pay_redo_bond_return(slug);
+            }
+        });
+    }
+
+    fn pay_redo_bond_return(&mut self, slug: &str) {
+        let coop = self.store.load_pay_coop_kind(slug, KIND_BOND).ok().flatten();
+        let mut project = match self.store.ensure_pay_project(slug) {
+            Ok(p) => p,
+            Err(e) => return self.fail(e),
+        };
+        if !project.bond_is_funded() {
+            match restore_unconfirmed_bond(&mut project, coop.as_ref()) {
+                Ok(_) => {}
+                Err(e) => return self.fail(e),
+            }
+        }
+        if let Err(e) = self.store.save_pay_project(slug, &project) {
+            return self.fail(e);
+        }
+        let _ = self.store.clear_pay_coop_kind(slug, KIND_BOND);
+        let _ = self.store.clear_coop_tx(slug);
+        self.pay.coop_tx_hex.clear();
+        self.pay.coop_tx_kind.clear();
+        self.pay.coop_tx_published = false;
+        self.pay.coop_paste.clear();
+        self.pay.stop_open = true;
+        self.pay.stop_step = StopStep::ReturnBond;
+        let _ = self.store.save_pay_draft(slug, &self.pay);
+        self.note("Otra vez: escribe la cuenta y pulsa Proponer devolución.");
         self.tab = MainTab::Pago;
     }
 
