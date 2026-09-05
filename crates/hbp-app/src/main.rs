@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use eframe::egui::{self, Color32, RichText, Vec2};
 use hbp_app::{
-    contratista_accept, default_works_root, draft_equal_stages, export_backup,
+    completed_steps, contratista_accept, default_works_root, draft_equal_stages, export_backup,
     format_unix_local_es, import_backup, import_signed, mandante_commit, next_step,
     read_backup_file, validate_deadline_order, write_backup_file, DeadlineFields, NextKind,
     UiPrefs, WorkEntry, WorkProgress, WorkStore, MONTHS_ES,
@@ -25,10 +25,12 @@ use hbp_net::{
 enum JobEvent {
     Progress(String),
     ConnectDone(Result<TorRuntime, String>),
-    AnnounceDone(Result<String, String>),
+    AnnounceDone(Result<(String, String), String>),
     LookupDone(Result<Option<WorkAnnounce>, String>),
     BootstrapDone(Result<usize, String>),
     DeliverDone(Result<String, String>),
+    /// Background Hello / retry. Must not clear a user-facing `busy` job.
+    QuietDeliver(Result<String, String>),
     FxDone(Result<FxQuote, String>),
 }
 
@@ -81,7 +83,8 @@ struct App {
     net_light: NetLight,
     net_line: String,
     busy: Option<String>,
-    job_rx: Option<mpsc::Receiver<JobEvent>>,
+    job_tx: mpsc::Sender<JobEvent>,
+    job_rx: mpsc::Receiver<JobEvent>,
     fx: Option<FxQuote>,
     fx_line: String,
     name_draft: String,
@@ -99,6 +102,7 @@ impl App {
         });
         let prefs = store.load_prefs();
         let picking_role = prefs.first_run();
+        let (job_tx, job_rx) = mpsc::channel();
         Self {
             store,
             prefs,
@@ -126,7 +130,8 @@ impl App {
             net_light: NetLight::Off,
             net_line: "Aún no estás en la red. Pulsa Conectarme cuando quieras hablar.".into(),
             busy: None,
-            job_rx: None,
+            job_tx,
+            job_rx,
             fx: None,
             fx_line: String::new(),
             name_draft: String::new(),
@@ -207,96 +212,115 @@ impl App {
         if self.busy.is_some() {
             return;
         }
-        let (tx, rx) = mpsc::channel();
-        self.job_rx = Some(rx);
         self.busy = Some(thinking.into());
+        let tx = self.job_tx.clone();
         thread::Builder::new()
             .name("hbp-job".into())
             .spawn(move || f(tx))
             .ok();
     }
 
+    fn spawn_quiet<F>(&mut self, f: F)
+    where
+        F: FnOnce(mpsc::Sender<JobEvent>) + Send + 'static,
+    {
+        let tx = self.job_tx.clone();
+        thread::Builder::new()
+            .name("hbp-quiet".into())
+            .spawn(move || f(tx))
+            .ok();
+    }
+
     fn poll_jobs(&mut self, ctx: &egui::Context) {
-        let Some(rx) = self.job_rx.take() else {
-            return;
-        };
-        match rx.try_recv() {
-            Ok(JobEvent::Progress(s)) => {
-                self.net_line = s;
-                self.job_rx = Some(rx);
-                ctx.request_repaint();
-            }
-            Ok(JobEvent::ConnectDone(Ok(rt))) => {
-                self.busy = None;
-                self.apply_tor(rt);
-            }
-            Ok(JobEvent::ConnectDone(Err(e))) => {
-                self.busy = None;
-                self.net_light = NetLight::Err;
-                self.net_line = e.clone();
-                self.fail(e);
-            }
-            Ok(JobEvent::AnnounceDone(Ok(msg))) => {
-                self.busy = None;
-                self.note(msg);
-            }
-            Ok(JobEvent::AnnounceDone(Err(e))) => {
-                self.busy = None;
-                self.fail(e);
-            }
-            Ok(JobEvent::LookupDone(Ok(Some(ann)))) => {
-                self.busy = None;
-                self.on_found_work(ann);
-            }
-            Ok(JobEvent::LookupDone(Ok(None))) => {
-                self.busy = None;
-                self.fail(
-                    "No aparece. ¿El mandante se conectó y publicó? Prueba su nombre (Don José) o el de la obra. Si no, usen Avanzado.",
-                );
-            }
-            Ok(JobEvent::LookupDone(Err(e))) => {
-                self.busy = None;
-                self.fail(e);
-            }
-            Ok(JobEvent::BootstrapDone(Ok(n))) => {
-                self.busy = None;
-                if n > 0 {
-                    self.note("Ya estamos en contacto.");
-                } else {
-                    self.fail("No respondió. ¿Está conectada?");
+        let mut n = 0u32;
+        while let Ok(ev) = self.job_rx.try_recv() {
+            n += 1;
+            match ev {
+                JobEvent::Progress(s) => {
+                    self.net_line = s;
+                }
+                JobEvent::ConnectDone(Ok(rt)) => {
+                    self.busy = None;
+                    self.apply_tor(rt);
+                }
+                JobEvent::ConnectDone(Err(e)) => {
+                    self.busy = None;
+                    self.net_light = NetLight::Err;
+                    self.net_line = e.clone();
+                    self.fail(e);
+                }
+                JobEvent::AnnounceDone(Ok((slug, msg))) => {
+                    self.busy = None;
+                    let _ = self.store.mark_published(&slug);
+                    self.note(msg);
+                }
+                JobEvent::AnnounceDone(Err(e)) => {
+                    self.busy = None;
+                    self.fail(e);
+                }
+                JobEvent::LookupDone(Ok(Some(ann))) => {
+                    self.busy = None;
+                    self.on_found_work(ann);
+                }
+                JobEvent::LookupDone(Ok(None)) => {
+                    self.busy = None;
+                    self.fail(
+                        "No aparece. ¿El mandante se conectó y publicó? Prueba su nombre (Don José) o el de la obra. Si no, usen Avanzado.",
+                    );
+                }
+                JobEvent::LookupDone(Err(e)) => {
+                    self.busy = None;
+                    self.fail(e);
+                }
+                JobEvent::BootstrapDone(Ok(_)) => {
+                    self.busy = None;
+                    self.note("Encontré su señal; esperando que el mandante pueda enviarte.");
+                    self.retry_hello_if_contratista();
+                }
+                JobEvent::BootstrapDone(Err(e)) => {
+                    self.busy = None;
+                    if !self.peer_onion.trim().is_empty() {
+                        self.note("Encontré su señal; esperando que el mandante pueda enviarte.");
+                        self.retry_hello_if_contratista();
+                    } else {
+                        self.fail(e);
+                    }
+                }
+                JobEvent::DeliverDone(Ok(msg)) => {
+                    self.busy = None;
+                    self.note(msg);
+                }
+                JobEvent::DeliverDone(Err(e)) => {
+                    self.busy = None;
+                    self.fail(e);
+                }
+                JobEvent::QuietDeliver(Ok(msg)) => {
+                    if !msg.is_empty() {
+                        self.note(msg);
+                    }
+                }
+                JobEvent::QuietDeliver(Err(e)) => {
+                    self.append_log(&format!("error: {e}"), true);
+                }
+                JobEvent::FxDone(Ok(q)) => {
+                    self.busy = None;
+                    self.fx_line =
+                        format!("1 BTC ≈ {:.2} {} ({})", q.btc_price_major, q.unit, q.source);
+                    self.fx = Some(q);
+                }
+                JobEvent::FxDone(Err(e)) => {
+                    self.busy = None;
+                    self.fx_line = format!(
+                        "Sin precio ahora ({e}). Sigue igual: el trato es en la moneda de la obra."
+                    );
                 }
             }
-            Ok(JobEvent::BootstrapDone(Err(e))) => {
-                self.busy = None;
-                self.fail(e);
+            if n >= 16 {
+                break;
             }
-            Ok(JobEvent::DeliverDone(Ok(msg))) => {
-                self.busy = None;
-                self.note(msg);
-            }
-            Ok(JobEvent::DeliverDone(Err(e))) => {
-                self.busy = None;
-                self.fail(e);
-            }
-            Ok(JobEvent::FxDone(Ok(q))) => {
-                self.busy = None;
-                self.fx_line =
-                    format!("1 BTC ≈ {:.2} {} ({})", q.btc_price_major, q.unit, q.source);
-                self.fx = Some(q);
-            }
-            Ok(JobEvent::FxDone(Err(e))) => {
-                self.busy = None;
-                self.fx_line = format!(
-                    "Sin precio ahora ({e}). Sigue igual: el trato es en la moneda de la obra."
-                );
-            }
-            Err(mpsc::TryRecvError::Empty) => {
-                self.job_rx = Some(rx);
-                ctx.request_repaint_after(Duration::from_millis(200));
-            }
-            Err(mpsc::TryRecvError::Disconnected) => {
-                self.busy = None;
-            }
+        }
+        if n > 0 || self.busy.is_some() || self.overlay.is_some() {
+            ctx.request_repaint_after(Duration::from_millis(250));
         }
     }
 
@@ -327,6 +351,8 @@ impl App {
             if let Some(entry) = self.selected_entry().cloned() {
                 if entry.role == Role::Mandante {
                     self.spawn_announce(&entry);
+                } else if !self.peer_onion.trim().is_empty() {
+                    self.send_hello(&self.peer_onion.clone(), &entry.name, false);
                 }
             }
         }
@@ -340,21 +366,94 @@ impl App {
         };
         self.note(format!("Encontré a {who}"));
         let onion = ann.onion.trim().to_string();
-        if !onion.is_empty() {
-            self.peer_onion = onion.clone();
-            let peer = if ann.person_name.trim().is_empty() {
-                None
-            } else {
-                Some(ann.person_name.as_str())
-            };
-            if let Ok(entry) = self.store.ensure_contratista_work(&ann.work_name, peer) {
-                let _ = self.store.save_peer_onion(&entry.slug, &onion);
-                self.selected = Some(entry.slug);
-                self.prefs.role = Role::Contratista;
-                let _ = self.store.save_prefs(&self.prefs);
-            }
-            self.spawn_bootstrap(&onion);
+        if onion.is_empty() {
+            return;
         }
+        self.peer_onion = onion.clone();
+        let peer = if ann.person_name.trim().is_empty() {
+            None
+        } else {
+            Some(ann.person_name.as_str())
+        };
+        if let Ok(entry) = self.store.ensure_contratista_work(&ann.work_name, peer) {
+            let _ = self.store.remember_peer(&entry.slug, &onion, peer);
+            self.selected = Some(entry.slug);
+            self.prefs.role = Role::Contratista;
+            let _ = self.store.save_prefs(&self.prefs);
+            self.send_hello(&onion, &ann.work_name, false);
+        }
+        self.spawn_bootstrap(&onion);
+    }
+
+    fn own_handle(&self) -> Option<String> {
+        let o = self.own_onion.trim();
+        if !o.is_empty() {
+            return Some(o.to_string());
+        }
+        let adv = self.overlay.as_ref()?.advertised();
+        let host = adv.host.trim();
+        if host.is_empty() || host == "0.0.0.0" {
+            return None;
+        }
+        Some(adv.display())
+    }
+
+    fn send_hello(&mut self, dest_onion: &str, work_name: &str, reply: bool) {
+        let Some(onion) = self.own_handle() else {
+            if !reply {
+                self.note("Encontré su señal; cuando tenga mi código, el mandante podrá enviarte.");
+            }
+            return;
+        };
+        let dest = match PeerAddr::parse_flexible(dest_onion) {
+            Ok(p) => p,
+            Err(_) => return,
+        };
+        let Some(o) = self.overlay.clone() else {
+            return;
+        };
+        let msg = NetMessage::Hello {
+            work_name: work_name.to_string(),
+            onion,
+            person_name: self.prefs.display_name().to_string(),
+            role: match self.prefs.role {
+                Role::Mandante => "mandante".into(),
+                Role::Contratista => "contratista".into(),
+            },
+        };
+        let note = if reply {
+            String::new()
+        } else {
+            "Le mandé mi señal al mandante para que pueda enviarte.".into()
+        };
+        self.spawn_quiet(move |tx| {
+            let r = o
+                .deliver(&dest, &msg)
+                .map(|_| note)
+                .map_err(|e| format!("No pude devolver la señal ({e})"));
+            let _ = tx.send(JobEvent::QuietDeliver(r));
+        });
+    }
+
+    fn retry_hello_if_contratista(&mut self) {
+        let Some(entry) = self.selected_entry().cloned() else {
+            return;
+        };
+        if entry.role != Role::Contratista {
+            return;
+        }
+        let dest = self.peer_onion.trim().to_string();
+        if dest.is_empty() {
+            return;
+        }
+        self.send_hello(&dest, &entry.name, false);
+    }
+
+    fn apply_peer_on(&mut self, slug: &str, onion: &str, person_name: &str) {
+        self.peer_onion = onion.to_string();
+        let name = person_name.trim();
+        let peer = if name.is_empty() { None } else { Some(name) };
+        let _ = self.store.remember_peer(slug, onion, peer);
     }
 
     fn drain_inbox(&mut self) {
@@ -364,11 +463,53 @@ impl App {
         let inbox = o.take_inbox();
         for msg in inbox {
             match msg {
+                NetMessage::Hello {
+                    work_name,
+                    onion,
+                    person_name,
+                    role,
+                } => self.on_inbox_hello(work_name, onion, person_name, role),
                 NetMessage::Offer { offer } => self.on_inbox_offer(offer),
                 NetMessage::Accept { pending } => self.on_inbox_accept(pending),
                 NetMessage::Commit { signed } => self.on_inbox_commit(signed),
                 other => self.note(format!("Llegó un recado ({})", other.kind())),
             }
+        }
+    }
+
+    fn on_inbox_hello(
+        &mut self,
+        work_name: String,
+        onion: String,
+        person_name: String,
+        role: String,
+    ) {
+        let onion = onion.trim().to_string();
+        if onion.is_empty() {
+            return;
+        }
+        let slug = self
+            .store
+            .find_by_work_name(&work_name)
+            .map(|e| e.slug)
+            .or_else(|| self.selected.clone())
+            .or_else(|| self.works_for_role().into_iter().next().map(|e| e.slug));
+        let Some(slug) = slug else {
+            return;
+        };
+        self.apply_peer_on(&slug, &onion, &person_name);
+        self.selected = Some(slug);
+        let they_contratista = role.eq_ignore_ascii_case("contratista");
+        if self.prefs.role == Role::Mandante && they_contratista {
+            let who = if person_name.trim().is_empty() {
+                "El contratista".to_string()
+            } else {
+                person_name.trim().to_string()
+            };
+            self.note(format!("{who} ya te encontró. Puedes enviar la propuesta."));
+            self.send_hello(&onion, &work_name, true);
+        } else if self.prefs.role == Role::Contratista && !they_contratista {
+            self.note("El mandante ya puede enviarte. Espera la propuesta.");
         }
     }
 
@@ -454,6 +595,8 @@ impl eframe::App for App {
                 }
                 if let Some(p) = self.store.load_peer_onion(&slug) {
                     self.peer_onion = p;
+                } else {
+                    self.peer_onion.clear();
                 }
             }
             self.last_slug = self.selected.clone();
@@ -861,8 +1004,16 @@ impl App {
             net_up: self.overlay.is_some()
                 && matches!(self.net_light, NetLight::Ok | NetLight::Partial),
             has_peer: !self.peer_onion.trim().is_empty(),
+            published: entry.published,
         };
         let step = next_step(entry.role, progress);
+        let done = completed_steps(entry.role, progress);
+        if !done.is_empty() {
+            for label in done {
+                ui.label(RichText::new(format!("✓ {label}")).small().weak());
+            }
+            ui.add_space(4.0);
+        }
         let fill = if self.prefs.dark {
             Color32::from_rgb(36, 48, 40)
         } else {
@@ -923,43 +1074,30 @@ impl App {
 
         match entry.role {
             Role::Mandante => {
-                if ui
-                    .add_enabled(
-                        self.overlay.is_some() && self.busy.is_none(),
-                        egui::Button::new("Publicar esta obra"),
-                    )
-                    .clicked()
-                {
-                    self.spawn_announce(entry);
+                if entry.published {
+                    ui.label(
+                        RichText::new(
+                            "Obra publicada. El maestro te busca por tu nombre. Si no aparece, usen Avanzado.",
+                        )
+                        .small()
+                        .weak(),
+                    );
+                } else {
+                    ui.label(
+                        RichText::new(
+                            "Cuando toque publicar, el botón está arriba en Qué hacer ahora.",
+                        )
+                        .small()
+                        .weak(),
+                    );
                 }
+            }
+            Role::Contratista => {
                 ui.label(
-                    RichText::new("El maestro busca este mismo nombre. Si no aparece, usen el código de respaldo.")
+                    RichText::new("Busca al mandante a la izquierda, por su nombre.")
                         .small()
                         .weak(),
                 );
-            }
-            Role::Contratista => {
-                ui.horizontal(|ui| {
-                    show_field(
-                        ui,
-                        &mut self.lookup_name,
-                        "nombre de la obra",
-                        self.prefs.dark,
-                        220.0,
-                    );
-                    if ui
-                        .add_enabled(
-                            self.overlay.is_some() && self.busy.is_none(),
-                            egui::Button::new("Buscar"),
-                        )
-                        .clicked()
-                    {
-                        if self.lookup_name.trim().is_empty() {
-                            self.lookup_name = entry.name.clone();
-                        }
-                        self.spawn_lookup();
-                    }
-                });
             }
         }
 
@@ -1088,13 +1226,12 @@ impl App {
                     ui.label(
                         RichText::new("Propuesta lista.").color(Color32::from_rgb(80, 160, 100)),
                     );
-                    if big_btn(ui, "Enviar propuesta").clicked() {
-                        self.spawn_send_offer(slug);
-                    }
                     ui.label(
-                        RichText::new("Se manda por la red. El archivo queda de respaldo.")
-                            .small()
-                            .weak(),
+                        RichText::new(
+                            "Se envía desde Qué hacer ahora cuando el maestro te encuentre. El archivo queda de respaldo.",
+                        )
+                        .small()
+                        .weak(),
                     );
                 }
             }
@@ -1532,6 +1669,7 @@ impl App {
         } else {
             self.own_onion.trim().to_string()
         };
+        let slug = entry.slug.clone();
         let ann = WorkAnnounce {
             work_name: entry.name.clone(),
             onion,
@@ -1554,7 +1692,7 @@ impl App {
             };
             let ok = msg.starts_with("Obra") || msg.starts_with("Publicada");
             if ok {
-                let _ = tx.send(JobEvent::AnnounceDone(Ok(msg)));
+                let _ = tx.send(JobEvent::AnnounceDone(Ok((slug, msg))));
             } else {
                 let _ = tx.send(JobEvent::AnnounceDone(Err(msg)));
             }
@@ -1567,8 +1705,9 @@ impl App {
         };
         let name = self.lookup_name.trim().to_string();
         if name.is_empty() {
-            return self.fail("Escribe el nombre del mandante (o de la obra)");
+            return;
         }
+        self.last_error.clear();
         self.start_job("buscando al mandante", move |tx| {
             let r = o.discover_work(&name).map_err(|e| e.to_string());
             let _ = tx.send(JobEvent::LookupDone(r));

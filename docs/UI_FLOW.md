@@ -18,7 +18,7 @@ Approved product map (2026-09-05). Step 1 is identity + chrome + next action. **
 1. First open: “Yo pago — Mandante” → “¿Cómo te dicen?” → **Seguir**.
 2. Header shows *Don José · Mandante*.
 3. **Crear obra** (Casa Norte) — this is an obra, not a persona.
-4. **Qué hacer ahora** drives one button: Preparar partidas → Firmar propuesta → Conectarme → Publicar obra → **Enviar**.
+4. **Qué hacer ahora** drives one button: Preparar partidas → Firmar propuesta → Conectarme → Publicar obra → espera al contratista → **Enviar** (only when the peer handle is known). Finished steps stay muted with a check; Publicar is never the green CTA after the obra is already published.
 5. Contratista accepts; mandante auto-confirms on the wire. Card: “Trato cerrado… el pago en cadena viene después.”
 
 **Contratista (builds)**
@@ -35,6 +35,8 @@ Approved product map (2026-09-05). Step 1 is identity + chrome + next action. **
 Ideal: find **mandante**, then see their published obras.
 
 Shipped now: publish stores the obra *and* the mandante display name (DHT + ntfy topic). Contratista search box is “nombre del mandante”. Lookup tries person name, then obra name. Full mandante directory / several obras per person is a later step. Onion paste stays under **Avanzado**.
+
+**Send / find handshake.** A one-sided find is not enough for **Enviar**. When the contratista finds the mandante, they DELIVER a `Hello` with their own onion (and name). The mandante inbox stores that handle on the matching obra, the card moves from “esperando contratista” to **Enviar**, and Enviar DELIVERs the offer to that onion — no Avanzado paste. The mandante replies `Hello` once so both sides have a usable dest. “Ya estamos en contacto” is reserved for that two-way handle; a one-sided find says “Encontré su señal; esperando que el mandante pueda enviarte”.
 
 ## Notes panel
 

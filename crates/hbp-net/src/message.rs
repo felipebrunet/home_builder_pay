@@ -15,6 +15,13 @@ pub enum NetMessage {
         work_name: String,
         onion: Option<String>,
     },
+    /// After a name find: tell the other side our onion so they can DELIVER.
+    Hello {
+        work_name: String,
+        onion: String,
+        person_name: String,
+        role: String,
+    },
     Offer {
         offer: Offer,
     },
@@ -39,6 +46,7 @@ impl NetMessage {
         match self {
             Self::Ping { .. } => "ping",
             Self::Pong { .. } => "pong",
+            Self::Hello { .. } => "hello",
             Self::Offer { .. } => "offer",
             Self::Accept { .. } => "accept",
             Self::Commit { .. } => "commit",
@@ -95,5 +103,21 @@ mod tests {
         assert_eq!(back, msg);
         assert_eq!(back.kind(), "offer");
         let _ = Role::Mandante;
+    }
+
+    #[test]
+    fn hello_roundtrip_carries_onion() {
+        let msg = NetMessage::Hello {
+            work_name: "casa2".into(),
+            onion: "abc.onion".into(),
+            person_name: "Don José".into(),
+            role: "contratista".into(),
+        };
+        let back = NetMessage::decode(&msg.encode().unwrap()).unwrap();
+        assert_eq!(back, msg);
+        match back {
+            NetMessage::Hello { onion, .. } => assert_eq!(onion, "abc.onion"),
+            _ => panic!("hello"),
+        }
     }
 }

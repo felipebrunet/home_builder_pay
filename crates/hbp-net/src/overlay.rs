@@ -603,4 +603,22 @@ mod tests {
         let inbox = a.take_inbox();
         assert_eq!(inbox, vec![msg]);
     }
+
+    #[test]
+    fn deliver_hello_carries_onion_to_inbox() {
+        let mandante = bind_local();
+        let contratista = bind_local();
+        let dest = PeerAddr::new("127.0.0.1", mandante.local_addr().port());
+        let msg = NetMessage::Hello {
+            work_name: "casa2".into(),
+            onion: "felipe.onion".into(),
+            person_name: "Felipe".into(),
+            role: "contratista".into(),
+        };
+        contratista.deliver(&dest, &msg).unwrap();
+        match mandante.take_inbox().into_iter().next() {
+            Some(NetMessage::Hello { onion, .. }) => assert_eq!(onion, "felipe.onion"),
+            other => panic!("expected hello, got {other:?}"),
+        }
+    }
 }

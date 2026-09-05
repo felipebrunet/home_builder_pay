@@ -19,6 +19,9 @@ pub struct WorkEntry {
     /// Other party's display name (e.g. mandante “Don José”). Never a folder slug.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub peer_name: String,
+    /// Mandante already published this obra (name board / DHT).
+    #[serde(default)]
+    pub published: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -216,6 +219,7 @@ impl WorkStore {
             role,
             network,
             peer_name: String::new(),
+            published: false,
         };
         self.index.works.push(entry.clone());
         self.save_index()?;
@@ -325,6 +329,45 @@ impl WorkStore {
             .and_then(|s| s.as_str())
             .map(|s| s.to_string())
             .filter(|s| !s.is_empty())
+    }
+
+    pub fn mark_published(&mut self, slug: &str) -> Result<()> {
+        let Some(w) = self.index.works.iter_mut().find(|w| w.slug == slug) else {
+            return Ok(());
+        };
+        if w.published {
+            return Ok(());
+        }
+        w.published = true;
+        self.save_index()
+    }
+
+    pub fn remember_peer(
+        &mut self,
+        slug: &str,
+        onion: &str,
+        peer_name: Option<&str>,
+    ) -> Result<()> {
+        self.save_peer_onion(slug, onion)?;
+        if let Some(n) = peer_name.map(str::trim).filter(|s| !s.is_empty()) {
+            if let Some(w) = self.index.works.iter_mut().find(|w| w.slug == slug) {
+                if w.peer_name != n {
+                    w.peer_name = n.to_string();
+                    self.save_index()?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    pub fn find_by_work_name(&self, name: &str) -> Option<WorkEntry> {
+        let slug = slugify(name);
+        let trimmed = name.trim();
+        self.index
+            .works
+            .iter()
+            .find(|w| w.slug == slug || w.name.eq_ignore_ascii_case(trimmed))
+            .cloned()
     }
 
     pub fn load_peer_book(&self) -> PeerBook {
@@ -626,6 +669,7 @@ mod tests {
                 role: Role::Mandante,
                 network: Network::Bitcoin,
                 peer_name: String::new(),
+                published: false,
             },
             identity: id,
             draft: None,
@@ -714,6 +758,29 @@ mod tests {
             .onions
             .iter()
             .any(|o| o == "abc.onion"));
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn publish_and_hello_peer_roundtrip() {
+        let tmp = std::env::temp_dir().join(format!("hbp-app-hello-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&tmp);
+        let mut store = WorkStore::open(tmp.join("a")).unwrap();
+        let e = store
+            .create_product_work("casa2", Role::Mandante, None)
+            .unwrap();
+        assert!(!e.published);
+        store.mark_published(&e.slug).unwrap();
+        store
+            .remember_peer(&e.slug, "jose.onion", Some("Felipe"))
+            .unwrap();
+        let back = store.find_by_work_name("Casa2").unwrap();
+        assert!(back.published);
+        assert_eq!(back.peer_name, "Felipe");
+        assert_eq!(
+            store.load_peer_onion(&e.slug).as_deref(),
+            Some("jose.onion")
+        );
         let _ = fs::remove_dir_all(&tmp);
     }
 }

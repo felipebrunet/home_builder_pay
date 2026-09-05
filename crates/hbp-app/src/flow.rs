@@ -29,6 +29,8 @@ pub struct WorkProgress {
     pub has_signed: bool,
     pub net_up: bool,
     pub has_peer: bool,
+    /// Mandante already published this obra. Stops the green card on Publicar.
+    pub published: bool,
 }
 
 pub fn next_step(role: Role, p: WorkProgress) -> NextStep {
@@ -69,18 +71,63 @@ fn mandante_step(p: WorkProgress) -> NextStep {
         };
     }
     if !p.has_peer {
+        if !p.published {
+            return NextStep {
+                sentence:
+                    "Publica la obra para que el maestro te encuentre. Después envías la propuesta."
+                        .into(),
+                button: Some("Publicar obra"),
+                kind: NextKind::Publish,
+            };
+        }
         return NextStep {
-            sentence:
-                "Publica la obra para que el maestro te encuentre. Después envías la propuesta."
-                    .into(),
-            button: Some("Publicar obra"),
-            kind: NextKind::Publish,
+            sentence: "Obra publicada. Esperando que el contratista te encuentre. Cuando esté listo, envías la propuesta.".into(),
+            button: None,
+            kind: NextKind::None,
         };
     }
     NextStep {
         sentence: "Envía la propuesta al contratista.".into(),
         button: Some("Enviar"),
         kind: NextKind::Send,
+    }
+}
+
+/// Finished steps, for a muted checklist above the green card. Current step is not listed.
+pub fn completed_steps(role: Role, p: WorkProgress) -> Vec<&'static str> {
+    match role {
+        Role::Mandante => {
+            let mut v = Vec::new();
+            if p.has_draft {
+                v.push("Preparar partidas");
+            }
+            if p.has_offer {
+                v.push("Firmar propuesta");
+            }
+            if p.net_up {
+                v.push("Conectarme");
+            }
+            if p.published || p.has_peer {
+                v.push("Publicar obra");
+            }
+            if p.has_signed {
+                v.push("Enviar");
+            }
+            v
+        }
+        Role::Contratista => {
+            let mut v = Vec::new();
+            if p.net_up {
+                v.push("Conectarme");
+            }
+            if p.has_peer {
+                v.push("Buscar");
+            }
+            if p.has_pending || p.has_signed {
+                v.push("Aceptar");
+            }
+            v
+        }
     }
 }
 
@@ -186,5 +233,52 @@ mod tests {
             next_step(Role::Contratista, WorkProgress::default()).kind,
             NextKind::Connect
         );
+    }
+
+    #[test]
+    fn published_without_peer_waits_not_publish() {
+        let wait = next_step(
+            Role::Mandante,
+            WorkProgress {
+                has_draft: true,
+                has_offer: true,
+                net_up: true,
+                published: true,
+                has_peer: false,
+                ..WorkProgress::default()
+            },
+        );
+        assert_eq!(wait.kind, NextKind::None);
+        assert!(wait.button.is_none());
+        assert!(wait.sentence.contains("Esperando"));
+        let done = completed_steps(
+            Role::Mandante,
+            WorkProgress {
+                has_draft: true,
+                has_offer: true,
+                net_up: true,
+                published: true,
+                ..WorkProgress::default()
+            },
+        );
+        assert!(done.contains(&"Publicar obra"));
+        assert!(!done.contains(&"Enviar"));
+    }
+
+    #[test]
+    fn published_with_peer_says_send() {
+        let step = next_step(
+            Role::Mandante,
+            WorkProgress {
+                has_draft: true,
+                has_offer: true,
+                net_up: true,
+                published: true,
+                has_peer: true,
+                ..WorkProgress::default()
+            },
+        );
+        assert_eq!(step.kind, NextKind::Send);
+        assert_eq!(step.button, Some("Enviar"));
     }
 }
