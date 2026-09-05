@@ -11,6 +11,7 @@ pub enum NextKind {
     Send,
     Accept,
     Search,
+    Pay,
     None,
 }
 
@@ -43,10 +44,9 @@ pub fn next_step(role: Role, p: WorkProgress) -> NextStep {
 fn mandante_step(p: WorkProgress) -> NextStep {
     if p.has_signed {
         return NextStep {
-            sentence: "Trato cerrado. Las dos partes ya firmaron. El pago en cadena viene después."
-                .into(),
-            button: None,
-            kind: NextKind::None,
+            sentence: "Trato cerrado. Sigue en Pago: cotizar y fondear boleta + partida 1.".into(),
+            button: Some("Ir a Pago"),
+            kind: NextKind::Pay,
         };
     }
     if !p.has_draft {
@@ -113,6 +113,7 @@ pub fn completed_steps(role: Role, p: WorkProgress) -> Vec<&'static str> {
             }
             if p.has_signed {
                 v.push("Enviar");
+                v.push("Cerrar trato");
             }
             v
         }
@@ -127,6 +128,9 @@ pub fn completed_steps(role: Role, p: WorkProgress) -> Vec<&'static str> {
             if p.has_pending || p.has_signed {
                 v.push("Aceptar");
             }
+            if p.has_signed {
+                v.push("Cerrar trato");
+            }
             v
         }
     }
@@ -135,10 +139,9 @@ pub fn completed_steps(role: Role, p: WorkProgress) -> Vec<&'static str> {
 fn contratista_step(p: WorkProgress) -> NextStep {
     if p.has_signed {
         return NextStep {
-            sentence: "Trato cerrado. El mandante ya confirmó. El pago en cadena viene después."
-                .into(),
-            button: None,
-            kind: NextKind::None,
+            sentence: "Trato cerrado. Sigue en Pago: cotizar y fondear boleta + partida 1.".into(),
+            button: Some("Ir a Pago"),
+            kind: NextKind::Pay,
         };
     }
     if p.has_pending {
@@ -281,5 +284,24 @@ mod tests {
         );
         assert_eq!(step.kind, NextKind::Send);
         assert_eq!(step.button, Some("Enviar"));
+    }
+
+    #[test]
+    fn signed_trato_points_at_pago() {
+        let step = next_step(
+            Role::Mandante,
+            WorkProgress {
+                has_draft: true,
+                has_offer: true,
+                has_signed: true,
+                net_up: true,
+                has_peer: true,
+                published: true,
+                ..WorkProgress::default()
+            },
+        );
+        assert_eq!(step.kind, NextKind::Pay);
+        assert_eq!(step.button, Some("Ir a Pago"));
+        assert!(step.sentence.contains("boleta + partida 1"));
     }
 }

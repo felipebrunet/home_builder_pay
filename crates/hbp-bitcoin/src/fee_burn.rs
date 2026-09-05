@@ -124,7 +124,11 @@ pub fn build_fee_burn_t1_tx(
 }
 
 /// Unsigned t2: remaining half consumed as fees. One 0-value OP_RETURN.
-pub fn build_fee_burn_t2_tx(outpoint: OutPoint, input_sats: u64, t2: u32) -> Result<Transaction, Error> {
+pub fn build_fee_burn_t2_tx(
+    outpoint: OutPoint,
+    input_sats: u64,
+    t2: u32,
+) -> Result<Transaction, Error> {
     if input_sats < DUST_SATS {
         return Err(Error::msg(format!(
             "fee-burn t2 input {input_sats} is below dust"
@@ -252,7 +256,9 @@ pub fn assert_fee_burn_t2_shape(tx: &Transaction, input_sats: u64, t2: u32) -> R
         return Err(Error::msg("t2 sequence must enable locktime"));
     }
     if tx.output[0].value != Amount::ZERO {
-        return Err(Error::msg("t2 output must be 0 so the remainder is miner fee"));
+        return Err(Error::msg(
+            "t2 output must be 0 so the remainder is miner fee",
+        ));
     }
     if !tx.output[0].script_pubkey.is_op_return() {
         return Err(Error::msg("t2 output must be OP_RETURN"));

@@ -1,12 +1,13 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use crate::pay::{PayCoins, PayUiDraft};
 use anyhow::{bail, Context, Result};
-use hbp_bitcoin::{import_watch, Identity, WatchAccount};
+use hbp_bitcoin::{import_watch, CoopFile, Identity, OfferedCoin, WatchAccount};
 use hbp_core::{
     bond_minor, suggest_equal_stage_minors, vault_decrypt, vault_encrypt, ContractBody,
-    DisputePolicy, Network, Offer, PartidaSpec, Role, SignedContract, Unit, DEFAULT_BOND_BPS,
-    PRODUCT_NETWORK,
+    DisputePolicy, Network, NonceJournal, Offer, PartidaSpec, Project, Quote, Role, SignedContract,
+    Unit, DEFAULT_BOND_BPS, PRODUCT_NETWORK,
 };
 use serde::{Deserialize, Serialize};
 
@@ -441,6 +442,126 @@ impl WorkStore {
         Ok(acc)
     }
 
+    pub fn pay_dir(&self, slug: &str) -> PathBuf {
+        self.work_dir(slug).join("pay")
+    }
+
+    fn ensure_pay_dir(&self, slug: &str) -> Result<PathBuf> {
+        let dir = self.pay_dir(slug);
+        fs::create_dir_all(&dir)?;
+        Ok(dir)
+    }
+
+    pub fn save_pay_project(&self, slug: &str, project: &Project) -> Result<()> {
+        let dir = self.ensure_pay_dir(slug)?;
+        fs::write(
+            dir.join("state.json"),
+            serde_json::to_string_pretty(project)?,
+        )?;
+        Ok(())
+    }
+
+    pub fn load_pay_project(&self, slug: &str) -> Result<Option<Project>> {
+        read_json_opt(&self.pay_dir(slug).join("state.json"))
+    }
+
+    pub fn save_pay_quote(&self, slug: &str, quote: &Quote) -> Result<()> {
+        let dir = self.ensure_pay_dir(slug)?;
+        fs::write(
+            dir.join("02-quote.json"),
+            serde_json::to_string_pretty(quote)?,
+        )?;
+        Ok(())
+    }
+
+    pub fn load_pay_quote(&self, slug: &str) -> Result<Option<Quote>> {
+        read_json_opt(&self.pay_dir(slug).join("02-quote.json"))
+    }
+
+    pub fn save_pay_coins(&self, slug: &str, coins: &PayCoins) -> Result<()> {
+        let dir = self.ensure_pay_dir(slug)?;
+        fs::write(dir.join("coins.json"), serde_json::to_string_pretty(coins)?)?;
+        Ok(())
+    }
+
+    pub fn load_pay_coins(&self, slug: &str) -> Result<PayCoins> {
+        Ok(read_json_opt(&self.pay_dir(slug).join("coins.json"))?.unwrap_or_default())
+    }
+
+    pub fn save_pay_draft(&self, slug: &str, draft: &PayUiDraft) -> Result<()> {
+        let dir = self.ensure_pay_dir(slug)?;
+        fs::write(
+            dir.join("session.json"),
+            serde_json::to_string_pretty(draft)?,
+        )?;
+        Ok(())
+    }
+
+    pub fn load_pay_draft(&self, slug: &str) -> Result<PayUiDraft> {
+        Ok(read_json_opt(&self.pay_dir(slug).join("session.json"))?.unwrap_or_default())
+    }
+
+    pub fn save_pay_coop(&self, slug: &str, coop: &CoopFile) -> Result<()> {
+        let dir = self.ensure_pay_dir(slug)?;
+        fs::write(
+            dir.join("08-coop.json"),
+            serde_json::to_string_pretty(coop)?,
+        )?;
+        Ok(())
+    }
+
+    pub fn load_pay_coop(&self, slug: &str) -> Result<Option<CoopFile>> {
+        read_json_opt(&self.pay_dir(slug).join("08-coop.json"))
+    }
+
+    pub fn save_pay_nonces(&self, slug: &str, journal: &NonceJournal) -> Result<()> {
+        let dir = self.ensure_pay_dir(slug)?;
+        fs::write(
+            dir.join("nonces.json"),
+            serde_json::to_string_pretty(journal)?,
+        )?;
+        Ok(())
+    }
+
+    pub fn load_pay_nonces(&self, slug: &str) -> Result<NonceJournal> {
+        Ok(read_json_opt(&self.pay_dir(slug).join("nonces.json"))?.unwrap_or_default())
+    }
+
+    pub fn save_offered_coin(&self, slug: &str, coin: &OfferedCoin) -> Result<()> {
+        let mut coins = self.load_pay_coins(slug)?;
+        match coin.role {
+            Role::Mandante => coins.mandante = Some(coin.clone()),
+            Role::Contratista => coins.contratista = Some(coin.clone()),
+        }
+        self.save_pay_coins(slug, &coins)
+    }
+
+    /// Load or create `Project` from the signed trato. Re-applies a fully signed quote.
+    pub fn ensure_pay_project(&self, slug: &str) -> Result<Project> {
+        if let Some(mut p) = self.load_pay_project(slug)? {
+            if p.quote.is_none() {
+                if let Some(q) = self.load_pay_quote(slug)? {
+                    if q.mandante_sig.is_some() && q.contratista_sig.is_some() {
+                        let _ = p.set_quote(q);
+                        self.save_pay_project(slug, &p)?;
+                    }
+                }
+            }
+            return Ok(p);
+        }
+        let signed = self
+            .load_signed(slug)?
+            .context("falta el trato firmado (01-accepted.json)")?;
+        let mut p = Project::from_signed(signed)?;
+        if let Some(q) = self.load_pay_quote(slug)? {
+            if q.mandante_sig.is_some() && q.contratista_sig.is_some() {
+                let _ = p.set_quote(q);
+            }
+        }
+        self.save_pay_project(slug, &p)?;
+        Ok(p)
+    }
+
     /// Contratista: open or create a local folder for a work found on the net.
     pub fn ensure_contratista_work(
         &mut self,
@@ -805,6 +926,60 @@ mod tests {
             store.load_peer_onion(&e.slug).as_deref(),
             Some("jose.onion")
         );
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn pay_state_roundtrip() {
+        use crate::pay::{draft_quote, lock_quote_if_ready, sign_our_quote};
+        use crate::protocol::{contratista_accept, mandante_commit};
+        use hbp_core::Offer;
+
+        let tmp = std::env::temp_dir().join(format!("hbp-app-pay-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&tmp);
+        let mut store = WorkStore::open(tmp.join("a")).unwrap();
+        let e = store
+            .create_product_work("casa2", Role::Mandante, None)
+            .unwrap();
+        let mut m = store.load_identity(&e.slug).unwrap();
+        m.role = Some(Role::Mandante);
+        let mut c = hbp_bitcoin::generate_identity(PRODUCT_NETWORK).unwrap();
+        c.role = Some(Role::Contratista);
+        let draft = draft_equal_stages(
+            &m,
+            "casa2",
+            Unit::Usd,
+            1_000_000,
+            1_700_000_000,
+            1_800_000_000,
+            &[],
+        )
+        .unwrap();
+        let offer = Offer {
+            mandante_sig: hbp_bitcoin::sign_body(&m.secret().unwrap(), &draft).unwrap(),
+            body: draft,
+        };
+        let pending = contratista_accept(offer.clone(), &c).unwrap();
+        let signed = mandante_commit(&offer, pending, &m).unwrap();
+        store.save_signed(&e.slug, &signed).unwrap();
+        let mut project = store.ensure_pay_project(&e.slug).unwrap();
+        let q = sign_our_quote(
+            &c,
+            &signed,
+            sign_our_quote(
+                &m,
+                &signed,
+                draft_quote(&signed, Some(8_000_000), "test").unwrap(),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        store.save_pay_quote(&e.slug, &q).unwrap();
+        assert!(lock_quote_if_ready(&mut project, &q).unwrap());
+        store.save_pay_project(&e.slug, &project).unwrap();
+        let back = store.ensure_pay_project(&e.slug).unwrap();
+        assert!(back.quote.is_some());
+        assert_eq!(back.active_partida_id(), Some(1));
         let _ = fs::remove_dir_all(&tmp);
     }
 }

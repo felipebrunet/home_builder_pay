@@ -635,6 +635,58 @@ fn funding_mad_amounts_exact() {
 }
 
 #[test]
+fn funding_fee_burn_shared_script_distinguishes_by_amount() {
+    let (_ms, mp, _cs, cp) = pair();
+    let bond = crate::fee_burn_escrow(&mp, &cp, 1_800_000_000, crate::EscrowKind::Bond).unwrap();
+    let part = crate::fee_burn_escrow(&mp, &cp, 1_800_000_000, crate::EscrowKind::Partida).unwrap();
+    assert_eq!(bond.script_pubkey(), part.script_pubkey());
+    let other = partida_descriptor(&mp, &cp, 1_710_000_000).unwrap();
+    let chg = bitcoin::Address::p2tr_tweaked(other.output_key(), Network::Regtest);
+    let req = crate::FundingRequest {
+        bond: Some((bond.script_pubkey(), 20_000)),
+        partida: (part.script_pubkey(), 30_000),
+        mad: None,
+        fee: 200,
+        mandante: crate::FundingCoin {
+            outpoint: dummy_outpoint(),
+            sats: 1_000_000,
+            script_pubkey: chg.script_pubkey(),
+        },
+        mandante_change: chg.clone(),
+        contratista: Some(crate::FundingCoin {
+            outpoint: OutPoint {
+                txid: Txid::from_byte_array([8u8; 32]),
+                vout: 1,
+            },
+            sats: 500_000,
+            script_pubkey: chg.script_pubkey(),
+        }),
+        contratista_change: Some(chg.clone()),
+    };
+    let (tx, _) = crate::funding_tx(&req).unwrap();
+    validate_funding_tx(
+        &tx,
+        &ExpectedFunding {
+            bond_script: bond.script_pubkey(),
+            bond_sats: 20_000,
+            partida_script: part.script_pubkey(),
+            partida_sats: 30_000,
+            change: vec![chg.script_pubkey()],
+            allow_other_outputs: false,
+        },
+    )
+    .unwrap();
+    let amounts: Vec<u64> = tx
+        .output
+        .iter()
+        .filter(|o| o.script_pubkey == part.script_pubkey())
+        .map(|o| o.value.to_sat())
+        .collect();
+    assert!(amounts.contains(&20_000), "{amounts:?}");
+    assert!(amounts.contains(&30_000), "{amounts:?}");
+}
+
+#[test]
 fn file_musig_matches_in_process() {
     let (m_sk, m_pk, c_sk, c_pk) = pair();
     let escrow = partida_descriptor(&m_pk, &c_pk, 1_700_000_000).unwrap();
@@ -901,10 +953,7 @@ fn fee_burn_t1_t2_shapes_and_coop_key_path() {
     assert_eq!(t1_tx.output[0].value.to_sat(), 10_000);
     assert_eq!(t2_tx.output[0].value.to_sat(), 0);
     assert!(t2_tx.output[0].script_pubkey.is_op_return());
-    assert_eq!(
-        t2_tx.input[0].previous_output.txid,
-        t1_tx.compute_txid()
-    );
+    assert_eq!(t2_tx.input[0].previous_output.txid, t1_tx.compute_txid());
 
     let dest = bitcoin::Address::p2tr_tweaked(escrow.output_key(), Network::Regtest);
     let prev = TxOut {

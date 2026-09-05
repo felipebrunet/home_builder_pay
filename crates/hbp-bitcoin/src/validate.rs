@@ -30,7 +30,28 @@ pub fn validate_funding_tx(tx: &Transaction, expected: &ExpectedFunding) -> Resu
     }
     let mut saw_bond = false;
     let mut saw_partida = false;
+    let same_script = expected.bond_script == expected.partida_script;
     for o in &tx.output {
+        // Fee-burn bond and partida share the MuSig2 key-path script; tell them
+        // apart by the quoted amounts.
+        if same_script && o.script_pubkey == expected.bond_script {
+            if !saw_bond && o.value == Amount::from_sat(expected.bond_sats) {
+                saw_bond = true;
+                continue;
+            }
+            if !saw_partida && o.value == Amount::from_sat(expected.partida_sats) {
+                saw_partida = true;
+                continue;
+            }
+            if expected.allow_other_outputs || expected.change.iter().any(|c| c == &o.script_pubkey)
+            {
+                continue;
+            }
+            return Err(Error::msg(format!(
+                "unexpected output amount {} on shared escrow script",
+                o.value.to_sat()
+            )));
+        }
         if o.script_pubkey == expected.bond_script {
             if saw_bond {
                 return Err(Error::msg("duplicate bond output"));

@@ -6,14 +6,19 @@ use std::time::Duration;
 
 use eframe::egui::{self, Color32, RichText, Vec2};
 use hbp_app::{
-    completed_steps, contratista_accept, default_works_root, draft_equal_stages, export_backup,
-    format_unix_local_es, import_backup, import_signed, mandante_commit, next_step,
-    read_backup_file, validate_deadline_order, write_backup_file, DeadlineFields, NextKind,
-    UiPrefs, WorkEntry, WorkProgress, WorkStore, MONTHS_ES,
+    apply_incoming_quote, apply_verified_p1_funding, build_p1_funding_psbt, coin_from_fields,
+    combine_signed_funding, completed_steps, contratista_accept, coop_finish, coop_propose,
+    coop_sign, default_works_root, draft_equal_stages, draft_quote, escrow_addrs, export_backup,
+    format_unix_local_es, hex_artifact, hex_from_artifact, import_backup, import_signed,
+    lock_quote_if_ready, mandante_commit, next_step, parse_fee, partida_ui_enabled, party_role,
+    pay_stage, preview_quote_sats, price_minor_from_major, psbt_to_hex, quote_fully_signed,
+    read_backup_file, sign_our_quote, spanish_now, validate_deadline_order, write_backup_file,
+    DeadlineFields, NextKind, PayStage, PayUiDraft, UiPrefs, WorkEntry, WorkProgress, WorkStore,
+    ART_COIN, ART_COOP, ART_PSBT, ART_TX, MONTHS_ES,
 };
-use hbp_bitcoin::{address_at, sign_body, Identity};
+use hbp_bitcoin::{address_at, sign_body, CoopFile, Identity, OfferedCoin};
 use hbp_core::{
-    bond_minor, format_major_amount, parse_major_amount, Offer, Role, SignedContract, Unit,
+    bond_minor, format_major_amount, parse_major_amount, Offer, Quote, Role, SignedContract, Unit,
     DEFAULT_BOND_BPS, PRODUCT_NETWORK,
 };
 use hbp_net::{
@@ -104,6 +109,7 @@ struct App {
     tab: MainTab,
     help_open: bool,
     search_hits: Vec<WorkAnnounce>,
+    pay: PayUiDraft,
 }
 
 impl App {
@@ -159,6 +165,7 @@ impl App {
             tab: start_tab,
             help_open: false,
             search_hits: Vec::new(),
+            pay: PayUiDraft::default(),
         }
     }
 
@@ -549,6 +556,8 @@ impl App {
                 NetMessage::Offer { offer } => self.on_inbox_offer(offer),
                 NetMessage::Accept { pending } => self.on_inbox_accept(pending),
                 NetMessage::Commit { signed } => self.on_inbox_commit(signed),
+                NetMessage::Quote { quote } => self.on_inbox_quote(quote),
+                NetMessage::Artifact { name, json } => self.on_inbox_artifact(name, json),
                 other => self.note(format!("Llegó un recado ({})", other.kind())),
             }
         }
@@ -651,7 +660,7 @@ impl App {
                 if let Err(e) = self.store.save_signed(&slug, &signed) {
                     return self.fail(e);
                 }
-                self.note("Trato cerrado. Las dos partes ya firmaron.");
+                self.note("Trato cerrado. Sigue en Pago: cotizar y fondear boleta + partida 1.");
                 self.spawn_deliver(NetMessage::Commit { signed }, "Mandé la confirmación.");
             }
             Err(e) => self.fail(e),
@@ -670,10 +679,110 @@ impl App {
                 if let Err(e) = self.store.save_draft(&slug, &signed.body) {
                     return self.fail(e);
                 }
-                self.note("El mandante confirmó. El trato está cerrado.");
+                self.note(
+                    "El mandante confirmó. Trato cerrado. Sigue en Pago: boleta + partida 1.",
+                );
             }
             Err(e) => self.fail(e),
         }
+    }
+
+    fn slug_for_contract(&self, contract_id: &str) -> Option<String> {
+        if let Some(slug) = &self.selected {
+            if let Ok(Some(s)) = self.store.load_signed(slug) {
+                if s.id().ok().as_deref() == Some(contract_id) {
+                    return Some(slug.clone());
+                }
+            }
+        }
+        for w in &self.store.index.works {
+            if let Ok(Some(s)) = self.store.load_signed(&w.slug) {
+                if s.id().ok().as_deref() == Some(contract_id) {
+                    return Some(w.slug.clone());
+                }
+            }
+        }
+        self.selected.clone()
+    }
+
+    fn on_inbox_quote(&mut self, quote: Quote) {
+        let Some(slug) = self.slug_for_contract(&quote.contract_id) else {
+            return self.note("Llegó una cotización. Abre la obra del trato.");
+        };
+        self.selected = Some(slug.clone());
+        let local = self.store.load_pay_quote(&slug).ok().flatten();
+        match apply_incoming_quote(local, quote) {
+            Ok(q) => {
+                if let Err(e) = self.store.save_pay_quote(&slug, &q) {
+                    return self.fail(e);
+                }
+                if let Ok(mut project) = self.store.ensure_pay_project(&slug) {
+                    if let Ok(true) = lock_quote_if_ready(&mut project, &q) {
+                        let _ = self.store.save_pay_project(&slug, &project);
+                    }
+                }
+                self.tab = MainTab::Pago;
+                if quote_fully_signed(&q) {
+                    self.note("Cotización con las dos firmas. Ahora: fondear boleta + partida 1.");
+                } else {
+                    self.note("Llegó la cotización. Revísala y fírmala en Pago.");
+                }
+            }
+            Err(e) => self.fail(e),
+        }
+    }
+
+    fn on_inbox_artifact(&mut self, name: String, json: serde_json::Value) {
+        let Some(slug) = self.selected.clone() else {
+            return self.note(format!("Llegó {name}. Abre la obra del trato."));
+        };
+        if name.contains("coin") {
+            match serde_json::from_value::<OfferedCoin>(json) {
+                Ok(coin) => {
+                    if let Err(e) = self.store.save_offered_coin(&slug, &coin) {
+                        return self.fail(e);
+                    }
+                    self.note("Llegó una moneda (UTXO) para el fondeo. Ábrela en Pago.");
+                    self.tab = MainTab::Pago;
+                }
+                Err(e) => self.fail(format!("moneda: {e}")),
+            }
+            return;
+        }
+        if name.contains("coop") {
+            match serde_json::from_value::<CoopFile>(json) {
+                Ok(coop) => {
+                    if let Err(e) = self.store.save_pay_coop(&slug, &coop) {
+                        return self.fail(e);
+                    }
+                    self.pay.coop_paste = serde_json::to_string_pretty(&coop).unwrap_or_default();
+                    self.note("Llegó una ronda MuSig2 de cierre. Fírmala en Pago.");
+                    self.tab = MainTab::Pago;
+                }
+                Err(e) => self.fail(format!("cierre: {e}")),
+            }
+            return;
+        }
+        if let Some(hex) = hex_from_artifact(&json) {
+            if name.contains("signed") && name.contains("psbt") {
+                if self.pay.signed_psbt_a.trim().is_empty() {
+                    self.pay.signed_psbt_a = hex;
+                } else {
+                    self.pay.signed_psbt_b = hex;
+                }
+                self.note("Llegó un PSBT firmado. Combínalo en Pago.");
+            } else if name.contains("unsigned") || name.contains("psbt") {
+                self.pay.unsigned_psbt_hex = hex;
+                self.note("Llegó el PSBT sin firmar. Fírmalo en Sparrow / Electrum.");
+            } else {
+                self.pay.funding_tx_hex = hex;
+                self.note("Llegó el tx de fondeo. Verifícalo en Pago.");
+            }
+            let _ = self.store.save_pay_draft(&slug, &self.pay);
+            self.tab = MainTab::Pago;
+            return;
+        }
+        self.note(format!("Llegó un archivo ({name})."));
     }
 }
 
@@ -683,6 +792,9 @@ impl eframe::App for App {
         self.poll_jobs(ctx);
         self.drain_inbox();
         if self.selected != self.last_slug {
+            if let Some(prev) = self.last_slug.clone() {
+                let _ = self.store.save_pay_draft(&prev, &self.pay);
+            }
             if let Some(slug) = self.selected.clone() {
                 if let Ok(Some(draft)) = self.store.load_draft(&slug) {
                     if let Some((t1, t2)) = draft.dispute.fee_burn_deadlines() {
@@ -697,6 +809,9 @@ impl eframe::App for App {
                 } else {
                     self.peer_onion.clear();
                 }
+                self.pay = self.store.load_pay_draft(&slug).unwrap_or_default();
+            } else {
+                self.pay = PayUiDraft::default();
             }
             self.last_slug = self.selected.clone();
         }
@@ -913,10 +1028,15 @@ impl App {
                 (MainTab::Pago, "Pago"),
             ],
         };
+        let pago_ok = self
+            .selected
+            .as_ref()
+            .and_then(|s| self.store.load_signed(s).ok().flatten())
+            .is_some();
         ui.horizontal(|ui| {
             for (tab, label) in tabs {
                 let selected = self.tab == *tab;
-                let disabled = *tab == MainTab::Pago;
+                let disabled = *tab == MainTab::Pago && !pago_ok;
                 let text = if disabled {
                     RichText::new(*label).weak()
                 } else if selected {
@@ -943,15 +1063,7 @@ impl App {
             MainTab::Buscar => self.show_tab_buscar(ui),
             MainTab::Red => self.show_tab_red(ui),
             MainTab::Trato => self.show_tab_trato(ui),
-            MainTab::Pago => {
-                panel_card(ui, self.prefs.dark, |ui| {
-                    ui.label(RichText::new("Pago").strong());
-                    ui.label(
-                        RichText::new("Próximamente. El fondeo en cadena no es este paso.")
-                            .color(accent_amber(self.prefs.dark)),
-                    );
-                });
-            }
+            MainTab::Pago => self.show_tab_pago(ui),
         }
     }
 
@@ -1417,6 +1529,7 @@ impl App {
                 self.tab = MainTab::Buscar;
                 self.spawn_lookup();
             }
+            NextKind::Pay => self.tab = MainTab::Pago,
             NextKind::None => {}
         }
     }
@@ -1605,6 +1718,833 @@ impl App {
                     );
                 }
             }
+        }
+    }
+
+    fn show_tab_pago(&mut self, ui: &mut egui::Ui) {
+        let Some(slug) = self.selected.clone() else {
+            ui.label(RichText::new("Elige una obra arriba.").weak());
+            return;
+        };
+        let signed = match self.store.load_signed(&slug) {
+            Ok(Some(s)) => s,
+            Ok(None) => {
+                panel_card(ui, self.prefs.dark, |ui| {
+                    ui.label(RichText::new("Pago").strong());
+                    ui.label(
+                        RichText::new("Cierra el trato primero (Aceptar / confirmar).")
+                            .color(accent_amber(self.prefs.dark)),
+                    );
+                });
+                return;
+            }
+            Err(e) => {
+                ui.colored_label(theme_red(), e.to_string());
+                return;
+            }
+        };
+        let id = match self.store.load_identity(&slug) {
+            Ok(id) => id,
+            Err(e) => {
+                ui.colored_label(theme_red(), e.to_string());
+                return;
+            }
+        };
+        let project = match self.store.ensure_pay_project(&slug) {
+            Ok(p) => p,
+            Err(e) => {
+                ui.colored_label(theme_red(), e.to_string());
+                return;
+            }
+        };
+        let pending_q = self.store.load_pay_quote(&slug).ok().flatten();
+        let stage = pay_stage(Some(&project), pending_q.as_ref());
+        let now = spanish_now(Some(&project), pending_q.as_ref());
+        let dark = self.prefs.dark;
+        let status_color = match stage {
+            PayStage::PartidaInCourse | PayStage::UnlockNext | PayStage::AllClosed => {
+                accent_green(dark)
+            }
+            PayStage::FundBondP1 => accent_green(dark),
+            _ => accent_amber(dark),
+        };
+
+        panel_card(ui, dark, |ui| {
+            ui.label(RichText::new("Pago").strong().size(18.0));
+            ui.label(RichText::new(now).color(status_color).strong());
+            ui.label(
+                RichText::new("Signet. Una partida a la vez. Sin árbitro. Sin acuerdo: fee-burn.")
+                    .small()
+                    .weak(),
+            );
+        });
+        ui.add_space(8.0);
+
+        self.show_pay_watch(ui, &slug);
+        ui.add_space(8.0);
+        self.show_pay_partidas(ui, &project);
+        ui.add_space(8.0);
+        self.show_pay_quote(ui, &slug, &id, &signed, &project, pending_q.as_ref());
+
+        if matches!(
+            stage,
+            PayStage::FundBondP1 | PayStage::PartidaInCourse | PayStage::UnlockNext
+        ) && project.quote.is_some()
+        {
+            ui.add_space(8.0);
+            self.show_pay_fund(ui, &slug, &id, &project);
+        }
+        if matches!(stage, PayStage::PartidaInCourse) {
+            ui.add_space(8.0);
+            self.show_pay_coop(ui, &slug, &id, &project);
+        }
+        if matches!(stage, PayStage::UnlockNext) {
+            ui.add_space(8.0);
+            panel_card(ui, dark, |ui| {
+                ui.label(RichText::new("Partida 2").strong());
+                ui.label(
+                    RichText::new(
+                        "Desbloqueada. El fondeo de P2 (solo mandante, --partida-only) no está en esta pantalla. Esta ronda cubre boleta + partida 1.",
+                    )
+                    .weak(),
+                );
+            });
+        }
+    }
+
+    fn show_pay_watch(&mut self, ui: &mut egui::Ui, slug: &str) {
+        let watch = self.store.load_watch(slug, Some(self.passphrase.as_str()));
+        panel_card(ui, self.prefs.dark, |ui| match watch {
+            Ok(Some(acc)) => {
+                if let Ok(a) = address_at(&acc.receive_descriptor, 0, PRODUCT_NETWORK) {
+                    ui.label(RichText::new("Billetera watch-only").strong());
+                    ui.label(RichText::new(format!("Dirección 0: {a}")).small().weak());
+                    ui.label(
+                        RichText::new("No gasta sola. Pega outpoints de Sparrow / Electrum abajo.")
+                            .small()
+                            .weak(),
+                    );
+                }
+            }
+            Ok(None) => {
+                ui.label(RichText::new("Falta la xpub / vpub (opcional, local)").strong());
+                ui.label(
+                        RichText::new("Si la tienes, gárdala aquí. Nadie más la ve. El fondeo también funciona pegando outpoints.")
+                            .small()
+                            .weak(),
+                    );
+                self.show_wallet(ui, slug);
+            }
+            Err(e) => {
+                ui.label(RichText::new(e.to_string()).small().weak());
+                self.show_wallet(ui, slug);
+            }
+        });
+    }
+
+    fn show_pay_partidas(&self, ui: &mut egui::Ui, project: &hbp_core::Project) {
+        panel_card(ui, self.prefs.dark, |ui| {
+            ui.label(RichText::new("Partidas").strong());
+            for p in &project.partidas {
+                let live = partida_ui_enabled(project, p.id);
+                let state = match &p.state {
+                    hbp_core::PartidaStatus::Scheduled => "sin cotizar",
+                    hbp_core::PartidaStatus::AmountAgreed { sats } => {
+                        // shown below
+                        let _ = sats;
+                        "cotizada"
+                    }
+                    hbp_core::PartidaStatus::Funding { .. }
+                    | hbp_core::PartidaStatus::Locked { .. } => "en curso",
+                    hbp_core::PartidaStatus::ReceptionProposed { .. } => "recepción propuesta",
+                    hbp_core::PartidaStatus::Paid { .. } => "pagada",
+                    hbp_core::PartidaStatus::Unwound { .. } => "deshecha",
+                    hbp_core::PartidaStatus::FeeBurnT1 { .. } => "fee-burn t1",
+                    hbp_core::PartidaStatus::FeeBurnT2 { .. } => "fee-burn t2",
+                };
+                let extra = match &p.state {
+                    hbp_core::PartidaStatus::AmountAgreed { sats }
+                    | hbp_core::PartidaStatus::Funding { sats, .. }
+                    | hbp_core::PartidaStatus::Locked { sats, .. } => format!(" · {sats} sats"),
+                    _ => String::new(),
+                };
+                let line = format!("Partida {} — {state}{extra}", p.id);
+                if live {
+                    ui.label(RichText::new(line).strong());
+                } else if p.is_terminal() {
+                    ui.label(RichText::new(format!("✓ {line}")).small().weak());
+                } else {
+                    ui.label(
+                        RichText::new(format!("{line} (bloqueada hasta cerrar la anterior)"))
+                            .weak(),
+                    );
+                }
+            }
+        });
+    }
+
+    fn show_pay_quote(
+        &mut self,
+        ui: &mut egui::Ui,
+        slug: &str,
+        id: &Identity,
+        signed: &SignedContract,
+        project: &hbp_core::Project,
+        pending: Option<&Quote>,
+    ) {
+        let quote = project.quote.as_ref().or(pending);
+        let locked = quote.map(quote_fully_signed).unwrap_or(false);
+        let dark = self.prefs.dark;
+        panel_card(ui, dark, |ui| {
+            ui.label(RichText::new("Cotización — boleta + partida 1").strong());
+            if locked {
+                if let Some(q) = quote {
+                    let p1 = q.partida_sats(1).unwrap_or(0);
+                    ui.label(format!(
+                        "Boleta {} sats · partida 1 {} sats",
+                        q.bond_sats, p1
+                    ));
+                    if !q.fx_note.is_empty() {
+                        ui.label(RichText::new(&q.fx_note).small().weak());
+                    }
+                    ui.label(
+                        RichText::new("Las dos partes ya firmaron. Los sats están fijos.")
+                            .small()
+                            .color(accent_green(dark)),
+                    );
+                }
+                return;
+            }
+
+            ui.label(
+                RichText::new("Precio BTC: Yadio → CoinGecko → CoinMarketCap, o escríbelo tú.")
+                    .small()
+                    .weak(),
+            );
+            ui.horizontal(|ui| {
+                if ui.button("Consultar precio").clicked() {
+                    self.spawn_fx();
+                }
+                if !self.fx_line.is_empty() {
+                    ui.label(RichText::new(&self.fx_line).small());
+                }
+            });
+            ui.horizontal(|ui| {
+                ui.label("BTC (manual)");
+                show_field(ui, &mut self.pay.price_major, "ej. 80000", dark, 140.0);
+            });
+
+            if let Some(price) = self.pay_price_minor() {
+                if let Ok((bond, p1)) = preview_quote_sats(signed, Some(price)) {
+                    ui.label(
+                        RichText::new(format!("Boleta ≈ {bond} sats · partida 1 ≈ {p1} sats"))
+                            .strong(),
+                    );
+                }
+            } else if signed.body.unit.is_bitcoin_denom() {
+                if let Ok((bond, p1)) = preview_quote_sats(signed, None) {
+                    ui.label(
+                        RichText::new(format!("Boleta {bond} sats · partida 1 {p1} sats")).strong(),
+                    );
+                }
+            }
+
+            if let Some(q) = quote {
+                let p1 = q.partida_sats(1).unwrap_or(0);
+                ui.label(format!(
+                    "Pendiente: boleta {} · P1 {} sats. Falta una firma.",
+                    q.bond_sats, p1
+                ));
+            }
+
+            ui.add_space(6.0);
+            ui.horizontal(|ui| {
+                if primary_btn(ui, "Proponer cotización", dark).clicked() {
+                    self.pay_propose_quote(slug, id, signed);
+                }
+                if ui.button("Firmar cotización").clicked() {
+                    self.pay_sign_quote(slug, id, signed);
+                }
+            });
+        });
+    }
+
+    fn show_pay_fund(
+        &mut self,
+        ui: &mut egui::Ui,
+        slug: &str,
+        id: &Identity,
+        project: &hbp_core::Project,
+    ) {
+        let dark = self.prefs.dark;
+        let coins = self.store.load_pay_coins(slug).unwrap_or_default();
+        panel_card(ui, dark, |ui| {
+            ui.label(RichText::new("Fondeo — boleta + partida 1").strong());
+            if let Ok((bond, p1)) = escrow_addrs(project) {
+                ui.label(RichText::new(format!("Boleta: {bond}")).small());
+                ui.label(RichText::new(format!("Partida 1: {p1}")).small());
+            }
+            ui.label(
+                RichText::new(
+                    "Pega un UTXO Signet por lado (txid:vout, sats, dirección, cambio). Watch-only no firma.",
+                )
+                .small()
+                .weak(),
+            );
+            ui.horizontal(|ui| {
+                ui.label("Comisión");
+                show_field(ui, &mut self.pay.fee_sats, "500", dark, 80.0);
+                ui.label(RichText::new("sats (sale del cambio)").small().weak());
+            });
+
+            ui.add_space(4.0);
+            ui.label(RichText::new("Mandante").small().strong());
+            self.pay_coin_fields(ui, true, coins.mandante.as_ref());
+            ui.label(RichText::new("Contratista (boleta)").small().strong());
+            self.pay_coin_fields(ui, false, coins.contratista.as_ref());
+
+            ui.add_space(6.0);
+            ui.horizontal(|ui| {
+                if ui.button("Guardar mi moneda").clicked() {
+                    self.pay_save_my_coin(slug, id, project);
+                }
+                if ui.button("Enviar mi moneda").clicked() {
+                    self.pay_send_my_coin(slug, id, project);
+                }
+            });
+            ui.horizontal(|ui| {
+                if primary_btn(ui, "Armar PSBT (boleta + P1)", dark).clicked() {
+                    self.pay_build_psbt(slug, project);
+                }
+                if ui.button("Enviar PSBT").clicked() {
+                    self.pay_send_psbt(slug);
+                }
+            });
+
+            if !self.pay.unsigned_psbt_hex.is_empty() {
+                ui.label(RichText::new("PSBT sin firmar (hex) — cada uno firma SU input").small());
+                show_multiline(
+                    ui,
+                    &mut self.pay.unsigned_psbt_hex,
+                    "hex…",
+                    dark,
+                    ui.available_width().min(720.0),
+                    3,
+                );
+            }
+            ui.label(RichText::new("PSBT firmados (pega hex o base64)").small());
+            show_multiline(
+                ui,
+                &mut self.pay.signed_psbt_a,
+                "firmado A",
+                dark,
+                ui.available_width().min(720.0),
+                2,
+            );
+            show_multiline(
+                ui,
+                &mut self.pay.signed_psbt_b,
+                "firmado B",
+                dark,
+                ui.available_width().min(720.0),
+                2,
+            );
+            ui.horizontal(|ui| {
+                if ui.button("Combinar y extraer tx").clicked() {
+                    self.pay_combine(slug);
+                }
+                if primary_btn(ui, "Verificar fondeo", dark).clicked() {
+                    self.pay_verify(slug);
+                }
+                if ui.button("Enviar tx").clicked() {
+                    self.pay_send_tx(slug);
+                }
+            });
+            if !self.pay.funding_tx_hex.is_empty() {
+                ui.label(RichText::new("Tx de fondeo (hex) — difúndelo en Signet").small());
+                show_multiline(
+                    ui,
+                    &mut self.pay.funding_tx_hex,
+                    "tx hex…",
+                    dark,
+                    ui.available_width().min(720.0),
+                    2,
+                );
+            }
+        });
+    }
+
+    fn pay_coin_fields(&mut self, ui: &mut egui::Ui, mandante: bool, have: Option<&OfferedCoin>) {
+        let dark = self.prefs.dark;
+        if let Some(c) = have {
+            ui.label(
+                RichText::new(format!("Guardada: {} · {} sats", c.outpoint, c.sats))
+                    .small()
+                    .color(accent_green(dark)),
+            );
+        }
+        ui.horizontal(|ui| {
+            if mandante {
+                show_field(ui, &mut self.pay.m_outpoint, "txid:vout", dark, 260.0);
+                show_field(ui, &mut self.pay.m_sats, "sats", dark, 80.0);
+            } else {
+                show_field(ui, &mut self.pay.c_outpoint, "txid:vout", dark, 260.0);
+                show_field(ui, &mut self.pay.c_sats, "sats", dark, 80.0);
+            }
+        });
+        ui.horizontal(|ui| {
+            if mandante {
+                show_field(ui, &mut self.pay.m_addr, "dirección del UTXO", dark, 280.0);
+                show_field(ui, &mut self.pay.m_change, "cambio", dark, 280.0);
+            } else {
+                show_field(ui, &mut self.pay.c_addr, "dirección del UTXO", dark, 280.0);
+                show_field(ui, &mut self.pay.c_change, "cambio", dark, 280.0);
+            }
+        });
+    }
+
+    fn show_pay_coop(
+        &mut self,
+        ui: &mut egui::Ui,
+        slug: &str,
+        _id: &Identity,
+        project: &hbp_core::Project,
+    ) {
+        let dark = self.prefs.dark;
+        panel_card(ui, dark, |ui| {
+            ui.label(RichText::new("Recepción / cierre cooperativo (P1)").strong());
+            ui.label(
+                RichText::new(
+                    "Cuando ambos están de acuerdo: destino Signet + dos rondas MuSig2 (archivo o Tor).",
+                )
+                .small()
+                .weak(),
+            );
+            if let Some((txid, vout, sats)) = project.partida(1).ok().and_then(|p| p.locked_utxo())
+            {
+                ui.label(
+                    RichText::new(format!("UTXO P1 {txid}:{vout} · {sats} sats"))
+                        .small()
+                        .weak(),
+                );
+            }
+            ui.horizontal(|ui| {
+                ui.label("Destino");
+                show_field(
+                    ui,
+                    &mut self.pay.dest,
+                    "dirección Signet de cobro",
+                    dark,
+                    360.0,
+                );
+            });
+            if let Ok(Some(coop)) = self.store.load_pay_coop(slug) {
+                ui.label(
+                    RichText::new(format!(
+                        "Ronda en curso · dest {} · fee {}",
+                        coop.dest, coop.fee
+                    ))
+                    .small(),
+                );
+            }
+            ui.add_space(4.0);
+            ui.horizontal(|ui| {
+                if primary_btn(ui, "Proponer cierre", dark).clicked() {
+                    self.pay_coop_propose(slug);
+                }
+                if ui.button("Firmar ronda").clicked() {
+                    self.pay_coop_sign(slug);
+                }
+                if ui.button("Terminar y marcar pagada").clicked() {
+                    self.pay_coop_finish(slug);
+                }
+            });
+            ui.label(RichText::new("Archivo de ronda (pega JSON si no llegó por red)").small());
+            show_multiline(
+                ui,
+                &mut self.pay.coop_paste,
+                "{ … }",
+                dark,
+                ui.available_width().min(720.0),
+                3,
+            );
+            if ui.button("Guardar JSON pegado").clicked() {
+                self.pay_import_coop_paste(slug);
+            }
+        });
+    }
+
+    fn pay_price_minor(&self) -> Option<u64> {
+        if let Ok(p) = price_minor_from_major(&self.pay.price_major) {
+            if p > 0 {
+                return Some(p);
+            }
+        }
+        self.fx
+            .as_ref()
+            .map(|q| (q.btc_price_major * 100.0).round() as u64)
+    }
+
+    fn pay_fx_note(&self) -> String {
+        if !self.pay.price_major.trim().is_empty() {
+            return format!("manual {} / BTC", self.pay.price_major.trim());
+        }
+        if let Some(q) = &self.fx {
+            return format!("{} {:.2} {}/BTC", q.source, q.btc_price_major, q.unit);
+        }
+        String::new()
+    }
+
+    fn pay_propose_quote(&mut self, slug: &str, id: &Identity, signed: &SignedContract) {
+        let price =
+            if signed.body.unit.is_bitcoin_denom() {
+                None
+            } else {
+                match self.pay_price_minor() {
+                    Some(p) => Some(p),
+                    None => return self.fail(
+                        "Consulta el precio o escribe cuánto vale 1 BTC en la moneda de la obra.",
+                    ),
+                }
+            };
+        match draft_quote(signed, price, &self.pay_fx_note())
+            .and_then(|q| sign_our_quote(id, signed, q))
+        {
+            Ok(q) => {
+                if let Err(e) = self.store.save_pay_quote(slug, &q) {
+                    return self.fail(e);
+                }
+                if let Ok(mut project) = self.store.ensure_pay_project(slug) {
+                    if let Ok(true) = lock_quote_if_ready(&mut project, &q) {
+                        let _ = self.store.save_pay_project(slug, &project);
+                    }
+                }
+                let _ = self.store.save_pay_draft(slug, &self.pay);
+                self.note("Cotización firmada por ti. La mando al otro.");
+                self.spawn_deliver(NetMessage::Quote { quote: q }, "Cotización enviada.");
+            }
+            Err(e) => self.fail(e),
+        }
+    }
+
+    fn pay_sign_quote(&mut self, slug: &str, id: &Identity, signed: &SignedContract) {
+        let Some(q) = self.store.load_pay_quote(slug).ok().flatten() else {
+            return self.fail("Todavía no hay cotización. Propón una o espera la del otro.");
+        };
+        match sign_our_quote(id, signed, q) {
+            Ok(q) => {
+                if let Err(e) = self.store.save_pay_quote(slug, &q) {
+                    return self.fail(e);
+                }
+                if let Ok(mut project) = self.store.ensure_pay_project(slug) {
+                    match lock_quote_if_ready(&mut project, &q) {
+                        Ok(true) => {
+                            let _ = self.store.save_pay_project(slug, &project);
+                            self.note("Cotización cerrada. Ahora: fondear boleta + partida 1.");
+                        }
+                        Ok(false) => self.note("Firmaste. Falta la otra firma."),
+                        Err(e) => return self.fail(e),
+                    }
+                }
+                self.spawn_deliver(NetMessage::Quote { quote: q }, "Cotización enviada.");
+            }
+            Err(e) => self.fail(e),
+        }
+    }
+
+    fn my_coin_fields(&self, role: Role) -> Result<OfferedCoin, String> {
+        match role {
+            Role::Mandante => coin_from_fields(
+                role,
+                &self.pay.m_outpoint,
+                &self.pay.m_sats,
+                &self.pay.m_addr,
+                &self.pay.m_change,
+            )
+            .map_err(|e| e.to_string()),
+            Role::Contratista => coin_from_fields(
+                role,
+                &self.pay.c_outpoint,
+                &self.pay.c_sats,
+                &self.pay.c_addr,
+                &self.pay.c_change,
+            )
+            .map_err(|e| e.to_string()),
+        }
+    }
+
+    fn pay_save_my_coin(&mut self, slug: &str, id: &Identity, project: &hbp_core::Project) {
+        let role = match party_role(id, &project.contract.body) {
+            Ok(r) => r,
+            Err(e) => return self.fail(e),
+        };
+        match self.my_coin_fields(role) {
+            Ok(coin) => match self.store.save_offered_coin(slug, &coin) {
+                Ok(()) => {
+                    let _ = self.store.save_pay_draft(slug, &self.pay);
+                    self.note("Moneda guardada aquí. No es la xpub.");
+                }
+                Err(e) => self.fail(e),
+            },
+            Err(e) => self.fail(e),
+        }
+    }
+
+    fn pay_send_my_coin(&mut self, slug: &str, id: &Identity, project: &hbp_core::Project) {
+        self.pay_save_my_coin(slug, id, project);
+        let role = match party_role(id, &project.contract.body) {
+            Ok(r) => r,
+            Err(e) => return self.fail(e),
+        };
+        let coins = self.store.load_pay_coins(slug).unwrap_or_default();
+        let coin = match role {
+            Role::Mandante => coins.mandante,
+            Role::Contratista => coins.contratista,
+        };
+        let Some(coin) = coin else {
+            return;
+        };
+        let json = match serde_json::to_value(&coin) {
+            Ok(v) => v,
+            Err(e) => return self.fail(e),
+        };
+        self.spawn_deliver(
+            NetMessage::Artifact {
+                name: ART_COIN.into(),
+                json,
+            },
+            "Moneda enviada (un UTXO, no la xpub).",
+        );
+    }
+
+    fn pay_build_psbt(&mut self, slug: &str, project: &hbp_core::Project) {
+        let coins = self.store.load_pay_coins(slug).unwrap_or_default();
+        let (Some(m), Some(c)) = (coins.mandante, coins.contratista) else {
+            return self.fail("Faltan las dos monedas (mandante y contratista).");
+        };
+        let fee = match parse_fee(&self.pay.fee_sats) {
+            Ok(f) => f,
+            Err(e) => return self.fail(e),
+        };
+        match build_p1_funding_psbt(project, &m, &c, fee) {
+            Ok(psbt) => {
+                self.pay.unsigned_psbt_hex = psbt_to_hex(&psbt);
+                let _ = self.store.save_pay_draft(slug, &self.pay);
+                self.note(
+                    "PSBT listo. Cada uno firma SU input en Sparrow / Electrum. No lo difundan aún.",
+                );
+            }
+            Err(e) => self.fail(e),
+        }
+    }
+
+    fn pay_send_psbt(&mut self, slug: &str) {
+        if self.pay.unsigned_psbt_hex.trim().is_empty() {
+            return self.fail("Primero arma el PSBT.");
+        }
+        let _ = self.store.save_pay_draft(slug, &self.pay);
+        self.spawn_deliver(
+            NetMessage::Artifact {
+                name: ART_PSBT.into(),
+                json: hex_artifact(&self.pay.unsigned_psbt_hex),
+            },
+            "PSBT enviado.",
+        );
+    }
+
+    fn pay_combine(&mut self, slug: &str) {
+        match combine_signed_funding(&[&self.pay.signed_psbt_a, &self.pay.signed_psbt_b]) {
+            Ok(hex) => {
+                self.pay.funding_tx_hex = hex;
+                let _ = self.store.save_pay_draft(slug, &self.pay);
+                self.note(
+                    "Tx armado. Verifícalo y luego difúndelo en Signet (Sparrow / Electrum).",
+                );
+            }
+            Err(e) => self.fail(e),
+        }
+    }
+
+    fn pay_verify(&mut self, slug: &str) {
+        let mut project = match self.store.ensure_pay_project(slug) {
+            Ok(p) => p,
+            Err(e) => return self.fail(e),
+        };
+        if self.pay.funding_tx_hex.trim().is_empty() {
+            return self.fail("Falta el hex del tx (combina los PSBT o pégalo).");
+        }
+        match apply_verified_p1_funding(&mut project, &self.pay.funding_tx_hex) {
+            Ok(txid) => {
+                if let Err(e) = self.store.save_pay_project(slug, &project) {
+                    return self.fail(e);
+                }
+                let _ = self.store.save_pay_draft(slug, &self.pay);
+                self.note(format!(
+                    "Fondeo verificado. txid {txid}. Partida 1 en curso."
+                ));
+            }
+            Err(e) => self.fail(e),
+        }
+    }
+
+    fn pay_send_tx(&mut self, slug: &str) {
+        if self.pay.funding_tx_hex.trim().is_empty() {
+            return self.fail("No hay tx para enviar.");
+        }
+        let _ = self.store.save_pay_draft(slug, &self.pay);
+        self.spawn_deliver(
+            NetMessage::Artifact {
+                name: ART_TX.into(),
+                json: hex_artifact(&self.pay.funding_tx_hex),
+            },
+            "Tx de fondeo enviado al otro.",
+        );
+    }
+
+    fn pay_import_coop_paste(&mut self, slug: &str) {
+        let raw = self.pay.coop_paste.trim();
+        if raw.is_empty() {
+            return self.fail("Pega el JSON de la ronda.");
+        }
+        match serde_json::from_str::<CoopFile>(raw) {
+            Ok(coop) => match self.store.save_pay_coop(slug, &coop) {
+                Ok(()) => self.note("Ronda guardada."),
+                Err(e) => self.fail(e),
+            },
+            Err(e) => self.fail(e),
+        }
+    }
+
+    fn pay_coop_propose(&mut self, slug: &str) {
+        let id = match self.store.load_identity(slug) {
+            Ok(id) => id,
+            Err(e) => return self.fail(e),
+        };
+        let project = match self.store.ensure_pay_project(slug) {
+            Ok(p) => p,
+            Err(e) => return self.fail(e),
+        };
+        let fee = match parse_fee(&self.pay.fee_sats) {
+            Ok(f) => f,
+            Err(e) => return self.fail(e),
+        };
+        if self.pay.dest.trim().is_empty() {
+            return self.fail("Escribe la dirección Signet de cobro.");
+        }
+        let mut journal = match self.store.load_pay_nonces(slug) {
+            Ok(j) => j,
+            Err(e) => return self.fail(e),
+        };
+        match coop_propose(&id, &project, &self.pay.dest, fee, &mut journal) {
+            Ok(coop) => {
+                if let Err(e) = self.store.save_pay_nonces(slug, &journal) {
+                    return self.fail(e);
+                }
+                if let Err(e) = self.store.save_pay_coop(slug, &coop) {
+                    return self.fail(e);
+                }
+                self.pay.coop_paste = serde_json::to_string_pretty(&coop).unwrap_or_default();
+                let json = match serde_json::to_value(&coop) {
+                    Ok(v) => v,
+                    Err(e) => return self.fail(e),
+                };
+                self.note("Ronda propuesta. El otro debe firmar.");
+                self.spawn_deliver(
+                    NetMessage::Artifact {
+                        name: ART_COOP.into(),
+                        json,
+                    },
+                    "Cierre enviado.",
+                );
+            }
+            Err(e) => self.fail(e),
+        }
+    }
+
+    fn pay_coop_sign(&mut self, slug: &str) {
+        let id = match self.store.load_identity(slug) {
+            Ok(id) => id,
+            Err(e) => return self.fail(e),
+        };
+        let project = match self.store.ensure_pay_project(slug) {
+            Ok(p) => p,
+            Err(e) => return self.fail(e),
+        };
+        let coop = match self.store.load_pay_coop(slug) {
+            Ok(Some(c)) => c,
+            Ok(None) => return self.fail("No hay ronda. Pégala o espera la del otro."),
+            Err(e) => return self.fail(e),
+        };
+        let mut journal = match self.store.load_pay_nonces(slug) {
+            Ok(j) => j,
+            Err(e) => return self.fail(e),
+        };
+        match coop_sign(&id, &project, coop, &mut journal) {
+            Ok(coop) => {
+                if let Err(e) = self.store.save_pay_nonces(slug, &journal) {
+                    return self.fail(e);
+                }
+                if let Err(e) = self.store.save_pay_coop(slug, &coop) {
+                    return self.fail(e);
+                }
+                self.pay.coop_paste = serde_json::to_string_pretty(&coop).unwrap_or_default();
+                let json = match serde_json::to_value(&coop) {
+                    Ok(v) => v,
+                    Err(e) => return self.fail(e),
+                };
+                self.note("Ronda firmada. Devuélvela para terminar.");
+                self.spawn_deliver(
+                    NetMessage::Artifact {
+                        name: ART_COOP.into(),
+                        json,
+                    },
+                    "Firma de cierre enviada.",
+                );
+            }
+            Err(e) => self.fail(e),
+        }
+    }
+
+    fn pay_coop_finish(&mut self, slug: &str) {
+        let id = match self.store.load_identity(slug) {
+            Ok(id) => id,
+            Err(e) => return self.fail(e),
+        };
+        let mut project = match self.store.ensure_pay_project(slug) {
+            Ok(p) => p,
+            Err(e) => return self.fail(e),
+        };
+        let coop = match self.store.load_pay_coop(slug) {
+            Ok(Some(c)) => c,
+            Ok(None) => return self.fail("No hay ronda para terminar."),
+            Err(e) => return self.fail(e),
+        };
+        let mut journal = match self.store.load_pay_nonces(slug) {
+            Ok(j) => j,
+            Err(e) => return self.fail(e),
+        };
+        match coop_finish(&id, &mut project, &coop, &mut journal) {
+            Ok(hex) => {
+                if let Err(e) = self.store.save_pay_nonces(slug, &journal) {
+                    return self.fail(e);
+                }
+                if let Err(e) = self.store.save_pay_project(slug, &project) {
+                    return self.fail(e);
+                }
+                self.pay.funding_tx_hex = hex.clone();
+                let _ = self.store.save_pay_draft(slug, &self.pay);
+                self.note(
+                    "Partida 1 pagada. Difunde el tx de cierre en Signet. Partida 2 queda desbloqueada.",
+                );
+                self.spawn_deliver(
+                    NetMessage::Artifact {
+                        name: ART_TX.into(),
+                        json: hex_artifact(&hex),
+                    },
+                    "Cierre enviado.",
+                );
+            }
+            Err(e) => self.fail(e),
         }
     }
 

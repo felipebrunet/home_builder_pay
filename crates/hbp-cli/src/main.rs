@@ -1201,8 +1201,10 @@ fn cmd_verify_funding(store: &Store, tx_hex: &str, partida: u32, partida_only: b
     let bond_vout = tx
         .output
         .iter()
-        .position(|o| o.script_pubkey == bond.script_pubkey())
-        .unwrap();
+        .position(|o| {
+            o.script_pubkey == bond.script_pubkey() && o.value.to_sat() == quote.bond_sats
+        })
+        .context("missing bond output with quoted amount")?;
     project.note_bond_funding(txid.clone(), bond_vout as u32, quote.bond_sats, 1)?;
     project.note_partida_funding(partida, txid.clone(), part_vout as u32, part_sats, 1, 1)?;
     store.save_project(&project)?;

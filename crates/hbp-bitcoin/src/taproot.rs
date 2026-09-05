@@ -291,9 +291,7 @@ pub fn partida_escrow_from_body(
             let a = crate::convert::parse_btc_pk(pk)?;
             arbiter_escrow(&m, &c, &a, spec.plazo_unix, window, EscrowKind::Partida)
         }
-        DisputePolicy::FeeBurn { t2, .. } => {
-            fee_burn_escrow(&m, &c, *t2, EscrowKind::Partida)
-        }
+        DisputePolicy::FeeBurn { t2, .. } => fee_burn_escrow(&m, &c, *t2, EscrowKind::Partida),
         _ => partida_descriptor(&m, &c, spec.plazo_unix),
     }
 }
@@ -338,9 +336,10 @@ pub fn fee_burn_escrow(
 }
 
 pub fn fee_burn_escrow_from_body(body: &ContractBody, kind: EscrowKind) -> Result<Escrow, Error> {
-    let (t1, t2) = body.dispute.fee_burn_deadlines().ok_or_else(|| {
-        Error::msg("contract dispute is not fee_burn")
-    })?;
+    let (t1, t2) = body
+        .dispute
+        .fee_burn_deadlines()
+        .ok_or_else(|| Error::msg("contract dispute is not fee_burn"))?;
     body.dispute.validate()?;
     let _ = t1;
     let (m, c) = keys_from_body(body)?;
