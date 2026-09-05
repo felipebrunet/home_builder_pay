@@ -1,28 +1,135 @@
 //! Shared egui chrome: cards, primary CTA, fields, obra stepper.
 
-use eframe::egui::{self, Color32, RichText, Vec2};
+use eframe::egui::{self, Align2, Color32, FontId, Pos2, Rect, RichText, Sense, Stroke, Vec2};
 use hbp_core::Unit;
 
 use crate::datetime::{DeadlineFields, MONTHS_ES};
-use crate::pay::{obra_lane_labels, ObraLane};
-use crate::theme::{accent_amber, accent_green, edit_bg, edit_fg, muted, panel_fill, panel_stroke};
+use crate::pay::{format_money_edit, obra_lane_labels, parse_money_input, ObraLane};
+use crate::theme::{
+    accent_amber, accent_green, accent_green_hover, accent_green_pressed, edit_bg, edit_fg, muted,
+    panel_fill, panel_stroke,
+};
 
 pub fn big_btn(ui: &mut egui::Ui, label: &str) -> egui::Response {
-    ui.add(egui::Button::new(label).min_size(Vec2::new(220.0, 32.0)))
+    ui.add(
+        egui::Button::new(RichText::new(label).strong().size(16.0))
+            .rounding(10.0)
+            .min_size(Vec2::new(220.0, 40.0)),
+    )
 }
 
 pub fn primary_btn(ui: &mut egui::Ui, label: &str, dark: bool) -> egui::Response {
-    ui.add(
-        egui::Button::new(
-            RichText::new(label)
-                .color(Color32::WHITE)
-                .strong()
-                .size(16.0),
-        )
-        .fill(accent_green(dark))
-        .rounding(10.0)
-        .min_size(Vec2::new(ui.available_width().min(420.0).max(260.0), 46.0)),
-    )
+    primary_btn_enabled(ui, label, dark, true)
+}
+
+pub fn primary_btn_enabled(
+    ui: &mut egui::Ui,
+    label: &str,
+    dark: bool,
+    enabled: bool,
+) -> egui::Response {
+    let w = ui.available_width().min(440.0).max(260.0);
+    let size = Vec2::new(w, 40.0);
+    let resp = ui.allocate_response(size, Sense::click());
+    let rect = resp.rect;
+    let hovered = enabled && resp.hovered();
+    let pressed = enabled && resp.is_pointer_button_down_on();
+    let fill = if !enabled {
+        Color32::from_rgb(110, 118, 128)
+    } else if pressed {
+        accent_green_pressed(dark)
+    } else if hovered {
+        accent_green_hover(dark)
+    } else {
+        accent_green(dark)
+    };
+    let grow = if pressed {
+        -1.0
+    } else if hovered {
+        1.0
+    } else {
+        0.0
+    };
+    let r = rect.expand(grow);
+    if enabled && !pressed {
+        let shadow = Rect::from_min_max(
+            Pos2::new(r.min.x + 1.0, r.min.y + 2.0),
+            Pos2::new(r.max.x + 1.0, r.max.y + 3.0),
+        );
+        ui.painter().rect_filled(
+            shadow,
+            10.0,
+            Color32::from_black_alpha(if dark { 80 } else { 28 }),
+        );
+    }
+    ui.painter().rect_filled(r, 10.0, fill);
+    if hovered && !pressed {
+        ui.painter().rect_stroke(
+            r,
+            10.0,
+            Stroke::new(1.5, Color32::from_rgba_unmultiplied(255, 255, 255, 50)),
+        );
+    }
+    ui.painter().text(
+        r.center(),
+        Align2::CENTER_CENTER,
+        label,
+        FontId::proportional(16.0),
+        if enabled {
+            Color32::WHITE
+        } else {
+            Color32::from_rgb(210, 214, 220)
+        },
+    );
+    if enabled {
+        resp
+    } else {
+        resp.on_disabled_hover_text("No está disponible ahora")
+    }
+}
+
+pub fn ghost_btn(ui: &mut egui::Ui, label: &str, dark: bool) -> egui::Response {
+    let size = Vec2::new(ui.available_width().min(280.0).max(140.0), 36.0);
+    let resp = ui.allocate_response(size, Sense::click());
+    let rect = resp.rect;
+    let hovered = resp.hovered();
+    let pressed = resp.is_pointer_button_down_on();
+    let fill = if pressed {
+        if dark {
+            Color32::from_rgb(50, 58, 70)
+        } else {
+            Color32::from_rgb(226, 232, 240)
+        }
+    } else if hovered {
+        if dark {
+            Color32::from_rgb(44, 50, 62)
+        } else {
+            Color32::from_rgb(240, 244, 248)
+        }
+    } else {
+        Color32::TRANSPARENT
+    };
+    ui.painter().rect_filled(rect, 8.0, fill);
+    ui.painter().rect_stroke(
+        rect,
+        8.0,
+        Stroke::new(
+            1.2,
+            if pressed {
+                accent_green(dark)
+            } else {
+                panel_stroke(dark)
+            },
+        ),
+    );
+    ui.painter().text(
+        rect.center(),
+        Align2::CENTER_CENTER,
+        label,
+        FontId::proportional(14.0),
+        edit_fg(dark),
+    );
+    resp
 }
 
 pub fn panel_card(ui: &mut egui::Ui, dark: bool, add: impl FnOnce(&mut egui::Ui)) {
@@ -30,11 +137,11 @@ pub fn panel_card(ui: &mut egui::Ui, dark: bool, add: impl FnOnce(&mut egui::Ui)
     egui::Frame::none()
         .fill(panel_fill(dark))
         .stroke(egui::Stroke::new(1.0, panel_stroke(dark)))
-        .inner_margin(16.0)
-        .rounding(10.0)
+        .inner_margin(18.0)
+        .rounding(12.0)
         .show(ui, |ui| {
             ui.set_min_width((w - 8.0).max(200.0));
-            ui.spacing_mut().item_spacing.y = 8.0;
+            ui.spacing_mut().item_spacing.y = 10.0;
             ui.with_layout(egui::Layout::top_down(egui::Align::Min), add);
         });
 }
@@ -202,6 +309,23 @@ pub fn show_field(
             ui.add(field_single(value, hint, dark).desired_width(width))
         })
         .inner
+}
+
+pub fn show_money_field(
+    ui: &mut egui::Ui,
+    value: &mut String,
+    unit: Unit,
+    hint: &str,
+    dark: bool,
+    width: f32,
+) -> egui::Response {
+    let resp = show_field(ui, value, hint, dark, width);
+    if resp.lost_focus() {
+        if let Ok(minor) = parse_money_input(value, unit) {
+            *value = format_money_edit(minor, unit);
+        }
+    }
+    resp
 }
 
 pub fn show_multiline(

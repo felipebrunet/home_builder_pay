@@ -12,9 +12,25 @@ pub fn accent_blue(dark: bool) -> Color32 {
 
 pub fn accent_green(dark: bool) -> Color32 {
     if dark {
-        Color32::from_rgb(61, 155, 95)
+        Color32::from_rgb(46, 168, 104)
     } else {
-        Color32::from_rgb(47, 133, 90)
+        Color32::from_rgb(26, 122, 82)
+    }
+}
+
+pub fn accent_green_hover(dark: bool) -> Color32 {
+    if dark {
+        Color32::from_rgb(62, 186, 120)
+    } else {
+        Color32::from_rgb(32, 140, 94)
+    }
+}
+
+pub fn accent_green_pressed(dark: bool) -> Color32 {
+    if dark {
+        Color32::from_rgb(28, 110, 68)
+    } else {
+        Color32::from_rgb(16, 88, 58)
     }
 }
 
@@ -32,7 +48,7 @@ pub fn theme_red() -> Color32 {
 
 pub fn panel_fill(dark: bool) -> Color32 {
     if dark {
-        Color32::from_rgb(36, 40, 50)
+        Color32::from_rgb(34, 38, 48)
     } else {
         Color32::from_rgb(255, 255, 255)
     }

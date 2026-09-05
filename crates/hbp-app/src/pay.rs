@@ -20,7 +20,7 @@ use hbp_bitcoin::{
     FundingRequest, Identity, OfferedCoin, WatchScan, WatchedUtxo,
 };
 use hbp_core::{
-    bond_minor, btc_price_to_minor, fiat_minor_to_sats, format_major_amount, minor_from_major,
+    bond_minor, btc_price_to_minor, fiat_minor_to_sats, minor_from_major, parse_major_amount,
     BondStatus, NonceJournal, PartidaQuote, PartidaStatus, Project, ProjectStatus, Quote, Role,
     SignedContract, Unit, PRODUCT_NETWORK,
 };
@@ -361,6 +361,9 @@ pub struct PayUiDraft {
     pub close_c_pct: String,
     #[serde(default)]
     pub close_m_dest: String,
+    /// Incoming quote that does not match our draft (UI conflict card).
+    #[serde(default)]
+    pub peer_quote: Option<Quote>,
 }
 
 fn default_fee() -> String {
@@ -406,6 +409,7 @@ impl Default for PayUiDraft {
             coop_tx_published: false,
             close_c_pct: default_close_pct(),
             close_m_dest: String::new(),
+            peer_quote: None,
         }
     }
 }
@@ -456,6 +460,35 @@ pub fn quote_fully_signed(q: &Quote) -> bool {
     q.mandante_sig.is_some() && q.contratista_sig.is_some()
 }
 
+pub fn pay_stage_ui(
+    project: Option<&Project>,
+    pending_quote: Option<&Quote>,
+    draft: Option<&PayUiDraft>,
+) -> PayStage {
+    let stage = pay_stage(project, pending_quote);
+    let Some(p) = project else {
+        return stage;
+    };
+    if bond_closed_ui(p, draft) && p1_closed_ui(p, draft) {
+        return PayStage::AllClosed;
+    }
+    if matches!(stage, PayStage::FundBondP1) {
+        if p1_closed_ui(p, draft) {
+            return if p.active_partida_id().is_some() {
+                PayStage::UnlockNext
+            } else {
+                PayStage::AllClosed
+            };
+        }
+        if p.bond_is_funded()
+            || draft.is_some_and(|d| !d.funding_tx_hex.trim().is_empty() && p.quote.is_some())
+        {
+            return PayStage::PartidaInCourse;
+        }
+    }
+    stage
+}
+
 pub fn pay_stage(project: Option<&Project>, pending_quote: Option<&Quote>) -> PayStage {
     let Some(project) = project else {
         return PayStage::NeedContract;
@@ -502,7 +535,11 @@ pub fn pay_stage(project: Option<&Project>, pending_quote: Option<&Quote>) -> Pa
 }
 
 pub fn spanish_now(project: Option<&Project>, pending_quote: Option<&Quote>) -> String {
-    match pay_stage(project, pending_quote) {
+    spanish_now_stage(pay_stage(project, pending_quote), project)
+}
+
+fn spanish_now_stage(stage: PayStage, project: Option<&Project>) -> String {
+    match stage {
         PayStage::NeedContract => "Cierra el trato primero (Aceptar / confirmar).".into(),
         PayStage::NeedQuote => "Ahora: acordar la plata de la boleta y de la partida 1.".into(),
         PayStage::NeedQuoteSig => "Ahora: firmar la plata de la boleta y de la partida 1.".into(),
@@ -525,9 +562,76 @@ pub fn spanish_now(project: Option<&Project>, pending_quote: Option<&Quote>) -> 
     }
 }
 
-/// Contract-currency amount, e.g. `5000.00 CLP`.
+/// Group integer with Chilean thousands dots: `1234567` → `1.234.567`.
+pub fn format_grouped_int(n: u64) -> String {
+    let digits = n.to_string();
+    let mut out = String::new();
+    for (i, c) in digits.chars().rev().enumerate() {
+        if i > 0 && i % 3 == 0 {
+            out.push('.');
+        }
+        out.push(c);
+    }
+    out.chars().rev().collect()
+}
+
+/// Strip `$`, spaces and grouping so [`parse_major_amount`] can read the field.
+pub fn normalize_money_str(raw: &str, unit: Unit) -> String {
+    let s = raw
+        .trim()
+        .replace(['$', ' ', '\u{00a0}'], "")
+        .replace('\u{202f}', "");
+    match unit {
+        Unit::Clp | Unit::Sats => s.replace('.', "").replace(',', "."),
+        _ => {
+            if s.contains(',') && s.contains('.') {
+                s.replace(',', "")
+            } else if s.contains(',') && !s.contains('.') {
+                s.replace(',', ".")
+            } else {
+                s
+            }
+        }
+    }
+}
+
+pub fn parse_money_input(raw: &str, unit: Unit) -> Result<u64> {
+    let cleaned = normalize_money_str(raw, unit);
+    parse_major_amount(&cleaned, unit).map_err(|e| anyhow::anyhow!("{e}"))
+}
+
+/// Edit-box value (no unit suffix): `$5.000` / `1,23` / `1.234.567`.
+pub fn format_money_edit(minor: u64, unit: Unit) -> String {
+    match unit {
+        Unit::Sats => format_grouped_int(minor),
+        Unit::Clp => {
+            let pesos = minor / 100;
+            let cents = minor % 100;
+            if cents == 0 {
+                format!("${}", format_grouped_int(pesos))
+            } else {
+                format!("${},{:02}", format_grouped_int(pesos), cents)
+            }
+        }
+        _ => {
+            let whole = minor / 100;
+            let frac = minor % 100;
+            if frac == 0 {
+                format_grouped_int(whole)
+            } else {
+                format!("{},{:02}", format_grouped_int(whole), frac)
+            }
+        }
+    }
+}
+
+/// Contract-currency amount, e.g. `$5.000 CLP` — never `5000.00` float look.
 pub fn format_obra_money(minor: u64, unit: Unit) -> String {
-    format!("{} {unit}", format_major_amount(minor, unit))
+    format!("{} {unit}", format_money_edit(minor, unit))
+}
+
+pub fn format_sats_ui(sats: u64) -> String {
+    format!("{} sats", format_grouped_int(sats))
 }
 
 /// Quoted FX is a locked snapshot, not a live ticker that replaces the partida list.
@@ -549,7 +653,7 @@ pub fn obra_amount_pair(minor: u64, unit: Unit, sats: Option<u64>) -> (String, O
     if unit.is_bitcoin_denom() {
         return (main, None);
     }
-    (main, sats.map(|s| format!("{s} sats")))
+    (main, sats.map(format_sats_ui))
 }
 
 pub fn contract_bond_minor(body: &hbp_core::ContractBody) -> u64 {
@@ -619,6 +723,14 @@ pub fn obra_lane_labels() -> &'static [&'static str] {
 }
 
 pub fn obra_lane(project: Option<&Project>, has_signed: bool) -> ObraLane {
+    obra_lane_for(project, has_signed, None)
+}
+
+pub fn obra_lane_for(
+    project: Option<&Project>,
+    has_signed: bool,
+    draft: Option<&PayUiDraft>,
+) -> ObraLane {
     let Some(p) = project else {
         return if has_signed {
             ObraLane::Trato
@@ -626,10 +738,13 @@ pub fn obra_lane(project: Option<&Project>, has_signed: bool) -> ObraLane {
             ObraLane::Borrador
         };
     };
-    if p.is_stopped() || matches!(p.status, ProjectStatus::Closed | ProjectStatus::Cancelled) {
+    if p.is_stopped()
+        || matches!(p.status, ProjectStatus::Closed | ProjectStatus::Cancelled)
+        || (bond_closed_ui(p, draft) && p1_closed_ui(p, draft))
+    {
         return ObraLane::Cierre;
     }
-    match pay_stage(Some(p), None) {
+    match pay_stage_ui(Some(p), None, draft) {
         PayStage::AllClosed => ObraLane::Cierre,
         PayStage::PartidaInCourse | PayStage::UnlockNext => ObraLane::EnCurso,
         PayStage::FundBondP1 if p.bond_is_funded() => ObraLane::Fondeado,
@@ -645,17 +760,78 @@ pub fn obra_lane(project: Option<&Project>, has_signed: bool) -> ObraLane {
 }
 
 pub fn boleta_badge(project: &Project) -> &'static str {
-    match project.bond {
-        BondStatus::Unfunded => "pendiente",
-        BondStatus::Funded { .. } => "fondeada",
-        BondStatus::Released { .. } => "devuelta",
-        BondStatus::Unwound { .. } => "deshecha",
-        BondStatus::FeeBurnT1 { .. } => "quema 1",
-        BondStatus::FeeBurnT2 { .. } => "quema 2",
-    }
+    boleta_label(project, None)
 }
 
 pub fn p1_badge(project: &Project) -> &'static str {
+    p1_label(project, None)
+}
+
+pub fn bond_closed_ui(project: &Project, draft: Option<&PayUiDraft>) -> bool {
+    match project.bond {
+        BondStatus::Released { .. }
+        | BondStatus::Unwound { .. }
+        | BondStatus::FeeBurnT1 { .. }
+        | BondStatus::FeeBurnT2 { .. } => true,
+        BondStatus::Funded { .. } | BondStatus::Unfunded => {
+            let Some(d) = draft else {
+                return project.is_stopped()
+                    && !project.bond_is_funded()
+                    && project.quote.is_some();
+            };
+            if d.coop_tx_published && d.coop_tx_kind == KIND_BOND {
+                return true;
+            }
+            project.is_stopped() && !project.bond_is_funded() && project.quote.is_some()
+        }
+    }
+}
+
+pub fn p1_closed_ui(project: &Project, draft: Option<&PayUiDraft>) -> bool {
+    if matches!(
+        project.partida(FIRST_PARTIDA).map(|p| &p.state),
+        Ok(PartidaStatus::Paid { .. }
+            | PartidaStatus::Unwound { .. }
+            | PartidaStatus::FeeBurnT2 { .. })
+    ) {
+        return true;
+    }
+    draft.is_some_and(|d| d.coop_tx_published && d.coop_tx_kind == KIND_PARTIDA)
+}
+
+pub fn boleta_label(project: &Project, draft: Option<&PayUiDraft>) -> &'static str {
+    if bond_closed_ui(project, draft) {
+        return match project.bond {
+            BondStatus::Unwound { .. } => "deshecha",
+            BondStatus::FeeBurnT1 { .. } => "quema 1",
+            BondStatus::FeeBurnT2 { .. } => "quema 2",
+            _ => "devuelta",
+        };
+    }
+    if project.bond_is_funded() {
+        return "fondeada";
+    }
+    if project.quote.is_some()
+        && draft.is_some_and(|d| !d.funding_tx_hex.trim().is_empty() || d.coop_tx_published)
+    {
+        return "fondeada";
+    }
+    "pendiente"
+}
+
+pub fn p1_label(project: &Project, draft: Option<&PayUiDraft>) -> &'static str {
+    if p1_closed_ui(project, draft) {
+        return match project.partida(FIRST_PARTIDA).map(|p| &p.state) {
+            Ok(PartidaStatus::Unwound { .. }) => "deshecha",
+            Ok(PartidaStatus::FeeBurnT1 { .. }) => "quema 1",
+            Ok(PartidaStatus::FeeBurnT2 { .. }) => "quema 2",
+            _ => "cobrada",
+        };
+    }
+    p1_badge_raw(project)
+}
+
+fn p1_badge_raw(project: &Project) -> &'static str {
     match project.partida(FIRST_PARTIDA).map(|p| &p.state) {
         Ok(PartidaStatus::Scheduled | PartidaStatus::AmountAgreed { .. }) => "pendiente",
         Ok(PartidaStatus::Funding { .. }) => "fondeando",
@@ -829,7 +1005,7 @@ pub fn quote_price_minor(
     if contract_unit.is_bitcoin_denom() {
         return Ok(None);
     }
-    let manual = manual_major.trim();
+    let manual = normalize_money_str(manual_major, contract_unit);
     if !manual.is_empty() {
         let major: f64 = manual
             .replace('_', "")
@@ -947,33 +1123,83 @@ pub fn sign_our_quote(id: &Identity, signed: &SignedContract, mut quote: Quote) 
     Ok(quote)
 }
 
-/// Merge an incoming quote. Amounts must match if we already have one.
-pub fn apply_incoming_quote(local: Option<Quote>, incoming: Quote) -> Result<Quote> {
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum QuoteIntake {
+    Applied(Quote),
+    Differ { local: Quote, incoming: Quote },
+    AlreadyFunding,
+}
+
+pub fn quote_amounts_eq(a: &Quote, b: &Quote) -> bool {
+    a.contract_id == b.contract_id
+        && a.bond_sats == b.bond_sats
+        && a.partidas == b.partidas
+        && a.mad_sats == b.mad_sats
+}
+
+pub fn merge_quote_sigs(mut local: Quote, incoming: Quote) -> Quote {
+    if local.mandante_sig.is_none() {
+        local.mandante_sig = incoming.mandante_sig;
+    }
+    if local.contratista_sig.is_none() {
+        local.contratista_sig = incoming.contratista_sig;
+    }
+    local
+}
+
+pub fn can_propose_quote(role: Role) -> bool {
+    matches!(role, Role::Mandante)
+}
+
+pub fn quote_sats_line(q: &Quote) -> String {
+    format!(
+        "boleta {} · partida 1 {}",
+        format_sats_ui(q.bond_sats),
+        format_sats_ui(q.partida_sats(1).unwrap_or(0))
+    )
+}
+
+/// Mandante proposes FX. Same sats merge sigs. Differ + unfunded → UI card. Funded → reject.
+pub fn quote_intake(
+    local: Option<Quote>,
+    incoming: Quote,
+    project: Option<&Project>,
+) -> QuoteIntake {
+    let funded = project.is_some_and(|p| p.funding_started());
+    if funded {
+        if let Some(locked) = project.and_then(|p| p.quote.as_ref()) {
+            if quote_amounts_eq(locked, &incoming) {
+                return QuoteIntake::Applied(merge_quote_sigs(locked.clone(), incoming));
+            }
+            return QuoteIntake::AlreadyFunding;
+        }
+        if let Some(l) = local.as_ref() {
+            if quote_amounts_eq(l, &incoming) {
+                return QuoteIntake::Applied(merge_quote_sigs(l.clone(), incoming));
+            }
+        }
+        return QuoteIntake::AlreadyFunding;
+    }
     let Some(local) = local else {
-        return Ok(incoming);
+        return QuoteIntake::Applied(incoming);
     };
-    if local.contract_id != incoming.contract_id
-        || local.bond_sats != incoming.bond_sats
-        || local.partidas != incoming.partidas
-        || local.mad_sats != incoming.mad_sats
-    {
-        // Same numbers, keep whichever sigs exist.
-        let same_amounts = local.contract_id == incoming.contract_id
-            && local.bond_sats == incoming.bond_sats
-            && local.partidas == incoming.partidas
-            && local.mad_sats == incoming.mad_sats;
-        if !same_amounts {
-            bail!("llegó otra cotización con montos distintos; pónganse de acuerdo en uno");
+    if quote_amounts_eq(&local, &incoming) {
+        return QuoteIntake::Applied(merge_quote_sigs(local, incoming));
+    }
+    QuoteIntake::Differ { local, incoming }
+}
+
+/// Merge when amounts match. Differ is an error for callers that cannot show the card.
+pub fn apply_incoming_quote(local: Option<Quote>, incoming: Quote) -> Result<Quote> {
+    match quote_intake(local, incoming, None) {
+        QuoteIntake::Applied(q) => Ok(q),
+        QuoteIntake::Differ { .. } => {
+            bail!("Hay dos cotizaciones distintas")
+        }
+        QuoteIntake::AlreadyFunding => {
+            bail!("ya está fondeando; no se cambia la cotización")
         }
     }
-    let mut out = local;
-    if out.mandante_sig.is_none() {
-        out.mandante_sig = incoming.mandante_sig;
-    }
-    if out.contratista_sig.is_none() {
-        out.contratista_sig = incoming.contratista_sig;
-    }
-    Ok(out)
 }
 
 pub fn recotizar_if_unfunded(project: &mut Project) -> Result<()> {
@@ -1849,7 +2075,7 @@ pub fn looks_like_signed_coop_hex(hex: &str) -> bool {
     let Ok(tx) = deserialize::<Transaction>(&raw) else {
         return false;
     };
-    tx.input.len() == 1 && tx.output.len() == 1
+    tx.input.len() == 1 && matches!(tx.output.len(), 1 | 2)
 }
 
 pub fn infer_coop_kind(project: &Project, draft: &PayUiDraft) -> String {
@@ -1892,6 +2118,54 @@ pub fn recover_coop_tx_into_draft(
         return true;
     }
     false
+}
+
+/// Apply local hex / published flags onto project so badges are not stuck on pendiente.
+pub fn heal_pay_state(
+    project: &mut Project,
+    draft: &mut PayUiDraft,
+    disk: Option<&(String, String)>,
+) -> bool {
+    let mut changed = recover_coop_tx_into_draft(draft, project, disk);
+    if draft.funding_tx_hex.trim().is_empty()
+        && looks_like_signed_coop_hex(&draft.coop_tx_hex)
+        && project.quote.is_some()
+        && matches!(project.bond, BondStatus::Unfunded)
+    {
+        // funding hex may still sit in the same field on old drafts
+    }
+    if !draft.funding_tx_hex.trim().is_empty() && matches!(project.bond, BondStatus::Unfunded) {
+        if apply_verified_p1_funding(project, &draft.funding_tx_hex).is_ok() {
+            changed = true;
+        }
+    }
+    if !draft.coop_tx_hex.trim().is_empty() {
+        let kind = if draft.coop_tx_kind.trim().is_empty() {
+            infer_coop_kind(project, draft)
+        } else {
+            draft.coop_tx_kind.clone()
+        };
+        if apply_finished_coop_hex(project, &draft.coop_tx_hex, &kind).is_ok() {
+            draft.coop_tx_published = true;
+            draft.coop_tx_kind = kind;
+            changed = true;
+        }
+    }
+    if matches!(project.bond, BondStatus::Released { .. })
+        || matches!(
+            project.partida(FIRST_PARTIDA).map(|p| &p.state),
+            Ok(PartidaStatus::Paid { .. })
+        )
+    {
+        if matches!(project.bond, BondStatus::Released { .. }) {
+            draft.coop_tx_published = true;
+            if draft.coop_tx_kind.trim().is_empty() {
+                draft.coop_tx_kind = KIND_BOND.into();
+            }
+            changed = true;
+        }
+    }
+    changed
 }
 
 pub fn stash_finished_coop_hex(draft: &mut PayUiDraft, hex: &str, kind: &str) {
@@ -1941,7 +2215,8 @@ pub fn spanish_now_pay(
         Some(PagoCoopGate::ShowRedoBond) => {
             "La devolución quedó a medias. Vuelve a hacerla.".into()
         }
-        _ => spanish_now(project, pending_quote),
+        Some(PagoCoopGate::ShowStopped) => "Obra detenida. La boleta volvió al contratista.".into(),
+        _ => spanish_now_stage(pay_stage_ui(project, pending_quote, Some(draft)), project),
     }
 }
 
@@ -2550,15 +2825,15 @@ mod tests {
         let (boleta, _) = obra_amount_pair(contract_bond_minor(body), body.unit, None);
         let (partida, none_sats) = obra_amount_pair(p1, body.unit, None);
         assert!(boleta.contains("CLP"));
-        assert!(boleta.contains("1000.00"));
-        assert_eq!(partida, "5000.00 CLP");
+        assert!(boleta.contains("$1.000"));
+        assert_eq!(partida, "$5.000 CLP");
         assert!(none_sats.is_none());
 
         let clp_price = hbp_core::btc_price_to_minor(74_492_748.0, Unit::Clp).unwrap();
         let q = draft_quote(&signed, Some(clp_price), "Yadio 74492748 CLP/BTC").unwrap();
         let (p1_main, p1_sats) = obra_amount_pair(p1, body.unit, Some(q.partida_sats(1).unwrap()));
-        assert_eq!(p1_main, "5000.00 CLP");
-        assert_eq!(p1_sats.as_deref(), Some("6712 sats"));
+        assert_eq!(p1_main, "$5.000 CLP");
+        assert_eq!(p1_sats.as_deref(), Some("6.712 sats"));
         let fx = agreed_fx_line(&q, body.unit);
         assert!(fx.starts_with("tipo de cambio acordado:"));
         assert!(fx.contains("CLP/BTC"));
@@ -2840,5 +3115,98 @@ mod tests {
         assert_eq!(tx.output[0].value.to_sat(), to_c);
         assert_eq!(tx.output[1].value.to_sat(), to_m);
         assert_eq!(to_c + to_m + 250, pot);
+    }
+
+    #[test]
+    fn quote_same_merges_sigs() {
+        let (m, c) = pair_ids();
+        let signed = signed_two_partidas(&m, &c);
+        let a = sign_our_quote(
+            &m,
+            &signed,
+            draft_quote(&signed, Some(8_000_000), "a").unwrap(),
+        )
+        .unwrap();
+        let b = sign_our_quote(
+            &c,
+            &signed,
+            draft_quote(&signed, Some(8_000_000), "b").unwrap(),
+        )
+        .unwrap();
+        match quote_intake(Some(a.clone()), b, None) {
+            QuoteIntake::Applied(q) => {
+                assert!(q.mandante_sig.is_some());
+                assert!(q.contratista_sig.is_some());
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn quote_differ_is_ui_path() {
+        let (m, c) = pair_ids();
+        let signed = signed_two_partidas(&m, &c);
+        let local = sign_our_quote(
+            &m,
+            &signed,
+            draft_quote(&signed, Some(8_000_000), "a").unwrap(),
+        )
+        .unwrap();
+        let incoming = sign_our_quote(
+            &c,
+            &signed,
+            draft_quote(&signed, Some(9_000_000), "b").unwrap(),
+        )
+        .unwrap();
+        assert!(matches!(
+            quote_intake(Some(local), incoming, None),
+            QuoteIntake::Differ { .. }
+        ));
+        assert!(apply_incoming_quote(
+            Some(draft_quote(&signed, Some(8_000_000), "a").unwrap()),
+            draft_quote(&signed, Some(9_000_000), "b").unwrap()
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn quote_funded_rejects_conflict() {
+        let (m, c) = pair_ids();
+        let (project, q) = funded_p1(&m, &c);
+        let incoming = draft_quote(&project.contract, Some(9_000_000), "x").unwrap();
+        assert!(matches!(
+            quote_intake(Some(q), incoming, Some(&project)),
+            QuoteIntake::AlreadyFunding
+        ));
+    }
+
+    #[test]
+    fn paid_returned_not_pending() {
+        let (m, c) = pair_ids();
+        let (mut project, _q) = funded_p1(&m, &c);
+        project.mark_paid(1, "pay1".into()).unwrap();
+        project.mark_bond_released("bond-back".into()).unwrap();
+        let mut draft = PayUiDraft::default();
+        draft.coop_tx_published = true;
+        draft.coop_tx_kind = KIND_BOND.into();
+        assert_eq!(boleta_label(&project, Some(&draft)), "devuelta");
+        assert_eq!(p1_label(&project, Some(&draft)), "cobrada");
+        assert_ne!(boleta_label(&project, Some(&draft)), "pendiente");
+        let now = spanish_now_pay(Some(&project), None, &draft, None);
+        assert!(!now.contains("juntar"));
+        assert!(!now.to_lowercase().contains("pendiente"));
+        assert_eq!(
+            obra_lane_for(Some(&project), true, Some(&draft)),
+            ObraLane::Cierre
+        );
+    }
+
+    #[test]
+    fn money_format_is_not_a_float() {
+        assert_eq!(format_obra_money(500_000, Unit::Clp), "$5.000 CLP");
+        assert_eq!(format_obra_money(123_456_700, Unit::Clp), "$1.234.567 CLP");
+        assert_eq!(format_sats_ui(1_234_567), "1.234.567 sats");
+        assert_eq!(parse_money_input("$5.000", Unit::Clp).unwrap(), 500_000);
+        assert!(!format_obra_money(500_000, Unit::Clp).ends_with(".00 CLP"));
     }
 }

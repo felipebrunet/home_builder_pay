@@ -6,37 +6,38 @@ use std::time::Duration;
 
 use eframe::egui::{self, Color32, RichText};
 use hbp_app::{
-    accent_amber, accent_blue, accent_green, agreed_fx_line, apply_finished_coop_hex,
-    apply_incoming_quote, apply_theme, apply_verified_p1_funding, best_funding_psbt, big_btn,
-    boleta_badge, build_our_partial, can_delete_obra, can_open_stop_or_redo, can_recotizar,
+    accent_amber, accent_blue, accent_green, agreed_fx_line, apply_finished_coop_hex, apply_theme,
+    apply_verified_p1_funding, best_funding_psbt, big_btn, boleta_label, build_our_partial,
+    can_delete_obra, can_open_stop_or_redo, can_propose_quote, can_recotizar,
     classify_funding_psbt, close_split_preview, coin_from_watched, complete_incoming_partial,
     completed_steps, contract_bond_minor, contratista_accept, coop_action, coop_finish,
     coop_propose_on, coop_tx_kind_from_artifact, coop_tx_wire, deadline_editor, default_works_root,
     draft_equal_stages, draft_quote, edit_fg, escrow_addrs, export_backup, extract_funding_tx_hex,
-    format_unix_local_es, fund_handshake_step, funding_psbt_fully_signed, funding_wire,
-    funding_wire_hex, hex_from_artifact, import_backup, import_signed, infer_coop_kind,
+    format_money_edit, format_obra_money, format_sats_ui, format_unix_local_es,
+    fund_handshake_step, funding_psbt_fully_signed, funding_wire, funding_wire_hex, ghost_btn,
+    heal_pay_state, hex_from_artifact, import_backup, import_signed, infer_coop_kind,
     lock_quote_if_ready, looks_like_signed_coop_hex, mandante_commit, mandante_pct,
     needs_coop_publish, next_step, obra_amount_pair, obra_delete_kind, obra_delete_reason_es,
-    obra_lane, our_funding_need, p1_badge, p1_blocks_bond_return, pago_coop_gate, panel_card,
-    parse_fee, parse_pct, parse_psbt, parse_psbt_bytes, partida_spec_minor, partida_ui_enabled,
-    party_role, pay_stage, prefer_funding_psbt, preview_quote_sats, primary_btn, psbt_display_text,
-    psbt_file_bytes, psbt_to_hex, quote_fully_signed, quote_price_minor, read_backup_file,
+    obra_lane_for, our_funding_need, p1_blocks_bond_return, p1_label, pago_coop_gate, panel_card,
+    parse_fee, parse_money_input, parse_pct, parse_psbt, parse_psbt_bytes, partida_spec_minor,
+    partida_ui_enabled, party_role, pay_stage, pay_stage_ui, prefer_funding_psbt,
+    preview_quote_sats, primary_btn, psbt_display_text, psbt_file_bytes, psbt_to_hex,
+    quote_fully_signed, quote_intake, quote_price_minor, quote_sats_line, read_backup_file,
     recotizar_if_unfunded, recover_coop_tx_into_draft, restore_unconfirmed_bond, seed_coop_split,
-    shell_tab_labels, show_field, show_main_fund_ui, show_multiline, show_obra_stepper,
-    show_pot_badges, sign_our_quote, spanish_chain_status, spanish_now_pay,
+    shell_tab_labels, show_field, show_main_fund_ui, show_money_field, show_multiline,
+    show_obra_stepper, show_pot_badges, sign_our_quote, spanish_chain_status, spanish_now_pay,
     stash_finished_coop_hex, suggest_watched, theme_red, txid_from_tx_hex, unit_helper,
     validate_deadline_order, write_backup_file, CoopAction, DeadlineFields, FundHandshakeStep,
     FundMark, FundView, FundingSendKind, NextKind, ObraDeleteKind, PagoCoopGate, PayStage,
-    PayUiDraft, StopStep, UiPrefs, WorkEntry, WorkProgress, WorkStore, ART_COOP, ART_COOP_TX,
-    ART_ONESIG, ART_PARTIAL, ART_PSBT, KIND_BOND, KIND_PARTIDA,
+    PayUiDraft, QuoteIntake, StopStep, UiPrefs, WorkEntry, WorkProgress, WorkStore, ART_COOP,
+    ART_COOP_TX, ART_ONESIG, ART_PARTIAL, ART_PSBT, KIND_BOND, KIND_PARTIDA,
 };
 use hbp_bitcoin::{
     address_at, default_esplora_urls, scan_watch, sign_body, CoopFile, Identity, OfferedCoin,
     WatchScan,
 };
 use hbp_core::{
-    bond_minor, format_major_amount, parse_major_amount, Offer, Quote, Role, SignedContract, Unit,
-    DEFAULT_BOND_BPS, PRODUCT_NETWORK,
+    bond_minor, Offer, Quote, Role, SignedContract, Unit, DEFAULT_BOND_BPS, PRODUCT_NETWORK,
 };
 use hbp_net::{
     announce_topics, bring_up_tor_with_hint, env_bootstrap_peers, esplora_address_txs,
@@ -61,6 +62,7 @@ enum JobEvent {
     CoopSeen(Result<(String, String), String>),
     BroadcastDone(Result<(String, String), String>),
     FundingBroadcastDone(Result<(String, String), String>),
+    BondGone(Result<Option<String>, String>),
 }
 
 fn main() -> eframe::Result<()> {
@@ -141,6 +143,8 @@ struct App {
     funding_in_flight: Option<FundingSendKind>,
     restart_confirm: bool,
     delete_confirm: bool,
+    flash_ok: String,
+    flash_until: Option<std::time::Instant>,
 }
 
 impl App {
@@ -201,6 +205,8 @@ impl App {
             funding_in_flight: None,
             restart_confirm: false,
             delete_confirm: false,
+            flash_ok: String::new(),
+            flash_until: None,
         }
     }
 
@@ -208,6 +214,13 @@ impl App {
         let s = s.into();
         self.append_log(&s, false);
         self.last_error.clear();
+    }
+
+    fn flash_ok(&mut self, s: impl Into<String>) {
+        let s = s.into();
+        self.flash_ok = s.clone();
+        self.flash_until = Some(std::time::Instant::now() + Duration::from_secs(5));
+        self.note(s);
     }
 
     fn fail(&mut self, e: impl std::fmt::Display) {
@@ -434,7 +447,7 @@ impl App {
                     self.chain_busy = false;
                     self.pay.coop_tx_published = true;
                     self.pay_chain_line = "Ya está en Signet.".into();
-                    self.note("Ya está en Signet.");
+                    self.flash_ok("Ya está en Signet.");
                     if let Some(slug) = self.selected.clone() {
                         self.confirm_coop_if_needed(&slug);
                     }
@@ -454,7 +467,7 @@ impl App {
                     self.pay.coop_tx_published = true;
                     self.pay_chain_line = "Publicada en Signet.".into();
                     let _ = (txid, base);
-                    self.note("Publicada en Signet.");
+                    self.flash_ok("Publicada en Signet.");
                     if let Some(slug) = self.selected.clone() {
                         self.confirm_coop_if_needed(&slug);
                         self.pay_poll_coop(&slug, false);
@@ -479,7 +492,7 @@ impl App {
                     self.chain_busy = false;
                     self.pay.funding_tx_hex = self.pay.funding_tx_hex.clone();
                     self.pay_chain_line = format!("Publicada en Signet. {txid}");
-                    self.note(format!("Publicada en Signet. {txid}"));
+                    self.flash_ok(&format!("Publicada en Signet. {txid}"));
                     if let Some(slug) = self.selected.clone() {
                         let _ = self.store.save_pay_draft(&slug, &self.pay);
                         self.pay_verify(&slug);
@@ -498,6 +511,27 @@ impl App {
                     } else {
                         self.note(e);
                     }
+                }
+                JobEvent::BondGone(Ok(Some(txid))) => {
+                    self.chain_busy = false;
+                    if let Some(slug) = self.selected.clone() {
+                        if let Ok(mut project) = self.store.ensure_pay_project(&slug) {
+                            if project.bond_is_funded() {
+                                if project.mark_bond_released(txid.clone()).is_ok() {
+                                    let _ = self.store.save_pay_project(&slug, &project);
+                                    self.pay.coop_tx_published = true;
+                                    if self.pay.coop_tx_kind.trim().is_empty() {
+                                        self.pay.coop_tx_kind = KIND_BOND.into();
+                                    }
+                                    let _ = self.store.save_pay_draft(&slug, &self.pay);
+                                    self.flash_ok("La boleta ya no está en Signet. Quedó cerrada.");
+                                }
+                            }
+                        }
+                    }
+                }
+                JobEvent::BondGone(Ok(None)) | JobEvent::BondGone(Err(_)) => {
+                    self.chain_busy = false;
                 }
             }
             if n >= 16 {
@@ -869,8 +903,10 @@ impl App {
         };
         self.selected = Some(slug.clone());
         let local = self.store.load_pay_quote(&slug).ok().flatten();
-        match apply_incoming_quote(local, quote) {
-            Ok(q) => {
+        let project = self.store.ensure_pay_project(&slug).ok();
+        match quote_intake(local, quote, project.as_ref()) {
+            QuoteIntake::Applied(q) => {
+                self.pay.peer_quote = None;
                 if let Err(e) = self.store.save_pay_quote(&slug, &q) {
                     return self.fail(e);
                 }
@@ -879,6 +915,7 @@ impl App {
                         let _ = self.store.save_pay_project(&slug, &project);
                     }
                 }
+                let _ = self.store.save_pay_draft(&slug, &self.pay);
                 self.tab = MainTab::Pago;
                 if quote_fully_signed(&q) {
                     self.note(
@@ -888,7 +925,18 @@ impl App {
                     self.note("Llegó la cotización. Revísala y fírmala en Pago.");
                 }
             }
-            Err(e) => self.fail(e),
+            QuoteIntake::Differ { local, incoming } => {
+                if let Err(e) = self.store.save_pay_quote(&slug, &local) {
+                    return self.fail(e);
+                }
+                self.pay.peer_quote = Some(incoming);
+                let _ = self.store.save_pay_draft(&slug, &self.pay);
+                self.tab = MainTab::Pago;
+                self.note("Hay dos cotizaciones distintas. Elige una en Pago.");
+            }
+            QuoteIntake::AlreadyFunding => {
+                self.note("Ya está fondeando. No se cambia la cotización.");
+            }
         }
     }
 
@@ -1008,7 +1056,7 @@ impl eframe::App for App {
                         self.t1 = DeadlineFields::from_unix(t1);
                         self.t2 = DeadlineFields::from_unix(t2);
                     }
-                    self.total_major = format_major_amount(draft.total_minor(), draft.unit);
+                    self.total_major = format_money_edit(draft.total_minor(), draft.unit);
                     self.unit = draft.unit;
                 }
                 if let Ok(Some(signed)) = self.store.load_signed(&slug) {
@@ -1054,6 +1102,7 @@ impl eframe::App for App {
 
         self.maybe_poll_funding_chain();
         self.maybe_poll_coop();
+        self.maybe_poll_bond_spent();
         self.show_chrome(ctx);
         self.show_log_panel(ctx);
 
@@ -1586,11 +1635,9 @@ impl App {
         panel_card(ui, dark, |ui| {
             ui.label(RichText::new("Propuesta — revísala").strong());
             ui.label(format!(
-                "Total {} {} · boleta 10% = {} {}",
-                format_major_amount(draft.total_minor(), draft.unit),
-                draft.unit,
-                format_major_amount(bond, draft.unit),
-                draft.unit
+                "Total {} · boleta 10% = {}",
+                format_obra_money(draft.total_minor(), draft.unit),
+                format_obra_money(bond, draft.unit),
             ));
             if let Some((t1, t2)) = draft.dispute.fee_burn_deadlines() {
                 ui.label(format!("Primer plazo: {}", format_unix_local_es(t1)));
@@ -1614,7 +1661,7 @@ impl App {
                     for p in &draft.partidas {
                         ui.label(p.id.to_string());
                         ui.label(&p.description);
-                        ui.label(format_major_amount(p.amount_minor, draft.unit));
+                        ui.label(format_obra_money(p.amount_minor, draft.unit));
                         ui.end_row();
                     }
                 });
@@ -1914,7 +1961,14 @@ impl App {
                 ui.label(RichText::new("Monto y plazos").strong());
                 ui.horizontal(|ui| {
                     ui.label("Total");
-                    show_field(ui, &mut self.total_major, "100", self.prefs.dark, 80.0);
+                    show_money_field(
+                        ui,
+                        &mut self.total_major,
+                        self.unit,
+                        "100",
+                        self.prefs.dark,
+                        120.0,
+                    );
                     ui.label("moneda");
                     egui::ComboBox::from_id_salt("contract-unit")
                         .selected_text(self.unit.as_str())
@@ -1925,14 +1979,13 @@ impl App {
                         });
                 });
                 self.show_fx_line(ui);
-                if let Ok(total) = parse_major_amount(&self.total_major, self.unit) {
+                if let Ok(total) = parse_money_input(&self.total_major, self.unit) {
                     if let Ok(bond) = bond_minor(total, DEFAULT_BOND_BPS) {
                         let n = hbp_core::equal_stage_count(DEFAULT_BOND_BPS).unwrap_or(0);
-                        let bond_txt = format_major_amount(bond, self.unit);
+                        let bond_txt = format_obra_money(bond, self.unit);
                         ui.label(
                             RichText::new(format!(
-                                "Boleta 10% = {bond_txt} {}. Serán {n} partidas de {bond_txt}.",
-                                self.unit
+                                "Boleta 10% = {bond_txt}. Serán {n} partidas de {bond_txt}."
                             ))
                             .weak(),
                         );
@@ -1995,10 +2048,9 @@ impl App {
                 ui.label(format!("Segundo plazo: {}", format_unix_local_es(t2)));
             }
             ui.label(format!(
-                "Total {} {} · boleta {} (10%)",
-                format_major_amount(draft.total_minor(), draft.unit),
-                draft.unit,
-                format_major_amount(bond, draft.unit)
+                "Total {} · boleta {} (10%)",
+                format_obra_money(draft.total_minor(), draft.unit),
+                format_obra_money(bond, draft.unit)
             ));
             egui::Grid::new("stages").striped(true).show(ui, |ui| {
                 ui.strong("#");
@@ -2010,7 +2062,7 @@ impl App {
                 for p in &draft.partidas {
                     ui.label(p.id.to_string());
                     ui.label(&p.description);
-                    ui.label(format_major_amount(p.amount_minor, draft.unit));
+                    ui.label(format_obra_money(p.amount_minor, draft.unit));
                     ui.label(if p.amount_minor == bond { "sí" } else { "NO" });
                     ui.label(format_unix_local_es(p.plazo_unix));
                     ui.end_row();
@@ -2021,7 +2073,7 @@ impl App {
 
     fn show_fx_line(&mut self, ui: &mut egui::Ui) {
         if self.unit.is_bitcoin_denom() {
-            if let Ok(total) = parse_major_amount(&self.total_major, self.unit) {
+            if let Ok(total) = parse_money_input(&self.total_major, self.unit) {
                 if let Some(sats) = preview_sats(total, self.unit, None) {
                     ui.label(
                         RichText::new(format!(
@@ -2048,7 +2100,7 @@ impl App {
             }
         });
         if let (Ok(total), Some(q)) = (
-            parse_major_amount(&self.total_major, self.unit),
+            parse_money_input(&self.total_major, self.unit),
             self.fx.as_ref(),
         ) {
             if q.unit == self.unit {
@@ -2101,32 +2153,52 @@ impl App {
                 return;
             }
         };
-        if self.pay.coop_tx_hex.trim().is_empty() {
-            let disk = self.store.load_coop_tx(&slug).ok().flatten();
-            if recover_coop_tx_into_draft(&mut self.pay, &project, disk.as_ref()) {
-                let _ = self.store.save_pay_draft(&slug, &self.pay);
+        let mut project = project;
+        let disk = self.store.load_coop_tx(&slug).ok().flatten();
+        if heal_pay_state(&mut project, &mut self.pay, disk.as_ref()) {
+            let _ = self.store.save_pay_project(&slug, &project);
+            let _ = self.store.save_pay_draft(&slug, &self.pay);
+            if !self.pay.coop_tx_hex.trim().is_empty() {
                 let _ =
                     self.store
                         .save_coop_tx(&slug, &self.pay.coop_tx_hex, &self.pay.coop_tx_kind);
             }
         }
         let pending_q = self.store.load_pay_quote(&slug).ok().flatten();
-        let stage = pay_stage(Some(&project), pending_q.as_ref());
+        let stage = pay_stage_ui(Some(&project), pending_q.as_ref(), Some(&self.pay));
         let have_watch = matches!(
             self.store.load_watch(&slug, Some(self.passphrase.as_str())),
             Ok(Some(_))
         );
         ui.set_width(ui.available_width());
-        ui.spacing_mut().item_spacing.y = 10.0;
-        let has_signed = true;
+        ui.spacing_mut().item_spacing.y = 12.0;
+        if self
+            .flash_until
+            .is_some_and(|t| std::time::Instant::now() < t)
+            && !self.flash_ok.is_empty()
+        {
+            panel_card(ui, self.prefs.dark, |ui| {
+                ui.label(
+                    RichText::new(&self.flash_ok)
+                        .color(accent_green(self.prefs.dark))
+                        .strong()
+                        .size(18.0),
+                );
+            });
+            ui.add_space(8.0);
+        }
         panel_card(ui, self.prefs.dark, |ui| {
-            ui.label(RichText::new("Estado de la obra").strong().size(16.0));
-            show_obra_stepper(ui, obra_lane(Some(&project), has_signed), self.prefs.dark);
-            ui.add_space(4.0);
+            ui.label(RichText::new("Estado de la obra").strong().size(18.0));
+            show_obra_stepper(
+                ui,
+                obra_lane_for(Some(&project), true, Some(&self.pay)),
+                self.prefs.dark,
+            );
+            ui.add_space(6.0);
             show_pot_badges(
                 ui,
-                boleta_badge(&project),
-                p1_badge(&project),
+                boleta_label(&project, Some(&self.pay)),
+                p1_label(&project, Some(&self.pay)),
                 self.prefs.dark,
             );
         });
@@ -2186,8 +2258,8 @@ impl App {
             },
         };
         panel_card(ui, dark, |ui| {
-            ui.label(RichText::new("Qué hacer ahora").strong().size(22.0));
-            ui.label(RichText::new(now).color(status_color).strong().size(18.0));
+            ui.label(RichText::new("Qué hacer ahora").strong().size(15.0));
+            ui.label(RichText::new(now).color(status_color).strong().size(24.0));
         });
         ui.add_space(8.0);
         if matches!(gate, Some(PagoCoopGate::ShowPublish)) || needs_coop_publish(&self.pay) {
@@ -2211,7 +2283,11 @@ impl App {
         }
         match stage {
             PayStage::NeedQuote | PayStage::NeedQuoteSig => {
-                self.show_pay_quote(ui, slug, id, signed, project, pending);
+                if self.pay.peer_quote.is_some() {
+                    self.show_quote_conflict(ui, slug, project);
+                } else {
+                    self.show_pay_quote(ui, slug, id, signed, project, pending);
+                }
             }
             PayStage::FundBondP1 if project.quote.is_some() => {
                 self.show_pay_fund(ui, slug, id, project);
@@ -2290,8 +2366,17 @@ impl App {
         let locked = quote.map(quote_fully_signed).unwrap_or(false);
         panel_card(ui, dark, |ui| {
             ui.label(RichText::new("Resumen").strong().size(16.0));
-            show_obra_stepper(ui, obra_lane(Some(project), true), dark);
-            show_pot_badges(ui, boleta_badge(project), p1_badge(project), dark);
+            show_obra_stepper(
+                ui,
+                obra_lane_for(Some(project), true, Some(&self.pay)),
+                dark,
+            );
+            show_pot_badges(
+                ui,
+                boleta_label(project, Some(&self.pay)),
+                p1_label(project, Some(&self.pay)),
+                dark,
+            );
             ui.add_space(4.0);
             let bond_minor = contract_bond_minor(body);
             let bond_sats = quote.map(|q| q.bond_sats);
@@ -2492,6 +2577,64 @@ impl App {
         let _ = id;
     }
 
+    fn show_quote_conflict(&mut self, ui: &mut egui::Ui, slug: &str, project: &hbp_core::Project) {
+        let dark = self.prefs.dark;
+        let Some(incoming) = self.pay.peer_quote.clone() else {
+            return;
+        };
+        let local = self.store.load_pay_quote(slug).ok().flatten();
+        panel_card(ui, dark, |ui| {
+            ui.label(
+                RichText::new("Hay dos cotizaciones distintas")
+                    .strong()
+                    .size(18.0)
+                    .color(accent_amber(dark)),
+            );
+            ui.label(
+                RichText::new("El mandante propone el tipo de cambio. Elige una; no se mezclan montos distintos.")
+                    .small()
+                    .weak(),
+            );
+            if let Some(l) = &local {
+                ui.label(RichText::new(format!("La tuya: {}", quote_sats_line(l))).strong());
+            }
+            ui.label(
+                RichText::new(format!("La del otro: {}", quote_sats_line(&incoming))).strong(),
+            );
+            ui.add_space(8.0);
+            if primary_btn(ui, "Usar la del otro", dark).clicked() {
+                self.pay_use_peer_quote(slug, incoming);
+            }
+            ui.add_space(4.0);
+            if ghost_btn(ui, "Quedarme con la mía", dark).clicked() {
+                self.pay.peer_quote = None;
+                let _ = self.store.save_pay_draft(slug, &self.pay);
+                if let Some(q) = local {
+                    self.spawn_deliver(hbp_net::NetMessage::Quote { quote: q }, "Reenvié la mía.");
+                } else {
+                    self.note("Me quedo con la mía.");
+                }
+            }
+            ui.add_space(4.0);
+            if ghost_btn(ui, "Borrar y cotizar de nuevo", dark).clicked() {
+                self.pay.peer_quote = None;
+                self.pay.price_major.clear();
+                self.pay_recotizar(slug);
+                let _ = project;
+            }
+        });
+    }
+
+    fn pay_use_peer_quote(&mut self, slug: &str, incoming: Quote) {
+        if let Err(e) = self.store.save_pay_quote(slug, &incoming) {
+            return self.fail(e);
+        }
+        self.pay.peer_quote = None;
+        self.pay.price_major.clear();
+        let _ = self.store.save_pay_draft(slug, &self.pay);
+        self.note("Usé la cotización del otro. Fírmala si falta tu parte.");
+    }
+
     fn show_pay_quote(
         &mut self,
         ui: &mut egui::Ui,
@@ -2505,14 +2648,23 @@ impl App {
         let locked = quote.map(quote_fully_signed).unwrap_or(false);
         let dark = self.prefs.dark;
         let body = &signed.body;
+        let role = party_role(id, body).ok();
         panel_card(ui, dark, |ui| {
-            ui.label(RichText::new("Acordar la plata").strong());
+            ui.label(RichText::new("Acordar la plata").strong().size(18.0));
             let bond_m = contract_bond_minor(body);
             let p1_m = partida_spec_minor(body, 1).unwrap_or(0);
             let (bond_main, _) = obra_amount_pair(bond_m, body.unit, None);
             let (p1_main, _) = obra_amount_pair(p1_m, body.unit, None);
-            ui.label(RichText::new(format!("Plata de la boleta: {bond_main}")).strong());
-            ui.label(RichText::new(format!("Plata de la partida 1: {p1_main}")).strong());
+            ui.label(
+                RichText::new(format!("Plata de la boleta: {bond_main}"))
+                    .strong()
+                    .size(16.0),
+            );
+            ui.label(
+                RichText::new(format!("Plata de la partida 1: {p1_main}"))
+                    .strong()
+                    .size(16.0),
+            );
             if locked {
                 if let Some(q) = quote {
                     ui.label(RichText::new(agreed_fx_line(q, body.unit)).small().weak());
@@ -2526,66 +2678,96 @@ impl App {
             }
 
             let pair = fx_pair_label(body.unit);
-            ui.label(
-                RichText::new(format!(
-                    "Tipo de cambio de la boleta ({pair}). Consulta o escríbelo."
-                ))
-                .small()
-                .weak(),
-            );
+            if role == Some(Role::Contratista) && quote.is_none() {
+                ui.label(
+                    RichText::new(
+                        "El mandante propone el tipo de cambio. Tú solo firmas cuando llegue.",
+                    )
+                    .color(accent_amber(dark)),
+                );
+                return;
+            }
+            if role == Some(Role::Mandante) {
+                ui.label(
+                    RichText::new(format!(
+                        "Tú propones el tipo de cambio ({pair}). El contratista solo firma."
+                    ))
+                    .small()
+                    .weak(),
+                );
+            }
             ui.horizontal(|ui| {
-                if ui.button("Consultar tipo de cambio").clicked() {
+                if ghost_btn(ui, "Consultar tipo de cambio", dark).clicked() {
                     self.spawn_fx(body.unit);
                 }
                 if !self.fx_line.is_empty() {
                     ui.label(RichText::new(&self.fx_line).small());
                 }
             });
-            if !body.unit.is_bitcoin_denom() {
+            if !body.unit.is_bitcoin_denom() && role == Some(Role::Mandante) {
                 ui.horizontal(|ui| {
-                    ui.label(RichText::new(format!("{pair} (manual)")).small());
+                    ui.label(RichText::new(format!("{pair}")).small());
                     let hint = match body.unit {
-                        Unit::Clp => "ej. 74492748",
-                        Unit::Usd => "ej. 80000",
-                        _ => "ej. precio de 1 BTC",
+                        Unit::Clp => "ej. $74.492.748",
+                        Unit::Usd => "ej. 80.000",
+                        _ => "precio de 1 BTC",
                     };
-                    show_field(ui, &mut self.pay.price_major, hint, dark, 140.0);
+                    show_money_field(ui, &mut self.pay.price_major, body.unit, hint, dark, 160.0);
                 });
             }
 
             if let Some(price) = self.pay_price_minor(body.unit) {
                 if let Ok((bond_sats, p1_sats)) = preview_quote_sats(signed, Some(price)) {
                     ui.label(
-                        RichText::new(format!("en red: boleta {bond_sats} · partida 1 {p1_sats}"))
-                            .small()
-                            .weak(),
+                        RichText::new(format!(
+                            "en red: boleta {} · partida 1 {}",
+                            format_sats_ui(bond_sats),
+                            format_sats_ui(p1_sats)
+                        ))
+                        .small()
+                        .weak(),
                     );
                 }
             } else if body.unit.is_bitcoin_denom() {
                 if let Ok((bond_sats, p1_sats)) = preview_quote_sats(signed, None) {
                     ui.label(
-                        RichText::new(format!("en red: boleta {bond_sats} · partida 1 {p1_sats}"))
-                            .small()
-                            .weak(),
+                        RichText::new(format!(
+                            "en red: boleta {} · partida 1 {}",
+                            format_sats_ui(bond_sats),
+                            format_sats_ui(p1_sats)
+                        ))
+                        .small()
+                        .weak(),
                     );
                 }
             }
             if let Some(q) = quote {
                 ui.label(
                     RichText::new(format!(
-                        "Pendiente de firma. {}",
-                        agreed_fx_line(q, body.unit)
+                        "Pendiente de firma. {} · {}",
+                        agreed_fx_line(q, body.unit),
+                        quote_sats_line(q)
                     ))
                     .small(),
                 );
             }
 
             ui.add_space(6.0);
-            if primary_btn(ui, "Proponer esta plata", dark).clicked() {
-                self.pay_propose_quote(slug, id, signed);
+            let propose = role.map(can_propose_quote).unwrap_or(false);
+            if propose {
+                if primary_btn(ui, "Proponer esta plata", dark).clicked() {
+                    self.pay_propose_quote(slug, id, signed);
+                }
+            } else if quote.is_some() {
+                if primary_btn(ui, "Firmar la plata", dark).clicked() {
+                    self.pay_sign_quote(slug, id, signed);
+                }
             }
-            if ui.button("Firmar la plata").clicked() {
-                self.pay_sign_quote(slug, id, signed);
+            if propose && quote.is_some() {
+                ui.add_space(4.0);
+                if ghost_btn(ui, "Firmar la plata", dark).clicked() {
+                    self.pay_sign_quote(slug, id, signed);
+                }
             }
         });
     }
@@ -4241,7 +4423,12 @@ impl App {
         if self.tab != MainTab::Pago || self.chain_busy {
             return;
         }
-        if !needs_coop_publish(&self.pay) {
+        if self.pay.coop_tx_hex.trim().is_empty() {
+            return;
+        }
+        if self.pay.coop_tx_published
+            && self.last_chain_poll.elapsed() < std::time::Duration::from_secs(30)
+        {
             return;
         }
         if self.last_chain_poll.elapsed() < std::time::Duration::from_secs(8) {
@@ -4250,6 +4437,49 @@ impl App {
         if let Some(slug) = self.selected.clone() {
             self.pay_poll_coop(&slug, false);
         }
+    }
+
+    fn maybe_poll_bond_spent(&mut self) {
+        if self.tab != MainTab::Pago || self.chain_busy {
+            return;
+        }
+        if self.last_chain_poll.elapsed() < std::time::Duration::from_secs(10) {
+            return;
+        }
+        let Some(slug) = self.selected.clone() else {
+            return;
+        };
+        let Ok(project) = self.store.ensure_pay_project(&slug) else {
+            return;
+        };
+        if !project.bond_is_funded() {
+            return;
+        }
+        if matches!(project.bond, hbp_core::BondStatus::Released { .. }) {
+            return;
+        }
+        let Ok((bond_addr, _)) = escrow_addrs(&project) else {
+            return;
+        };
+        let socks = self.socks();
+        let urls = self.esplora_url_list();
+        self.chain_busy = true;
+        self.last_chain_poll = std::time::Instant::now();
+        self.spawn_quiet(move |tx| {
+            let refs: Vec<&str> = urls.iter().map(|s| s.as_str()).collect();
+            let r = (|| {
+                let base = esplora_try_bases(&refs, socks).map_err(|e| e.to_string())?;
+                let utxos =
+                    esplora_address_utxos(&base, socks, &bond_addr).map_err(|e| e.to_string())?;
+                if !utxos.is_empty() {
+                    return Ok(None);
+                }
+                let txs =
+                    esplora_address_txs(&base, socks, &bond_addr).map_err(|e| e.to_string())?;
+                Ok(txs.first().map(|t| t.txid.clone()))
+            })();
+            let _ = tx.send(JobEvent::BondGone(r));
+        });
     }
 
     fn pay_poll_coop(&mut self, _slug: &str, force: bool) {
@@ -4452,7 +4682,7 @@ impl App {
     }
 
     fn build_draft(&mut self, slug: &str, id: &Identity, entry: &WorkEntry) {
-        let total = match parse_major_amount(&self.total_major, self.unit) {
+        let total = match parse_money_input(&self.total_major, self.unit) {
             Ok(v) => v,
             Err(_) => {
                 return self.fail(if self.unit == Unit::Sats {
@@ -4486,7 +4716,7 @@ impl App {
                     body.partidas.len(),
                     body.partidas
                         .first()
-                        .map(|p| format_major_amount(p.amount_minor, body.unit))
+                        .map(|p| format_obra_money(p.amount_minor, body.unit))
                         .unwrap_or_else(|| "0".into()),
                     body.unit
                 )),
