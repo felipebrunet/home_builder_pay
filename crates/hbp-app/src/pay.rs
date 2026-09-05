@@ -20,8 +20,9 @@ use hbp_bitcoin::{
     Identity, OfferedCoin, WatchScan, WatchedUtxo,
 };
 use hbp_core::{
-    bond_minor, btc_price_to_minor, fiat_minor_to_sats, minor_from_major, NonceJournal,
-    PartidaQuote, PartidaStatus, Project, Quote, Role, SignedContract, Unit, PRODUCT_NETWORK,
+    bond_minor, btc_price_to_minor, fiat_minor_to_sats, format_major_amount, minor_from_major,
+    NonceJournal, PartidaQuote, PartidaStatus, Project, Quote, Role, SignedContract, Unit,
+    PRODUCT_NETWORK,
 };
 use serde::{Deserialize, Serialize};
 
@@ -64,18 +65,23 @@ pub enum FundHandshakeStep {
 impl FundHandshakeStep {
     pub fn title_es(self) -> &'static str {
         match self {
-            Self::NeedWatch => "Guarda tu xpub",
-            Self::ScanCoins => "Mis monedas",
-            Self::PickCoin => "Mis monedas",
-            Self::SendPartial => "Armar / enviar parcial",
-            Self::WaitPeerComplete => "Esperar / completar",
-            Self::CompleteIncoming => "Esperar / completar",
+            Self::NeedWatch => "Guarda tu billetera",
+            Self::ScanCoins => "Buscar mi plata",
+            Self::PickCoin => "Elige qué plata usar",
+            Self::SendPartial => "Armar y enviar mi parte",
+            Self::WaitPeerComplete => "Esperando al otro",
+            Self::CompleteIncoming => "Completar con mi parte",
             Self::RetrySend => "Reenviar",
-            Self::ExportAndSign => "Firmar",
-            Self::SendOneSig => "Enviar 1 firma",
-            Self::WaitChain => "Esperando en cadena",
+            Self::ExportAndSign => "Exportar para firmar",
+            Self::SendOneSig => "Enviar lo firmado",
+            Self::WaitChain => "Comprobar en la red",
         }
     }
+}
+
+/// PSBT export / import / reenviar stay on the main path only while still funding.
+pub fn show_main_fund_ui(stage: PayStage) -> bool {
+    matches!(stage, PayStage::FundBondP1)
 }
 
 /// Forward-only progress. Never walk this backwards except "Empezar de nuevo".
@@ -213,9 +219,9 @@ pub fn parse_psbt_bytes(bytes: &[u8]) -> Result<Psbt> {
 
 pub fn spanish_chain_status(txid: Option<&str>, confirmed: Option<bool>) -> String {
     match (txid, confirmed) {
-        (Some(id), Some(true)) => format!("Confirmada en Signet. txid {id}"),
-        (Some(id), Some(false)) => format!("Vista en mempool (sin confirmar). txid {id}"),
-        (Some(id), None) => format!("Vista en Signet. txid {id}"),
+        (Some(_), Some(true)) => "Confirmada en Signet.".into(),
+        (Some(_), Some(false)) => "Vista en mempool (sin confirmar).".into(),
+        (Some(_), None) => "Vista en Signet.".into(),
         _ => "Aún no aparece en Signet.".into(),
     }
 }
@@ -273,7 +279,7 @@ pub struct PayUiDraft {
 }
 
 fn default_fee() -> String {
-    "500".into()
+    "250".into()
 }
 
 impl Default for PayUiDraft {
@@ -398,16 +404,54 @@ pub fn pay_stage(project: Option<&Project>, pending_quote: Option<&Quote>) -> Pa
 pub fn spanish_now(project: Option<&Project>, pending_quote: Option<&Quote>) -> String {
     match pay_stage(project, pending_quote) {
         PayStage::NeedContract => "Cierra el trato primero (Aceptar / confirmar).".into(),
-        PayStage::NeedQuote => "Ahora: acordar cotización de boleta + partida 1.".into(),
-        PayStage::NeedQuoteSig => "Ahora: firmar la cotización (boleta + partida 1).".into(),
-        PayStage::FundBondP1 => "Ahora: fondear boleta + partida 1".into(),
+        PayStage::NeedQuote => "Ahora: acordar la plata de la boleta y de la partida 1.".into(),
+        PayStage::NeedQuoteSig => "Ahora: firmar la plata de la boleta y de la partida 1.".into(),
+        PayStage::FundBondP1 => "Ahora: juntar la plata de la boleta y de la partida 1".into(),
         PayStage::PartidaInCourse => "Partida 1 en curso".into(),
         PayStage::UnlockNext => {
             let next = project.and_then(|p| p.active_partida_id()).unwrap_or(2);
-            format!("Partida 1 cerrada. Ahora puedes cotizar / fondear partida {next}.")
+            format!("Partida 1 cerrada. Ahora puedes ver la partida {next}.")
         }
         PayStage::AllClosed => "Todas las partidas de este trato están cerradas.".into(),
     }
+}
+
+/// Contract-currency amount, e.g. `5000.00 CLP`.
+pub fn format_obra_money(minor: u64, unit: Unit) -> String {
+    format!("{} {unit}", format_major_amount(minor, unit))
+}
+
+/// Quoted FX is a locked snapshot, not a live ticker that replaces the partida list.
+pub fn agreed_fx_line(quote: &Quote, unit: Unit) -> String {
+    let pair = format!("{unit}/BTC");
+    let note = quote.fx_note.trim();
+    if note.is_empty() {
+        format!("tipo de cambio acordado: {pair}")
+    } else if note.contains('/') {
+        format!("tipo de cambio acordado: {note}")
+    } else {
+        format!("tipo de cambio acordado: {pair} ({note})")
+    }
+}
+
+/// Primary number stays in the contract unit; sats are optional small print.
+pub fn obra_amount_pair(minor: u64, unit: Unit, sats: Option<u64>) -> (String, Option<String>) {
+    let main = format_obra_money(minor, unit);
+    if unit.is_bitcoin_denom() {
+        return (main, None);
+    }
+    (main, sats.map(|s| format!("{s} sats")))
+}
+
+pub fn contract_bond_minor(body: &hbp_core::ContractBody) -> u64 {
+    bond_minor(body.total_minor(), body.bond_bps).unwrap_or(0)
+}
+
+pub fn partida_spec_minor(body: &hbp_core::ContractBody, id: u32) -> Option<u64> {
+    body.partidas
+        .iter()
+        .find(|p| p.id == id)
+        .map(|p| p.amount_minor)
 }
 
 /// Later partidas stay grey until the previous one is Paid / Unwound / FeeBurnT2.
@@ -772,7 +816,21 @@ pub fn apply_verified_p1_funding(project: &mut Project, tx_hex: &str) -> Result<
             o.script_pubkey == bond.script_pubkey() && o.value.to_sat() == quote.bond_sats
         })
         .context("falta la salida de la boleta")?;
-    project.note_bond_funding(txid.clone(), bond_vout as u32, quote.bond_sats, 1)?;
+    match &project.bond {
+        hbp_core::BondStatus::Unfunded => {
+            project.note_bond_funding(txid.clone(), bond_vout as u32, quote.bond_sats, 1)?;
+        }
+        hbp_core::BondStatus::Funded { sats, .. } if *sats == quote.bond_sats => {
+            // Already noted (Esplora poll / second verify). Treat as success.
+        }
+        hbp_core::BondStatus::Funded { sats, .. } => {
+            bail!(
+                "la boleta ya está fondeada con otro monto ({sats} ≠ {})",
+                quote.bond_sats
+            );
+        }
+        _ => return Ok(txid),
+    }
     project.note_partida_funding(
         FIRST_PARTIDA,
         txid.clone(),
@@ -1258,7 +1316,7 @@ mod tests {
         let mut project = Project::from_signed(signed.clone()).unwrap();
         assert_eq!(
             spanish_now(Some(&project), None),
-            "Ahora: acordar cotización de boleta + partida 1."
+            "Ahora: acordar la plata de la boleta y de la partida 1."
         );
         assert!(partida_ui_enabled(&project, 1));
         assert!(!partida_ui_enabled(&project, 2));
@@ -1271,7 +1329,7 @@ mod tests {
         assert_ne!(boleta, p1addr, "boleta and partida 1 must be distinct");
         assert_eq!(
             spanish_now(Some(&project), Some(&q)),
-            "Ahora: fondear boleta + partida 1"
+            "Ahora: juntar la plata de la boleta y de la partida 1"
         );
         assert_eq!(project.active_partida_id(), Some(1));
 
@@ -1291,6 +1349,7 @@ mod tests {
         project.mark_paid(1, "pay1".into()).unwrap();
         assert!(partida_ui_enabled(&project, 2));
         assert!(spanish_now(Some(&project), Some(&q)).contains("partida 2"));
+        assert!(!show_main_fund_ui(pay_stage(Some(&project), Some(&q))));
     }
 
     #[test]
@@ -1335,6 +1394,9 @@ mod tests {
         assert!(!txid.is_empty());
         assert!(matches!(project.bond, BondStatus::Funded { .. }));
         assert_eq!(spanish_now(Some(&project), Some(&q)), "Partida 1 en curso");
+        let again = apply_verified_p1_funding(&mut project, &tx_hex).unwrap();
+        assert_eq!(again, txid);
+        assert!(!show_main_fund_ui(pay_stage(Some(&project), Some(&q))));
         assert!(!partida_ui_enabled(&project, 2));
         let err = project
             .note_partida_funding(2, "no".into(), 0, q.partida_sats(2).unwrap(), 1, 1)
@@ -1441,7 +1503,7 @@ mod tests {
         assert!(project.quote.is_none());
         assert_eq!(
             spanish_now(Some(&project), None),
-            "Ahora: acordar cotización de boleta + partida 1."
+            "Ahora: acordar la plata de la boleta y de la partida 1."
         );
     }
 
@@ -1714,7 +1776,34 @@ mod tests {
         assert!(spanish_chain_status(None, None).contains("Aún no"));
         let s = spanish_chain_status(Some("abcd"), Some(false));
         assert!(s.contains("mempool"));
-        assert!(s.contains("abcd"));
+        assert!(!s.contains("abcd"), "txid stays off the primary line");
         assert!(spanish_chain_status(Some("abcd"), Some(true)).contains("Confirmada"));
+        assert!(!spanish_chain_status(Some("abcd"), Some(true)).contains("abcd"));
+    }
+
+    #[test]
+    fn quote_display_keeps_clp_primary() {
+        let (m, c) = pair_ids();
+        let p1 = 500_000; // 5_000.00 CLP
+        let signed = signed_clp_partida(&m, &c, p1);
+        let body = &signed.body;
+        let (boleta, _) = obra_amount_pair(contract_bond_minor(body), body.unit, None);
+        let (partida, none_sats) = obra_amount_pair(p1, body.unit, None);
+        assert!(boleta.contains("CLP"));
+        assert!(boleta.contains("1000.00"));
+        assert_eq!(partida, "5000.00 CLP");
+        assert!(none_sats.is_none());
+
+        let clp_price = hbp_core::btc_price_to_minor(74_492_748.0, Unit::Clp).unwrap();
+        let q = draft_quote(&signed, Some(clp_price), "Yadio 74492748 CLP/BTC").unwrap();
+        let (p1_main, p1_sats) = obra_amount_pair(p1, body.unit, Some(q.partida_sats(1).unwrap()));
+        assert_eq!(p1_main, "5000.00 CLP");
+        assert_eq!(p1_sats.as_deref(), Some("6712 sats"));
+        let fx = agreed_fx_line(&q, body.unit);
+        assert!(fx.starts_with("tipo de cambio acordado:"));
+        assert!(fx.contains("CLP/BTC"));
+        assert!(!fx.contains("USD/BTC"));
+        assert!(show_main_fund_ui(PayStage::FundBondP1));
+        assert!(!show_main_fund_ui(PayStage::PartidaInCourse));
     }
 }

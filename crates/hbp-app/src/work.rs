@@ -397,29 +397,37 @@ impl WorkStore {
             .unwrap_or_default()
     }
 
-    /// Local watch-only xpub. Never sent to the peer.
-    pub fn save_watch(
-        &self,
-        slug: &str,
-        account: &WatchAccount,
-        passphrase: Option<&str>,
-    ) -> Result<PathBuf> {
-        let path = self.work_dir(slug).join("watch.json");
-        let json = serde_json::to_vec_pretty(account)?;
-        if let Some(pw) = passphrase.map(str::trim).filter(|s| !s.is_empty()) {
-            fs::write(&path, vault_encrypt(&json, pw)?)?;
-        } else {
-            fs::write(&path, json)?;
-        }
-        Ok(path)
+    fn persona_watch_path(&self) -> PathBuf {
+        self.root.join("watch.json")
     }
 
-    pub fn load_watch(&self, slug: &str, passphrase: Option<&str>) -> Result<Option<WatchAccount>> {
-        let p = self.work_dir(slug).join("watch.json");
-        if !p.exists() {
+    fn write_watch_file(
+        &self,
+        path: &Path,
+        account: &WatchAccount,
+        passphrase: Option<&str>,
+    ) -> Result<()> {
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        let json = serde_json::to_vec_pretty(account)?;
+        if let Some(pw) = passphrase.map(str::trim).filter(|s| !s.is_empty()) {
+            fs::write(path, vault_encrypt(&json, pw)?)?;
+        } else {
+            fs::write(path, json)?;
+        }
+        Ok(())
+    }
+
+    fn read_watch_file(
+        &self,
+        path: &Path,
+        passphrase: Option<&str>,
+    ) -> Result<Option<WatchAccount>> {
+        if !path.exists() {
             return Ok(None);
         }
-        let raw = fs::read_to_string(&p)?;
+        let raw = fs::read_to_string(path)?;
         if hbp_core::vault_is_encrypted(&raw) {
             let pw = passphrase
                 .map(str::trim)
@@ -431,6 +439,46 @@ impl WorkStore {
         Ok(Some(serde_json::from_str(&raw)?))
     }
 
+    /// Persona-level watch-only xpub (before a trato exists). Never sent to the peer.
+    pub fn save_persona_watch(
+        &self,
+        account: &WatchAccount,
+        passphrase: Option<&str>,
+    ) -> Result<PathBuf> {
+        let path = self.persona_watch_path();
+        self.write_watch_file(&path, account, passphrase)?;
+        Ok(path)
+    }
+
+    pub fn load_persona_watch(&self, passphrase: Option<&str>) -> Result<Option<WatchAccount>> {
+        self.read_watch_file(&self.persona_watch_path(), passphrase)
+    }
+
+    /// Local watch-only xpub. Never sent to the peer.
+    pub fn save_watch(
+        &self,
+        slug: &str,
+        account: &WatchAccount,
+        passphrase: Option<&str>,
+    ) -> Result<PathBuf> {
+        let path = self.work_dir(slug).join("watch.json");
+        self.write_watch_file(&path, account, passphrase)?;
+        let _ = self.save_persona_watch(account, passphrase);
+        Ok(path)
+    }
+
+    pub fn load_watch(&self, slug: &str, passphrase: Option<&str>) -> Result<Option<WatchAccount>> {
+        let p = self.work_dir(slug).join("watch.json");
+        if let Some(acc) = self.read_watch_file(&p, passphrase)? {
+            return Ok(Some(acc));
+        }
+        if let Some(acc) = self.load_persona_watch(passphrase)? {
+            let _ = self.write_watch_file(&p, &acc, passphrase);
+            return Ok(Some(acc));
+        }
+        Ok(None)
+    }
+
     pub fn import_xpub_local(
         &self,
         slug: &str,
@@ -439,6 +487,12 @@ impl WorkStore {
     ) -> Result<WatchAccount> {
         let acc = import_watch(raw, None, PRODUCT_NETWORK, 20)?;
         self.save_watch(slug, &acc, passphrase)?;
+        Ok(acc)
+    }
+
+    pub fn import_xpub_persona(&self, raw: &str, passphrase: Option<&str>) -> Result<WatchAccount> {
+        let acc = import_watch(raw, None, PRODUCT_NETWORK, 20)?;
+        self.save_persona_watch(&acc, passphrase)?;
         Ok(acc)
     }
 
@@ -988,6 +1042,32 @@ mod tests {
         let back = store.ensure_pay_project(&e.slug).unwrap();
         assert!(back.quote.is_some());
         assert_eq!(back.active_partida_id(), Some(1));
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn persona_watch_fills_obra_before_buscar() {
+        use hbp_bitcoin::{WatchAccount, WatchKind};
+
+        let tmp = std::env::temp_dir().join(format!("hbp-app-watch-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&tmp);
+        let mut store = WorkStore::open(tmp.join("a")).unwrap();
+        let acc = WatchAccount {
+            network: PRODUCT_NETWORK,
+            kind: WatchKind::Wpkh,
+            receive_descriptor: "wpkh(tpubpersona/0/*)".into(),
+            change_descriptor: "wpkh(tpubpersona/1/*)".into(),
+            gap_limit: 20,
+        };
+        store.save_persona_watch(&acc, None).unwrap();
+        assert!(store.load_persona_watch(None).unwrap().is_some());
+        assert!(store.load_watch("no-trato-yet", None).unwrap().is_some());
+        let e = store
+            .create_product_work("trato1", Role::Contratista, None)
+            .unwrap();
+        let loaded = store.load_watch(&e.slug, None).unwrap().unwrap();
+        assert_eq!(loaded.receive_descriptor, acc.receive_descriptor);
+        assert!(store.work_dir(&e.slug).join("watch.json").exists());
         let _ = fs::remove_dir_all(&tmp);
     }
 }

@@ -56,25 +56,29 @@ After **Trato cerrado**, the next-step card is **Ir a Pago**. Status lines:
 
 | Stage | Spanish |
 |---|---|
-| No quote yet | Ahora: acordar cotización de boleta + partida 1. |
-| Quote waiting a signature | Ahora: firmar la cotización (boleta + partida 1). |
-| Quote locked, unfunded | **Ahora: fondear boleta + partida 1** |
+| No quote yet | Ahora: acordar la plata de la boleta y de la partida 1. |
+| Quote waiting a signature | Ahora: firmar la plata de la boleta y de la partida 1. |
+| Quote locked, unfunded | **Ahora: juntar la plata de la boleta y de la partida 1** |
 | Bond + P1 noted | **Partida 1 en curso** |
-| P1 Paid / Unwound / T2 | Partida 1 cerrada. Ahora puedes cotizar / fondear partida 2. |
+| P1 Paid / Unwound / T2 | Partida 1 cerrada. Ahora puedes ver la partida 2. |
 
-**Quote.** FX is **contract unit per BTC** (`CLP/BTC`, `USD/BTC`, …), never a leftover USD rate on a CLP trato. Yadio → CoinGecko → CoinMarketCap (pair for that unit). SATS/BTC skip FX. Amounts stay 1/100 of the unit. A signed-but-unfunded quote can **Recotizar**. GUI drafts `Quote` (all partidas) but the banner only highlights boleta + P1 sats. Both signatures required before `set_quote`. Wired as `NetMessage::Quote` over Tor.
+**Pago layout.** Two columns so the common path fits without scrolling: **left** = “qué hacer ahora” + one primary action; **right** = CLP summary / muted checks. Finished stages collapse (watch and quote leave the left column once done). After **Confirmada en Signet**, PSBT export/import/reenviar/empezar de nuevo leave the main path (Avanzado rescue only). Primary then is recepción/cierre or “Partida 1 en curso”.
 
-**Funding (PSBT handshake).** Primary path is watch-only xpub + Esplora (blockstream → mempool Signet), not paste-both-outpoints. One green button per stage. Prior steps lock (no competing “Armar de nuevo”); **Empezar de nuevo** is behind Avanzado with confirm. If Tor deliver fails, the PSBT stays local and the CTA is **Reenviar**.
+**Quote.** Main numbers stay in the **contract currency** (CLP on a CLP trato). Sats are small print or hidden. FX is the **quoted snapshot** (“tipo de cambio acordado: … CLP/BTC”), not a replacement for the partida list. When the quote arrives/locks, partida rows show the completed CLP amounts. Pair is **contract unit per BTC** (`CLP/BTC`), never a leftover USD rate. Yadio → CoinGecko → CoinMarketCap. SATS/BTC skip FX. Amounts stay 1/100 of the unit. A signed-but-unfunded quote can **Recotizar** (Avanzado). Both signatures required before `set_quote`. Wired as `NetMessage::Quote` over Tor.
 
-1. **Mis monedas** — `Buscar mis monedas` scans the local xpub. App auto-selects the smallest confirmed UTXO that covers share + fee; user can pick another. After a partial exists the picker hides (only “Usando …”).
-2. **Armar/enviar parcial** — either side builds a 1-input PSBT (their coin + change) that already has exact **boleta + P1** outputs. Wired as `Artifact` `06-funding.partial.json`.
-3. **Completar** — peer picks their UTXO the same way, adds the second input, sends back the complete unsigned 2-in PSBT (`06-funding.unsigned.json`). Incoming older partials cannot overwrite a complete PSBT.
-4. **Firmar** — **Exportar archivo** (`.psbt`) and **Copiar / ver texto** (base64). Sign in Electrum/Sparrow. **Importar archivo** or paste the **1-signature** PSBT; app sends `07-onesig.psbt.json` (Reenviar if that fails). Peer exports that 1-sig (file + text), signs the second input in Electrum, **broadcasts there**.
-5. **En cadena** — **Comprobar transacción** (plus background Esplora poll). Status in Spanish with txid (mempool / confirmada). Manual tx-hex verify stays as rescue.
+**Wallet before Buscar.** Mandante saves the Signet vpub on Obra (“Billetera y respaldo”). Contratista gets the same local-only step on **Buscar**, before searching. Stored at the persona (`watch.json` at the works root) and copied into the trato folder when one exists. Never sent to the peer.
+
+**Funding (PSBT handshake).** Primary path is watch-only vpub + Esplora, not paste-both-outpoints. Copy is obra language (“plata de la boleta”, “comisión de red (~250)”). Addresses, txid, UTXO sit behind **Detalle técnico**. One green button per stage. If Tor deliver fails, the PSBT stays local and the CTA is **Reenviar**. A second Esplora confirm of an already-noted bond is success (no red `bond already funded`).
+
+1. **Buscar mi plata** — scans the local vpub. App auto-selects the smallest confirmed coin that covers share + fee; user can pick another (labeled Plata 1 / 2, not raw outpoints).
+2. **Armar y enviar mi parte** — either side builds a 1-input PSBT that already has exact **boleta + P1** outputs. Wired as `Artifact` `06-funding.partial.json`.
+3. **Completar con mi parte** — peer adds the second input, sends back the complete unsigned 2-in PSBT (`06-funding.unsigned.json`). Incoming older partials cannot overwrite a complete PSBT.
+4. **Exportar para firmar** — `.psbt` file + copiar. Sign in Electrum. **Traer lo firmado**; app sends `07-onesig.psbt.json`. Peer signs the second input in Electrum and **broadcasts there**.
+5. **Comprobar en la red** — Esplora poll. Status in Spanish without a txid on the primary line (`Confirmada en Signet`). Manual tx-hex stays in Avanzado.
 
 Boleta and partida 1 are **distinct** Taproot addresses (fee-burn key-path + unique tagged merkle tweak per output id). Later partidas stay grey until P1 is terminal.
 
-**Reception.** When P1 is locked: dest address + MuSig2 file/network rounds (`coop-propose` / `coop-sign` / `coop-finish`). Finish marks P1 `Paid` and unlocks the P2 row. P2 funding itself is **not** on this screen (CLI `--partida-only`).
+**Reception.** When P1 is locked: dest + MuSig2 (`coop-propose` / `coop-sign` / `coop-finish`). Primary buttons: **Proponer cobro** / **Firmar cobro** / **Marcar cobrada**. Finish marks P1 `Paid` and unlocks the P2 row. P2 funding itself is **not** on this screen (CLI `--partida-only`).
 
 Persisted under `{obra}/pay/` (`state.json`, `02-quote.json`, `coins.json`, `08-coop.json`, `nonces.json`, `session.json`).
 
@@ -93,7 +97,7 @@ Both online. No Avanzado for catalog.
 3. Contratista: Buscar **`Felipe`**. Cards: **casa2** and **casa3**. No trato auto-opened.
 4. **Ver propuesta** on casa2 → Trato review (total, plazos, partidas) → **Aceptar trato**.
 5. Buscar again (or same list) → **Ver propuesta** on casa3 → review → accept.
-6. After casa2 is signed: **Pago** enables. Status “acordar cotización…” then, once both signed the quote, “Ahora: fondear boleta + partida 1”. Partida 2 stays grey.
+6. After casa2 is signed: **Pago** enables. Status “acordar la plata…” then, once both signed the quote, “Ahora: juntar la plata de la boleta y de la partida 1”. Partida 2 stays grey. After Signet confirm, left column switches to cobro — no Armar/export on the main path.
 
 ## Out of this slice
 
