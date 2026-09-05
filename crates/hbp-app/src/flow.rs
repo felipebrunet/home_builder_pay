@@ -123,7 +123,7 @@ pub fn completed_steps(role: Role, p: WorkProgress) -> Vec<&'static str> {
                 v.push("Conectarme");
             }
             if p.has_peer {
-                v.push("Buscar");
+                v.push("Obra");
             }
             if p.has_pending || p.has_signed {
                 v.push("Aceptar");
@@ -176,6 +176,14 @@ fn contratista_step(p: WorkProgress) -> NextStep {
         sentence: "Pediste esta obra. Espera la propuesta para revisarla. Aún no aceptes.".into(),
         button: None,
         kind: NextKind::None,
+    }
+}
+
+/// Visible tab labels, in order, every frame. Contratista first tab is Obra (search / mis obras).
+pub fn shell_tab_labels(role: Role) -> &'static [&'static str] {
+    match role {
+        Role::Mandante => &["Obra", "Red", "Trato", "Pago"],
+        Role::Contratista => &["Obra", "Trato", "Red", "Pago"],
     }
 }
 
@@ -303,5 +311,22 @@ mod tests {
         assert_eq!(step.kind, NextKind::Pay);
         assert_eq!(step.button, Some("Ir a Pago"));
         assert!(step.sentence.contains("boleta + partida 1"));
+    }
+
+    #[test]
+    fn shell_tabs_are_obra_red_trato_pago_or_obra_trato_red_pago() {
+        assert_eq!(
+            shell_tab_labels(Role::Mandante),
+            &["Obra", "Red", "Trato", "Pago"]
+        );
+        assert_eq!(
+            shell_tab_labels(Role::Contratista),
+            &["Obra", "Trato", "Red", "Pago"]
+        );
+        assert!(!shell_tab_labels(Role::Contratista).contains(&"Buscar"));
+        assert_eq!(shell_tab_labels(Role::Mandante)[0], "Obra");
+        assert_eq!(shell_tab_labels(Role::Contratista)[0], "Obra");
+        assert_eq!(shell_tab_labels(Role::Mandante).len(), 4);
+        assert_eq!(shell_tab_labels(Role::Contratista).len(), 4);
     }
 }

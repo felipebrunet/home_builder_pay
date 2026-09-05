@@ -7,7 +7,7 @@ mod protocol;
 mod work;
 
 pub use datetime::{format_unix_local_es, validate_deadline_order, DeadlineFields, MONTHS_ES};
-pub use flow::{completed_steps, next_step, NextKind, NextStep, WorkProgress};
+pub use flow::{completed_steps, next_step, shell_tab_labels, NextKind, NextStep, WorkProgress};
 pub use pay::{
     agreed_fx_line, apply_finished_coop_hex, apply_incoming_quote, apply_verified_p1_funding,
     build_our_partial,

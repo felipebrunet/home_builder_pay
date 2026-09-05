@@ -18,10 +18,12 @@ One top row: **profile/obra switcher** (`Felipe · Mandante  ·  casa2`) plus ne
 
 | Mandante | Contratista |
 |---|---|
-| **Obra** — monto, plazos, partidas; one green CTA (Preparar / Firmar) | **Buscar** — persona name + **obra cards** |
+| **Obra** — monto, plazos, partidas; one green CTA (Preparar / Firmar) | **Obra** — persona name + **obra cards** (same search as before) |
 | **Red** — Conectarme / Publicar / status | **Trato** — review (total, plazos, partidas) then Aceptar |
 | **Trato** — Enviar only after they asked for that obra | **Red** — Conectarme / Avanzado |
 | **Pago** — enabled once the trato is signed | **Pago** — enabled once the trato is signed |
+
+Tab order is fixed every frame: mandante **Obra \| Red \| Trato \| Pago**; contratista **Obra \| Trato \| Red \| Pago**. No Buscar tab.
 
 Finished steps are muted checks. Waiting cards are amber; success green; primary actions green. Help is behind **¿Qué es esto?**. **Notas** stay collapsed (Ver / Limpiar).
 
@@ -36,12 +38,12 @@ Publish writes the same announce JSON to:
 3. literal **`hbpn-casa2`** + hashed obra topic
 4. directory **`hbpn-dir-v1`** (scan `person_name` / `work_name` in the payload)
 
-DHT keys stay `hbp-person:felipe` (primary) and `hbp-work:casa2` (secondary). Isolated onions hit the board **before** remote DHT. Buscar `Felipe` must return the casa2 announce without typing the obra title.
+DHT keys stay `hbp-person:felipe` (primary) and `hbp-work:casa2` (secondary). Isolated onions hit the board **before** remote DHT. On **Obra**, buscar `Felipe` must return the casa2 announce without typing the obra title.
 
 **Catalog handshake (not auto-accept):**
 
 1. Mandante **Publicar** = catalog only. No offer on the wire.
-2. Contratista **Buscar** `Felipe` → list of that person’s published obras (cards). Does **not** open a trato or send Accept.
+2. Contratista **Obra** tab, buscar `Felipe` → list of that person’s published obras (cards). Does **not** open a trato or send Accept.
 3. Contratista picks one → **Ver propuesta** DELIVERs `Request { work_name, onion }` (+ `Hello` for the dest).
 4. Mandante inbox `Request` binds the peer **to that obra** and DELIVERs `Offer`.
 5. Contratista **Trato** shows the full proposal (total, moneda, boleta 10%, partidas, t1/t2). Then **Aceptar trato** → `Accept` → mandante `Commit`.
@@ -66,7 +68,7 @@ After **Trato cerrado**, the next-step card is **Ir a Pago**. Status lines:
 
 **Quote.** Main numbers stay in the **contract currency** (CLP on a CLP trato). Sats are small print or hidden. FX is the **quoted snapshot** (“tipo de cambio acordado: … CLP/BTC”), not a replacement for the partida list. When the quote arrives/locks, partida rows show the completed CLP amounts. Pair is **contract unit per BTC** (`CLP/BTC`), never a leftover USD rate. Yadio → CoinGecko → CoinMarketCap. SATS/BTC skip FX. Amounts stay 1/100 of the unit. A signed-but-unfunded quote can **Recotizar** (Avanzado). Both signatures required before `set_quote`. Wired as `NetMessage::Quote` over Tor.
 
-**Wallet before Buscar.** Mandante saves the Signet vpub on Obra (“Billetera y respaldo”). Contratista gets the same local-only step on **Buscar**, before searching. Stored at the persona (`watch.json` at the works root) and copied into the trato folder when one exists. Never sent to the peer.
+**Wallet before search.** Mandante saves the Signet vpub on Obra (“Billetera y respaldo”). Contratista gets the same local-only step on **Obra**, before searching. Stored at the persona (`watch.json` at the works root) and copied into the trato folder when one exists. Never sent to the peer.
 
 **Funding (PSBT handshake).** Primary path is watch-only vpub + Esplora, not paste-both-outpoints. Copy is obra language (“plata de la boleta”, “comisión de red (~250)”). Addresses, txid, UTXO sit behind **Detalle técnico**. One green button per stage. If Tor deliver fails, the PSBT stays local and the CTA is **Reenviar**. A second Esplora confirm of an already-noted bond is success (no red `bond already funded`).
 
@@ -121,9 +123,9 @@ Both online. No Avanzado for catalog.
 
 1. Mandante: Felipe → crear **casa2** → Preparar → Firmar → Red **Conectarme** / Publicar.
 2. Mandante: ＋ Nueva obra **casa3** → Preparar → Firmar → Publicar. Do **not** expect the contratista to jump to Aceptar.
-3. Contratista: Buscar **`Felipe`**. Cards: **casa2** and **casa3**. No trato auto-opened.
+3. Contratista: **Obra** tab, buscar **`Felipe`**. Cards: **casa2** and **casa3**. No trato auto-opened.
 4. **Ver propuesta** on casa2 → Trato review (total, plazos, partidas) → **Aceptar trato**.
-5. Buscar again (or same list) → **Ver propuesta** on casa3 → review → accept.
+5. Obra again (or same list) → **Ver propuesta** on casa3 → review → accept.
 6. After casa2 is signed: **Pago** enables. Status “acordar la plata…” then, once both signed the quote, “Ahora: juntar la plata de la boleta y de la partida 1”. Partida 2 stays grey. After Signet confirm, left column switches to cobro — no Armar/export on the main path.
 
 ## Out of this slice

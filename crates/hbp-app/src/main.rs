@@ -15,6 +15,7 @@ use hbp_app::{
     funding_wire_hex, hex_from_artifact, import_backup, import_signed, infer_coop_kind,
     lock_quote_if_ready, looks_like_signed_coop_hex, mandante_commit, needs_coop_publish,
     next_step, obra_amount_pair, our_funding_need, p1_blocks_bond_return, pago_coop_gate,
+    shell_tab_labels,
     parse_fee, parse_psbt, parse_psbt_bytes, partida_spec_minor, partida_ui_enabled, party_role,
     pay_stage, prefer_funding_psbt, preview_quote_sats, psbt_display_text, psbt_file_bytes,
     psbt_to_hex, quote_fully_signed, quote_price_minor, read_backup_file, recover_coop_tx_into_draft,
@@ -83,7 +84,6 @@ enum NetLight {
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum MainTab {
     Obra,
-    Buscar,
     Red,
     Trato,
     Pago,
@@ -145,11 +145,7 @@ impl App {
         });
         let prefs = store.load_prefs();
         let picking_role = prefs.first_run();
-        let start_tab = if prefs.role == Role::Contratista {
-            MainTab::Buscar
-        } else {
-            MainTab::Obra
-        };
+        let start_tab = MainTab::Obra;
         let (job_tx, job_rx) = mpsc::channel();
         Self {
             store,
@@ -528,7 +524,7 @@ impl App {
         self.note(format!(
             "Encontré {n} obra(s) de {who}. Elige una y pide la propuesta. No se acepta sola."
         ));
-        self.tab = MainTab::Buscar;
+        self.tab = MainTab::Obra;
         if let Some(onion) = self
             .search_hits
             .iter()
@@ -1065,7 +1061,7 @@ impl App {
                 self.picking_role = false;
                 self.change_profile = false;
                 self.selected = None;
-                self.tab = MainTab::Buscar;
+                self.tab = MainTab::Obra;
                 self.name_draft = self.prefs.contratista_name.clone();
                 let _ = self.store.save_prefs(&self.prefs);
             }
@@ -1217,20 +1213,25 @@ impl App {
     }
 
     fn show_tabs(&mut self, ui: &mut egui::Ui) {
+        let labels = shell_tab_labels(self.prefs.role);
         let tabs: &[(MainTab, &str)] = match self.prefs.role {
             Role::Mandante => &[
-                (MainTab::Obra, "Obra"),
-                (MainTab::Red, "Red"),
-                (MainTab::Trato, "Trato"),
-                (MainTab::Pago, "Pago"),
+                (MainTab::Obra, labels[0]),
+                (MainTab::Red, labels[1]),
+                (MainTab::Trato, labels[2]),
+                (MainTab::Pago, labels[3]),
             ],
             Role::Contratista => &[
-                (MainTab::Buscar, "Buscar"),
-                (MainTab::Trato, "Trato"),
-                (MainTab::Red, "Red"),
-                (MainTab::Pago, "Pago"),
+                (MainTab::Obra, labels[0]),
+                (MainTab::Trato, labels[1]),
+                (MainTab::Red, labels[2]),
+                (MainTab::Pago, labels[3]),
             ],
         };
+        debug_assert_eq!(
+            tabs.iter().map(|(_, l)| *l).collect::<Vec<_>>(),
+            labels.to_vec()
+        );
         let pago_ok = self
             .selected
             .as_ref()
@@ -1263,7 +1264,6 @@ impl App {
     fn show_tab_body(&mut self, ui: &mut egui::Ui) {
         match self.tab {
             MainTab::Obra => self.show_tab_obra(ui),
-            MainTab::Buscar => self.show_tab_buscar(ui),
             MainTab::Red => self.show_tab_red(ui),
             MainTab::Trato => self.show_tab_trato(ui),
             MainTab::Pago => self.show_tab_pago(ui),
@@ -1271,8 +1271,8 @@ impl App {
     }
 
     fn show_tab_obra(&mut self, ui: &mut egui::Ui) {
-        if self.prefs.role != Role::Mandante {
-            ui.label("La obra la arma el mandante.");
+        if self.prefs.role == Role::Contratista {
+            self.show_tab_buscar(ui);
             return;
         }
         let Some(slug) = self.selected.clone() else {
@@ -1439,7 +1439,7 @@ impl App {
                 }
             } else {
                 ui.label(
-                    RichText::new("En la red. Busca al mandante en Buscar.")
+                    RichText::new("En la red. Busca al mandante en Obra.")
                         .color(accent_green(self.prefs.dark)),
                 );
             }
@@ -1520,7 +1520,7 @@ impl App {
         } else if entry.role == Role::Contratista {
             ui.add_space(8.0);
             ui.label(
-                RichText::new("Todavía no hay propuesta. Pídela desde Buscar → Ver propuesta.")
+                RichText::new("Todavía no hay propuesta. Pídela desde Obra → Ver propuesta.")
                     .weak(),
             );
         }
@@ -1773,7 +1773,7 @@ impl App {
                 if self.lookup_name.trim().is_empty() && !entry.peer_name.is_empty() {
                     self.lookup_name = entry.peer_name.clone();
                 }
-                self.tab = MainTab::Buscar;
+                self.tab = MainTab::Obra;
                 self.spawn_lookup();
             }
             NextKind::Pay => self.tab = MainTab::Pago,
