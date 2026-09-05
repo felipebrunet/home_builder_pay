@@ -944,8 +944,13 @@ impl eframe::App for App {
             ui.add_space(8.0);
             egui::ScrollArea::vertical()
                 .id_salt("tab-body")
+                .auto_shrink([false, false])
                 .show(ui, |ui| {
-                    self.show_tab_body(ui);
+                    ui.set_min_width(ui.available_width());
+                    ui.with_layout(egui::Layout::top_down(egui::Align::Min), |ui| {
+                        ui.set_width(ui.available_width());
+                        self.show_tab_body(ui);
+                    });
                 });
         });
     }
@@ -1920,39 +1925,28 @@ impl App {
             self.store.load_watch(&slug, Some(self.passphrase.as_str())),
             Ok(Some(_))
         );
-        let full = ui.available_width();
-        let left_w = (full * 0.54).clamp(300.0, 540.0);
-        let right_w = (full - left_w - 10.0).max(260.0);
-        ui.horizontal(|ui| {
-            ui.allocate_ui(Vec2::new(left_w, 0.0), |ui| {
-                ui.set_min_width((left_w - 8.0).max(260.0));
-                ui.set_max_width(left_w);
-                self.show_pay_now_left(
-                    ui,
-                    &slug,
-                    &id,
-                    &signed,
-                    &project,
-                    pending_q.as_ref(),
-                    stage,
-                    have_watch,
-                );
-            });
-            ui.add_space(8.0);
-            ui.allocate_ui(Vec2::new(right_w, 0.0), |ui| {
-                ui.set_min_width((right_w - 8.0).max(220.0));
-                ui.set_max_width(right_w);
-                self.show_pay_summary_right(
-                    ui,
-                    &slug,
-                    &id,
-                    &project,
-                    pending_q.as_ref(),
-                    stage,
-                    have_watch,
-                );
-            });
-        });
+        ui.set_width(ui.available_width());
+        ui.spacing_mut().item_spacing.y = 10.0;
+        self.show_pay_now_left(
+            ui,
+            &slug,
+            &id,
+            &signed,
+            &project,
+            pending_q.as_ref(),
+            stage,
+            have_watch,
+        );
+        ui.add_space(12.0);
+        self.show_pay_summary_right(
+            ui,
+            &slug,
+            &id,
+            &project,
+            pending_q.as_ref(),
+            stage,
+            have_watch,
+        );
     }
 
     fn show_pay_now_left(
@@ -1976,8 +1970,8 @@ impl App {
             _ => accent_amber(dark),
         };
         panel_card(ui, dark, |ui| {
-            ui.label(RichText::new("Qué hacer ahora").strong().size(18.0));
-            ui.label(RichText::new(now).color(status_color).strong());
+            ui.label(RichText::new("Qué hacer ahora").strong().size(22.0));
+            ui.label(RichText::new(now).color(status_color).strong().size(18.0));
         });
         ui.add_space(8.0);
         if !have_watch {
@@ -4090,19 +4084,28 @@ fn big_btn(ui: &mut egui::Ui, label: &str) -> egui::Response {
 
 fn primary_btn(ui: &mut egui::Ui, label: &str, dark: bool) -> egui::Response {
     ui.add(
-        egui::Button::new(RichText::new(label).color(Color32::WHITE).strong())
-            .fill(accent_green(dark))
-            .min_size(Vec2::new(220.0, 34.0)),
+        egui::Button::new(
+            RichText::new(label)
+                .color(Color32::WHITE)
+                .strong()
+                .size(16.0),
+        )
+        .fill(accent_green(dark))
+        .min_size(Vec2::new(ui.available_width().min(420.0).max(260.0), 44.0)),
     )
 }
 
 fn panel_card(ui: &mut egui::Ui, dark: bool, add: impl FnOnce(&mut egui::Ui)) {
+    let w = ui.available_width();
     egui::Frame::none()
         .fill(panel_fill(dark))
         .stroke(egui::Stroke::new(1.0, panel_stroke(dark)))
-        .inner_margin(12.0)
+        .inner_margin(14.0)
         .rounding(6.0)
-        .show(ui, add);
+        .show(ui, |ui| {
+            ui.set_min_width((w - 8.0).max(200.0));
+            ui.with_layout(egui::Layout::top_down(egui::Align::Min), add);
+        });
 }
 
 fn accent_blue(dark: bool) -> Color32 {

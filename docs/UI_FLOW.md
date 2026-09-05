@@ -62,7 +62,7 @@ After **Trato cerrado**, the next-step card is **Ir a Pago**. Status lines:
 | Bond + P1 noted | **Partida 1 en curso** |
 | P1 Paid / Unwound / T2 | Partida 1 cerrada. Ahora puedes ver la partida 2. |
 
-**Pago layout.** Two columns so the common path fits without scrolling: **left** = “qué hacer ahora” + one primary action; **right** = CLP summary / muted checks. Finished stages collapse (watch and quote leave the left column once done). After **Confirmada en Signet**, PSBT export/import/reenviar/empezar de nuevo leave the main path (Avanzado rescue only). Primary then is recepción/cierre or “Partida 1 en curso”.
+**Pago layout.** Full-width **vertical stack** (Electrum density): “qué hacer ahora” + one large primary action, then the CLP summary under it. Cards use the panel width; they must not collapse into a top ribbon. Finished stages collapse. After **Confirmada en Signet**, PSBT export/import/reenviar/empezar de nuevo leave the main path (Avanzado rescue only). Primary then is recepción/cierre or “Partida 1 en curso”.
 
 **Quote.** Main numbers stay in the **contract currency** (CLP on a CLP trato). Sats are small print or hidden. FX is the **quoted snapshot** (“tipo de cambio acordado: … CLP/BTC”), not a replacement for the partida list. When the quote arrives/locks, partida rows show the completed CLP amounts. Pair is **contract unit per BTC** (`CLP/BTC`), never a leftover USD rate. Yadio → CoinGecko → CoinMarketCap. SATS/BTC skip FX. Amounts stay 1/100 of the unit. A signed-but-unfunded quote can **Recotizar** (Avanzado). Both signatures required before `set_quote`. Wired as `NetMessage::Quote` over Tor.
 
