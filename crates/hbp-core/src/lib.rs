@@ -12,12 +12,15 @@ mod state;
 mod vault;
 
 pub use amount::{
-    bond_minor, bond_warnings, fiat_minor_to_sats, minor_from_major, Unit, MINOR_PER_MAJOR,
+    bond_minor, bond_warnings, btc_price_to_minor, equal_stage_count, fiat_minor_to_sats,
+    format_major_amount, minor_from_major, parse_major_amount, stage_bond_warnings,
+    stages_equal_bond, suggest_equal_stage_minors, Unit, DEFAULT_BOND_BPS, MINOR_PER_MAJOR,
 };
 pub use contract::{
-    canonical_json, contract_id, decode_compressed_pubkey, sha256_bytes, ArbiterNomination,
-    ContractBody, ContractId, DisputePolicy, Network, Offer, PartidaQuote, PartidaSpec, Quote,
-    Role, SignedContract, Terms, DEFAULT_ARBITER_WINDOW_SECS,
+    canonical_json, contract_id, decode_compressed_pubkey, sha256_bytes,
+    validate_fee_burn_deadlines, ArbiterNomination, ContractBody, ContractId, DisputePolicy,
+    Network, Offer, PartidaQuote, PartidaSpec, Quote, Role, SignedContract, Terms, ARBITER_ENABLED,
+    DEFAULT_ARBITER_WINDOW_SECS, PRODUCT_NETWORK,
 };
 pub use error::Error;
 pub use nonce::NonceJournal;

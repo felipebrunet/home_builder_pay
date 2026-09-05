@@ -32,6 +32,16 @@ pub enum BondStatus {
     Unwound {
         txid: String,
     },
+    /// First fee-burn fired: 50% consumed as miner fees; half remains.
+    FeeBurnT1 {
+        txid: String,
+        continuation_vout: u32,
+        remaining_sats: u64,
+    },
+    /// Second fee-burn fired: remaining half consumed as miner fees.
+    FeeBurnT2 {
+        txid: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -66,6 +76,15 @@ pub enum PartidaStatus {
         txid: String,
         sats: u64,
     },
+    FeeBurnT1 {
+        txid: String,
+        continuation_vout: u32,
+        remaining_sats: u64,
+    },
+    FeeBurnT2 {
+        txid: String,
+        sats: u64,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -78,7 +97,9 @@ impl PartidaRuntime {
     pub fn is_terminal(&self) -> bool {
         matches!(
             self.state,
-            PartidaStatus::Paid { .. } | PartidaStatus::Unwound { .. }
+            PartidaStatus::Paid { .. }
+                | PartidaStatus::Unwound { .. }
+                | PartidaStatus::FeeBurnT2 { .. }
         )
     }
 
@@ -164,6 +185,22 @@ impl Project {
             }
         }
         self.quote = Some(quote);
+        Ok(())
+    }
+
+    /// Drop a locked quote before any UTXO is funded so both sides can recotizar.
+    pub fn clear_quote(&mut self) -> Result<()> {
+        if self.funding_started() {
+            return Err(Error::protocol(
+                "too late to recotizar: el fondeo ya empezó",
+            ));
+        }
+        self.quote = None;
+        for p in &mut self.partidas {
+            if matches!(p.state, PartidaStatus::AmountAgreed { .. }) {
+                p.state = PartidaStatus::Scheduled;
+            }
+        }
         Ok(())
     }
 
@@ -346,6 +383,26 @@ impl Project {
         Ok(())
     }
 
+    pub fn bond_utxo(&self) -> Option<(&str, u32, u64)> {
+        match &self.bond {
+            BondStatus::Funded {
+                txid, vout, sats, ..
+            } => Some((txid, *vout, *sats)),
+            _ => None,
+        }
+    }
+
+    pub fn bond_is_funded(&self) -> bool {
+        matches!(self.bond, BondStatus::Funded { .. })
+    }
+
+    pub fn is_stopped(&self) -> bool {
+        matches!(
+            self.status,
+            ProjectStatus::Cancelled | ProjectStatus::Closed
+        ) && !matches!(self.bond, BondStatus::Funded { .. })
+    }
+
     pub fn has_open_onchain_partida(&self) -> bool {
         self.partidas.iter().any(|p| {
             matches!(
@@ -388,6 +445,73 @@ impl Project {
         Ok(())
     }
 
+    pub fn mark_partida_fee_burn_t1(
+        &mut self,
+        id: u32,
+        txid: String,
+        continuation_vout: u32,
+        remaining_sats: u64,
+    ) -> Result<()> {
+        let p = self.partida_mut(id)?;
+        match &p.state {
+            PartidaStatus::Locked { .. }
+            | PartidaStatus::Funding { .. }
+            | PartidaStatus::ReceptionProposed { .. } => {
+                p.state = PartidaStatus::FeeBurnT1 {
+                    txid,
+                    continuation_vout,
+                    remaining_sats,
+                };
+                Ok(())
+            }
+            _ => Err(Error::protocol(
+                "partida fee-burn t1 requires a locked/funding UTXO",
+            )),
+        }
+    }
+
+    pub fn mark_partida_fee_burn_t2(&mut self, id: u32, txid: String) -> Result<()> {
+        let p = self.partida_mut(id)?;
+        let sats = match &p.state {
+            PartidaStatus::FeeBurnT1 { remaining_sats, .. } => *remaining_sats,
+            _ => {
+                return Err(Error::protocol(
+                    "partida fee-burn t2 requires a t1 continuation",
+                ))
+            }
+        };
+        p.state = PartidaStatus::FeeBurnT2 { txid, sats };
+        Ok(())
+    }
+
+    pub fn mark_bond_fee_burn_t1(
+        &mut self,
+        txid: String,
+        continuation_vout: u32,
+        remaining_sats: u64,
+    ) -> Result<()> {
+        if !matches!(self.bond, BondStatus::Funded { .. }) {
+            return Err(Error::protocol("bond is not funded"));
+        }
+        self.bond = BondStatus::FeeBurnT1 {
+            txid,
+            continuation_vout,
+            remaining_sats,
+        };
+        Ok(())
+    }
+
+    pub fn mark_bond_fee_burn_t2(&mut self, txid: String) -> Result<()> {
+        if !matches!(self.bond, BondStatus::FeeBurnT1 { .. }) {
+            return Err(Error::protocol(
+                "bond fee-burn t2 requires a t1 continuation",
+            ));
+        }
+        self.bond = BondStatus::FeeBurnT2 { txid };
+        self.status = ProjectStatus::Cancelled;
+        Ok(())
+    }
+
     fn require_previous_terminal(&self, id: u32) -> Result<()> {
         for p in &self.partidas {
             if p.id == id {
@@ -395,7 +519,7 @@ impl Project {
             }
             if !p.is_terminal() {
                 return Err(Error::protocol(format!(
-                    "partida {} must be paid or unwound before funding {id}",
+                    "partida {} must be paid, unwound, or fully fee-burnt before funding {id}",
                     p.id
                 )));
             }
@@ -433,6 +557,7 @@ mod tests {
         let body = ContractBody {
             network: Network::Regtest,
             unit: Unit::Usd,
+            work_name: String::new(),
             bond_bps: 1000,
             t_project: 1_800_000_000,
             partidas: vec![
@@ -502,6 +627,22 @@ mod tests {
             .note_partida_funding(2, "x".into(), 1, 20_000, 1, 1)
             .unwrap_err();
         assert!(err.to_string().contains("partida 1 must be paid"));
+    }
+
+    #[test]
+    fn clear_quote_before_funding_then_relock() {
+        let mut p = project();
+        p.set_quote(signed_quote(&p)).unwrap();
+        assert!(p.quote.is_some());
+        p.clear_quote().unwrap();
+        assert!(p.quote.is_none());
+        assert!(matches!(
+            p.partida(1).unwrap().state,
+            PartidaStatus::Scheduled
+        ));
+        p.set_quote(signed_quote(&p)).unwrap();
+        p.note_bond_funding("bond".into(), 0, 50_000, 1).unwrap();
+        assert!(p.clear_quote().is_err());
     }
 
     #[test]
@@ -601,5 +742,29 @@ mod tests {
         p.set_quote(signed_quote(&p)).unwrap();
         let err = p.note_bond_funding("t".into(), 0, 1, 1).unwrap_err();
         assert!(err.to_string().contains("bond sats"));
+    }
+
+    #[test]
+    fn fee_burn_t1_then_t2_terminates_partida() {
+        let mut p = project();
+        p.contract.body.dispute = crate::DisputePolicy::fee_burn(1_700_000_000, 1_800_000_000);
+        p.set_quote(signed_quote(&p)).unwrap();
+        p.note_bond_funding("bond".into(), 0, 50_000, 1).unwrap();
+        p.note_partida_funding(1, "p1".into(), 1, 20_000, 1, 1)
+            .unwrap();
+        p.mark_partida_fee_burn_t1(1, "burn1".into(), 0, 10_000)
+            .unwrap();
+        assert!(!p.partida(1).unwrap().is_terminal());
+        let err = p
+            .note_partida_funding(2, "p2".into(), 1, 20_000, 1, 1)
+            .unwrap_err();
+        assert!(err.to_string().contains("fee-burnt"));
+        p.mark_partida_fee_burn_t2(1, "burn2".into()).unwrap();
+        assert!(p.partida(1).unwrap().is_terminal());
+        p.note_partida_funding(2, "p2".into(), 1, 20_000, 1, 1)
+            .unwrap();
+        p.mark_bond_fee_burn_t1("bb1".into(), 0, 25_000).unwrap();
+        p.mark_bond_fee_burn_t2("bb2".into()).unwrap();
+        assert_eq!(p.status, ProjectStatus::Cancelled);
     }
 }

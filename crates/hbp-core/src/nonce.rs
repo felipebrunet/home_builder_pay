@@ -64,6 +64,11 @@ impl NonceJournal {
             .map_err(|_| Error::protocol("pending nonce seed must be 32 bytes"))?;
         Ok(arr)
     }
+
+    /// Reuse the in-flight seed for this sighash. Never rotate it mid-round.
+    pub fn pending_seed(&self, sighash_hex: &str) -> Option<[u8; 32]> {
+        self.peek_pending(sighash_hex).ok()
+    }
 }
 
 #[cfg(test)]

@@ -6,6 +6,8 @@ use bitcoin::{
     Witness,
 };
 
+use hbp_core::Role;
+
 use crate::Error;
 
 const DUST: u64 = 546;
@@ -220,4 +222,173 @@ fn finalize_singlesig_input(input: &mut bitcoin::psbt::Input) -> Result<(), Erro
     Err(Error::msg(
         "cannot finalize: more than one partial signature on a singlesig input",
     ))
+}
+
+/// What this party must cover on a 2-input boleta+P1 fund (fee split in half).
+pub fn funding_share(
+    bond_sats: u64,
+    partida_sats: u64,
+    fee: u64,
+    role: Role,
+) -> Result<u64, Error> {
+    if fee == 0 {
+        return Err(Error::msg("fee must be > 0"));
+    }
+    let fee_m = fee / 2;
+    let fee_c = fee.saturating_sub(fee_m);
+    match role {
+        Role::Mandante => partida_sats
+            .checked_add(fee_m)
+            .ok_or_else(|| Error::msg("mandante funding overflow")),
+        Role::Contratista => bond_sats
+            .checked_add(fee_c)
+            .ok_or_else(|| Error::msg("contratista funding overflow")),
+    }
+}
+
+fn push_change(
+    outputs: &mut Vec<TxOut>,
+    coin: &FundingCoin,
+    need: u64,
+    change: &Address,
+) -> Result<(), Error> {
+    if coin.sats < need {
+        return Err(Error::msg(format!(
+            "input {} < need {need} (share + fee)",
+            coin.sats
+        )));
+    }
+    let leftover = coin.sats - need;
+    if leftover >= DUST {
+        outputs.push(TxOut {
+            value: Amount::from_sat(leftover),
+            script_pubkey: change.script_pubkey(),
+        });
+    } else if leftover != 0 {
+        return Err(Error::msg(
+            "change would be dust; pick a larger coin or a higher fee",
+        ));
+    }
+    Ok(())
+}
+
+/// One-sided construction: escrow outputs (bond + P1) plus *this* party's input/change.
+/// The unsigned tx does not balance until the peer adds their coin.
+pub fn build_partial_funding_psbt(
+    bond: (ScriptBuf, u64),
+    partida: (ScriptBuf, u64),
+    fee: u64,
+    role: Role,
+    coin: &FundingCoin,
+    change: &Address,
+) -> Result<Psbt, Error> {
+    let need = funding_share(bond.1, partida.1, fee, role)?;
+    let mut outputs = vec![
+        TxOut {
+            value: Amount::from_sat(bond.1),
+            script_pubkey: bond.0,
+        },
+        TxOut {
+            value: Amount::from_sat(partida.1),
+            script_pubkey: partida.0,
+        },
+    ];
+    push_change(&mut outputs, coin, need, change)?;
+    let tx = Transaction {
+        version: bitcoin::transaction::Version::TWO,
+        lock_time: LockTime::ZERO,
+        input: vec![TxIn {
+            previous_output: coin.outpoint,
+            script_sig: ScriptBuf::new(),
+            sequence: Sequence::ENABLE_RBF_NO_LOCKTIME,
+            witness: Witness::new(),
+        }],
+        output: outputs,
+    };
+    let mut psbt = Psbt::from_unsigned_tx(tx).map_err(|e| Error::msg(e.to_string()))?;
+    psbt.inputs[0].witness_utxo = Some(TxOut {
+        value: Amount::from_sat(coin.sats),
+        script_pubkey: coin.script_pubkey.clone(),
+    });
+    Ok(psbt)
+}
+
+/// Add the second party's input + change to a one-input partial. Escrow amounts stay exact.
+pub fn complete_partial_funding_psbt(
+    psbt: &mut Psbt,
+    bond: (ScriptBuf, u64),
+    partida: (ScriptBuf, u64),
+    fee: u64,
+    role: Role,
+    coin: &FundingCoin,
+    change: &Address,
+) -> Result<(), Error> {
+    if psbt.unsigned_tx.input.len() != 1 {
+        return Err(Error::msg(format!(
+            "expected a 1-input partial, this PSBT has {} inputs",
+            psbt.unsigned_tx.input.len()
+        )));
+    }
+    if psbt.unsigned_tx.input[0].previous_output == coin.outpoint {
+        return Err(Error::msg("that coin is already in the PSBT"));
+    }
+    let tx = &psbt.unsigned_tx;
+    let saw_bond = tx
+        .output
+        .iter()
+        .any(|o| o.script_pubkey == bond.0 && o.value.to_sat() == bond.1);
+    let saw_part = tx
+        .output
+        .iter()
+        .any(|o| o.script_pubkey == partida.0 && o.value.to_sat() == partida.1);
+    if !saw_bond || !saw_part {
+        return Err(Error::msg(
+            "partial PSBT is missing the exact boleta + partida 1 outputs",
+        ));
+    }
+    let need = funding_share(bond.1, partida.1, fee, role)?;
+    if coin.sats < need {
+        return Err(Error::msg(format!(
+            "input {} < need {need} (share + fee)",
+            coin.sats
+        )));
+    }
+    let leftover = coin.sats - need;
+    if leftover > 0 && leftover < DUST {
+        return Err(Error::msg(
+            "change would be dust; pick a larger coin or a higher fee",
+        ));
+    }
+    psbt.unsigned_tx.input.push(TxIn {
+        previous_output: coin.outpoint,
+        script_sig: ScriptBuf::new(),
+        sequence: Sequence::ENABLE_RBF_NO_LOCKTIME,
+        witness: Witness::new(),
+    });
+    psbt.inputs.push(bitcoin::psbt::Input {
+        witness_utxo: Some(TxOut {
+            value: Amount::from_sat(coin.sats),
+            script_pubkey: coin.script_pubkey.clone(),
+        }),
+        ..Default::default()
+    });
+    if leftover >= DUST {
+        psbt.unsigned_tx.output.push(TxOut {
+            value: Amount::from_sat(leftover),
+            script_pubkey: change.script_pubkey(),
+        });
+        psbt.outputs.push(bitcoin::psbt::Output::default());
+    }
+    Ok(())
+}
+
+pub fn psbt_signed_input_count(psbt: &Psbt) -> usize {
+    psbt.inputs
+        .iter()
+        .filter(|i| {
+            i.final_script_witness.is_some()
+                || i.tap_key_sig.is_some()
+                || !i.partial_sigs.is_empty()
+        })
+        .count()
 }

@@ -12,18 +12,19 @@ use hbp_bitcoin::{
     apply_key_spend_sig, attach_prev_tx, bond_address, bond_escrow_from_body, build_funding_psbt,
     build_key_spend_tx, build_script_path_tx, build_split_key_spend_tx, build_split_script_path_tx,
     build_unwind_tx, combine_partials, combine_psbts, default_esplora_urls, encode_partial,
-    encode_pubnonce, extract_signed_funding_tx, finish_coop_signature, generate_identity,
-    identity_from_secret, import_watch, key_spend_sighash, keys_from_body, mad_address,
-    mad_escrow_from_body, new_nonce_seed, our_partial_signature, parse_partial, parse_pubnonce,
-    partida_address, partida_escrow_from_body, scan_watch, sign_arbiter, sign_arbiter_leaf,
-    sign_body, sign_quote, sign_unwind, start_round, tweaked_key_agg, validate_funding_tx,
-    verify_arbiter, verify_body, verify_quote, ArbiterWith, CoopFile, ExpectedFunding, FundingCoin,
-    FundingRequest, Identity, OfferedCoin, WatchKind,
+    encode_pubnonce, extract_signed_funding_tx, fee_burn_plan, finish_coop_signature,
+    generate_identity, identity_from_secret, import_watch, key_spend_sighash, keys_from_body,
+    mad_address, mad_escrow_from_body, new_nonce_seed, our_partial_signature, parse_partial,
+    parse_pubnonce, partida_address, partida_escrow_from_body, scan_watch, sign_arbiter,
+    sign_arbiter_leaf, sign_body, sign_quote, sign_unwind, start_round, tweaked_key_agg,
+    validate_funding_tx, verify_arbiter, verify_body, verify_quote, ArbiterWith, CoopFile,
+    ExpectedFunding, FundingCoin, FundingRequest, Identity, OfferedCoin, WatchKind,
 };
 use hbp_core::{
-    bond_minor, bond_warnings, fiat_minor_to_sats, minor_from_major, ArbiterNomination,
-    ContractBody, DisputePolicy, Network, Offer, PartidaQuote, PartidaSpec, Quote, Role,
-    SignedContract, Unit, DEFAULT_ARBITER_WINDOW_SECS,
+    bond_minor, bond_warnings, equal_stage_count, fiat_minor_to_sats, minor_from_major,
+    parse_major_amount, suggest_equal_stage_minors, ArbiterNomination, ContractBody, DisputePolicy,
+    Network, Offer, PartidaQuote, PartidaSpec, Quote, Role, SignedContract, Unit, ARBITER_ENABLED,
+    DEFAULT_ARBITER_WINDOW_SECS, DEFAULT_BOND_BPS,
 };
 
 mod esplora;
@@ -109,21 +110,47 @@ enum Cmd {
     New {
         #[arg(long, default_value = "USD")]
         unit: String,
-        #[arg(long, default_value_t = 1000)]
+        #[arg(long, default_value_t = DEFAULT_BOND_BPS)]
         bond_bps: u16,
-        /// Unix time (CLTV) for boleta unwind. Must be >= last partida plazo.
+        /// Display name of the work (one identity per work in the native GUI).
+        #[arg(long, default_value = "")]
+        work_name: String,
+        /// Unix time (CLTV) for the project horizon. Fee-burn: use t2 (must be >= t2).
         #[arg(long)]
-        t_project: u32,
-        /// unwind (default) | mad | arbiter — offeror proposes the *policy*;
-        /// the person (arbiter pubkey) is named later by both, not in the offer.
-        #[arg(long, default_value = "unwind")]
+        t_project: Option<u32>,
+        /// Product default is fee-burn. Legacy: unwind | mad | arbiter.
+        #[arg(long, default_value = "fee-burn")]
         dispute: String,
+        /// Fee-burn first deadline (unix). Required with --dispute fee-burn.
+        #[arg(long)]
+        t1: Option<u32>,
+        /// Fee-burn second deadline (unix, > t1). Required with --dispute fee-burn.
+        #[arg(long)]
+        t2: Option<u32>,
         /// With --dispute mad: bps of partida 1, each party (100 = 1%).
         #[arg(long)]
         mad_bps: Option<u16>,
-        /// With --dispute arbiter: seconds after plazo before last-resort unwind (default 7 days).
+        /// Legacy arbiter window (product UI is hard-off; ARBITER_ENABLED = false).
         #[arg(long, default_value_t = DEFAULT_ARBITER_WINDOW_SECS)]
         arbiter_window: u32,
+    },
+    /// Print equal stages so each partida equals the 10% bond.
+    StagePlan {
+        #[arg(long)]
+        total: String,
+        #[arg(long, default_value_t = DEFAULT_BOND_BPS)]
+        bond_bps: u16,
+    },
+    /// Unsigned fee-burn t1/t2 chain for a funded UTXO (bond or partida).
+    FeeBurnPlan {
+        #[arg(long)]
+        kind: String,
+        #[arg(long)]
+        partida: Option<u32>,
+        #[arg(long)]
+        outpoint: String,
+        #[arg(long)]
+        sats: u64,
     },
     /// Either party proposes an arbiter pubkey (after accept; both must sign before funding).
     ProposeArbiter {
@@ -369,19 +396,32 @@ fn run() -> Result<()> {
         Cmd::New {
             unit,
             bond_bps,
+            work_name,
             t_project,
             dispute,
+            t1,
+            t2,
             mad_bps,
             arbiter_window,
         } => cmd_new(
             &store,
             &unit,
             bond_bps,
+            &work_name,
             t_project,
             &dispute,
+            t1,
+            t2,
             mad_bps,
             arbiter_window,
         ),
+        Cmd::StagePlan { total, bond_bps } => cmd_stage_plan(&total, bond_bps),
+        Cmd::FeeBurnPlan {
+            kind,
+            partida,
+            outpoint,
+            sats,
+        } => cmd_fee_burn_plan(&store, &kind, partida, &outpoint, sats),
         Cmd::ProposeArbiter { pubkey } => cmd_propose_arbiter(&store, &pubkey),
         Cmd::AcceptArbiter { file } => cmd_accept_arbiter(&store, file),
         Cmd::AddPartida {
@@ -601,8 +641,21 @@ fn cmd_identity(store: &Store, backup: bool, encrypt: bool) -> Result<()> {
     Ok(())
 }
 
-fn parse_dispute(kind: &str, mad_bps: Option<u16>, window: u32) -> Result<DisputePolicy> {
-    match kind.to_ascii_lowercase().as_str() {
+fn parse_dispute(
+    kind: &str,
+    mad_bps: Option<u16>,
+    window: u32,
+    t1: Option<u32>,
+    t2: Option<u32>,
+) -> Result<DisputePolicy> {
+    match kind.to_ascii_lowercase().replace('_', "-").as_str() {
+        "fee-burn" | "feeburn" | "burn" => {
+            let t1 = t1.context("--t1 required with --dispute fee-burn")?;
+            let t2 = t2.context("--t2 required with --dispute fee-burn")?;
+            let d = DisputePolicy::fee_burn(t1, t2);
+            d.validate()?;
+            Ok(d)
+        }
         "unwind" => Ok(DisputePolicy::Unwind),
         "mad" => {
             let mad_bps = mad_bps.context("--mad-bps required with --dispute mad")?;
@@ -611,13 +664,18 @@ fn parse_dispute(kind: &str, mad_bps: Option<u16>, window: u32) -> Result<Disput
             Ok(d)
         }
         "arbiter" => {
+            if !ARBITER_ENABLED {
+                eprintln!(
+                    "note: arbiter is disabled in the product UI (ARBITER_ENABLED=false); legacy CLI only"
+                );
+            }
             let d = DisputePolicy::Arbiter {
                 window_secs: window,
             };
             d.validate()?;
             Ok(d)
         }
-        other => bail!("dispute must be unwind|mad|arbiter, got {other}"),
+        other => bail!("dispute must be fee-burn|unwind|mad|arbiter, got {other}"),
     }
 }
 
@@ -625,16 +683,25 @@ fn cmd_new(
     store: &Store,
     unit: &str,
     bond_bps: u16,
-    t_project: u32,
+    work_name: &str,
+    t_project: Option<u32>,
     dispute: &str,
+    t1: Option<u32>,
+    t2: Option<u32>,
     mad_bps: Option<u16>,
     arbiter_window: u32,
 ) -> Result<()> {
     let id = store.load_identity()?;
-    let dispute = parse_dispute(dispute, mad_bps, arbiter_window)?;
+    let dispute = parse_dispute(dispute, mad_bps, arbiter_window, t1, t2)?;
+    let t_project = match (&dispute, t_project, t2) {
+        (DisputePolicy::FeeBurn { t2, .. }, None, _) => *t2,
+        (_, Some(t), _) => t,
+        _ => bail!("--t-project required unless --dispute fee-burn (then defaults to t2)"),
+    };
     let body = ContractBody {
         network: id.network,
         unit: Unit::from_str(unit)?,
+        work_name: work_name.trim().to_string(),
         bond_bps,
         t_project,
         partidas: vec![],
@@ -645,6 +712,62 @@ fn cmd_new(
     store.save_draft(&body)?;
     println!("draft {}", store.draft_path().display());
     println!("dispute {}", serde_json::to_string(&dispute)?);
+    if let Some((a, b)) = dispute.fee_burn_deadlines() {
+        println!("fee_burn t1={a} t2={b}");
+    }
+    Ok(())
+}
+
+fn cmd_stage_plan(total: &str, bond_bps: u16) -> Result<()> {
+    let total_minor = minor_from_major(total)?;
+    let n = equal_stage_count(bond_bps)?;
+    let stages = suggest_equal_stage_minors(total_minor, bond_bps)?;
+    let bond = bond_minor(total_minor, bond_bps)?;
+    println!("bond_bps {bond_bps}");
+    println!("total_minor {total_minor}");
+    println!("bond_minor {bond}");
+    println!("stages {n}");
+    for (i, amt) in stages.iter().enumerate() {
+        println!(
+            "partida {} amount_minor {amt} equal_bond {}",
+            i + 1,
+            *amt == bond
+        );
+    }
+    Ok(())
+}
+
+fn cmd_fee_burn_plan(
+    store: &Store,
+    kind: &str,
+    partida: Option<u32>,
+    outpoint: &str,
+    sats: u64,
+) -> Result<()> {
+    let project = store.load_project()?;
+    let body = &project.contract.body;
+    let (t1, t2) = body
+        .dispute
+        .fee_burn_deadlines()
+        .context("active contract is not fee-burn")?;
+    let named = project.named_arbiter_pubkey()?;
+    let escrow = match kind {
+        "bond" | "boleta" => bond_escrow_from_body(body, named)?,
+        "partida" | "package" => {
+            let id = partida.context("--partida required for kind=partida")?;
+            partida_escrow_from_body(body, id, named)?
+        }
+        other => bail!("kind must be bond|partida, got {other}"),
+    };
+    let op: bitcoin::OutPoint = outpoint.parse().context("bad outpoint")?;
+    let plan = fee_burn_plan(kind, partida, op, sats, &escrow, t1, t2)?;
+    let dir = store.contract_dir(&project.contract.id()?);
+    std::fs::create_dir_all(&dir)?;
+    let path = dir.join("06-feeburn.json");
+    store::write_json(&path, &plan)?;
+    println!("{}", serde_json::to_string_pretty(&plan)?);
+    println!("wrote {}", path.display());
+    println!("unsigned — both parties must MuSig2-sign t1 and t2 before work starts");
     Ok(())
 }
 
@@ -654,7 +777,7 @@ fn cmd_add_partida(store: &Store, desc: String, amount: &str, plazo: u32) -> Res
     body.partidas.push(PartidaSpec {
         id,
         description: desc,
-        amount_minor: minor_from_major(amount)?,
+        amount_minor: parse_major_amount(amount, body.unit)?,
         plazo_unix: plazo,
     });
     if plazo > body.t_project {
@@ -1078,8 +1201,10 @@ fn cmd_verify_funding(store: &Store, tx_hex: &str, partida: u32, partida_only: b
     let bond_vout = tx
         .output
         .iter()
-        .position(|o| o.script_pubkey == bond.script_pubkey())
-        .unwrap();
+        .position(|o| {
+            o.script_pubkey == bond.script_pubkey() && o.value.to_sat() == quote.bond_sats
+        })
+        .context("missing bond output with quoted amount")?;
     project.note_bond_funding(txid.clone(), bond_vout as u32, quote.bond_sats, 1)?;
     project.note_partida_funding(partida, txid.clone(), part_vout as u32, part_sats, 1, 1)?;
     store.save_project(&project)?;

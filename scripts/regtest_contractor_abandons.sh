@@ -119,7 +119,7 @@ echo "now=$NOW t1=$T1 t2=$T2 t_project=$TPROJ (obra no ocurre; espera ${WAIT_SEC
 log "Contrato (igual montos que el camino feliz)"
 $HBP --dir .m init --network regtest --role mandante
 $HBP --dir .c init --network regtest --role contratista
-$HBP --dir .m new --unit USD --bond-bps 3333 --t-project "$TPROJ"
+$HBP --dir .m new --unit USD --bond-bps 3333 --t-project "$TPROJ" --dispute unwind
 $HBP --dir .m add-partida --desc Cimentacion --amount 30000 --plazo "$T1"
 $HBP --dir .m add-partida --desc Muros --amount 30000 --plazo "$T2"
 $HBP --dir .m offer
