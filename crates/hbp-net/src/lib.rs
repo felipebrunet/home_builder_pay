@@ -31,7 +31,9 @@ pub use fx::{fiat_ticker, preview_sats, quote_btc, FxQuote};
 pub use message::{NetMessage, FILE_FALLBACK};
 pub use overlay::{OverlayConfig, OverlayHandle};
 pub use rendezvous::{
-    announce_topics, latest_announce, lookup_announce, publish_announce, rendezvous_topic,
+    announce_matches_query, announce_topics, announces_from_ntfy, latest_announce, literal_topic,
+    lookup_announce, lookup_topics, pick_announce, publish_announce, rendezvous_topic,
+    DIRECTORY_TOPIC,
 };
 pub use tor::{
     bring_up_tor, bring_up_tor_with_hint, default_socks_addr, default_windows_tor_paths,

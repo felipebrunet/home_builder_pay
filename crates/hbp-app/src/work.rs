@@ -19,6 +19,9 @@ pub struct WorkEntry {
     /// Other party's display name (e.g. mandante “Don José”). Never a folder slug.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub peer_name: String,
+    /// Mandante display name frozen at publish (“Felipe”). Not the obra folder.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub publisher_name: String,
     /// Mandante already published this obra (name board / DHT).
     #[serde(default)]
     pub published: bool,
@@ -219,6 +222,7 @@ impl WorkStore {
             role,
             network,
             peer_name: String::new(),
+            publisher_name: String::new(),
             published: false,
         };
         self.index.works.push(entry.clone());
@@ -329,6 +333,20 @@ impl WorkStore {
             .and_then(|s| s.as_str())
             .map(|s| s.to_string())
             .filter(|s| !s.is_empty())
+    }
+
+    pub fn set_publisher_name(&mut self, slug: &str, name: &str) -> Result<()> {
+        let name = name.trim();
+        if name.is_empty() {
+            return Ok(());
+        }
+        if let Some(w) = self.index.works.iter_mut().find(|w| w.slug == slug) {
+            if w.publisher_name != name {
+                w.publisher_name = name.to_string();
+                self.save_index()?;
+            }
+        }
+        Ok(())
     }
 
     pub fn mark_published(&mut self, slug: &str) -> Result<()> {
@@ -669,6 +687,7 @@ mod tests {
                 role: Role::Mandante,
                 network: Network::Bitcoin,
                 peer_name: String::new(),
+                publisher_name: String::new(),
                 published: false,
             },
             identity: id,
@@ -771,9 +790,14 @@ mod tests {
             .unwrap();
         assert!(!e.published);
         store.mark_published(&e.slug).unwrap();
+        store.set_publisher_name(&e.slug, "Felipe").unwrap();
         store
             .remember_peer(&e.slug, "jose.onion", Some("Felipe"))
             .unwrap();
+        assert_eq!(
+            store.find_by_work_name("casa2").unwrap().publisher_name,
+            "Felipe"
+        );
         let back = store.find_by_work_name("Casa2").unwrap();
         assert!(back.published);
         assert_eq!(back.peer_name, "Felipe");

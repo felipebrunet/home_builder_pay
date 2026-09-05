@@ -17,9 +17,9 @@ use hbp_core::{
     DEFAULT_BOND_BPS, PRODUCT_NETWORK,
 };
 use hbp_net::{
-    bring_up_tor_with_hint, env_bootstrap_peers, parse_bootstrap_list, preview_sats, quote_btc,
-    FxQuote, NetMessage, OverlayConfig, OverlayHandle, PeerAddr, TorConfig, TorRuntime,
-    WorkAnnounce,
+    announce_topics, bring_up_tor_with_hint, env_bootstrap_peers, literal_topic,
+    parse_bootstrap_list, preview_sats, quote_btc, FxQuote, NetMessage, OverlayConfig,
+    OverlayHandle, PeerAddr, TorConfig, TorRuntime, WorkAnnounce,
 };
 
 enum JobEvent {
@@ -57,6 +57,15 @@ enum NetLight {
     Err,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum MainTab {
+    Obra,
+    Buscar,
+    Red,
+    Trato,
+    Pago,
+}
+
 struct App {
     store: WorkStore,
     prefs: UiPrefs,
@@ -92,6 +101,8 @@ struct App {
     log_hits: u32,
     change_profile: bool,
     picking_role: bool,
+    tab: MainTab,
+    help_open: bool,
 }
 
 impl App {
@@ -102,6 +113,11 @@ impl App {
         });
         let prefs = store.load_prefs();
         let picking_role = prefs.first_run();
+        let start_tab = if prefs.role == Role::Contratista {
+            MainTab::Buscar
+        } else {
+            MainTab::Obra
+        };
         let (job_tx, job_rx) = mpsc::channel();
         Self {
             store,
@@ -139,6 +155,8 @@ impl App {
             log_hits: 0,
             change_profile: false,
             picking_role,
+            tab: start_tab,
+            help_open: false,
         }
     }
 
@@ -380,6 +398,7 @@ impl App {
             self.selected = Some(entry.slug);
             self.prefs.role = Role::Contratista;
             let _ = self.store.save_prefs(&self.prefs);
+            self.tab = MainTab::Trato;
             self.send_hello(&onion, &ann.work_name, false);
         }
         self.spawn_bootstrap(&onion);
@@ -507,6 +526,7 @@ impl App {
                 person_name.trim().to_string()
             };
             self.note(format!("{who} ya te encontró. Puedes enviar la propuesta."));
+            self.tab = MainTab::Trato;
             self.send_hello(&onion, &work_name, true);
         } else if self.prefs.role == Role::Contratista && !they_contratista {
             self.note("El mandante ya puede enviarte. Espera la propuesta.");
@@ -609,35 +629,17 @@ impl eframe::App for App {
             return;
         }
 
-        self.show_header(ctx);
-
-        match self.prefs.role {
-            Role::Mandante => {
-                egui::SidePanel::left("mandante-obras")
-                    .resizable(true)
-                    .default_width(260.0)
-                    .show(ctx, |ui| {
-                        self.show_mandante_sidebar(ui);
-                    });
-            }
-            Role::Contratista => {
-                egui::SidePanel::left("contratista-tratos")
-                    .resizable(true)
-                    .default_width(260.0)
-                    .show(ctx, |ui| {
-                        self.show_contratista_sidebar(ui);
-                    });
-            }
-        }
-
+        self.show_chrome(ctx);
         self.show_log_panel(ctx);
 
         egui::CentralPanel::default().show(ctx, |ui| {
-            let Some(slug) = self.selected.clone() else {
-                self.show_role_home(ui);
-                return;
-            };
-            self.show_work(ui, &slug);
+            self.show_tabs(ui);
+            ui.add_space(8.0);
+            egui::ScrollArea::vertical()
+                .id_salt("tab-body")
+                .show(ui, |ui| {
+                    self.show_tab_body(ui);
+                });
         });
     }
 }
@@ -656,6 +658,7 @@ impl App {
                 self.picking_role = false;
                 self.change_profile = false;
                 self.selected = None;
+                self.tab = MainTab::Obra;
                 self.name_draft = self.prefs.mandante_name.clone();
                 let _ = self.store.save_prefs(&self.prefs);
             }
@@ -665,6 +668,7 @@ impl App {
                 self.picking_role = false;
                 self.change_profile = false;
                 self.selected = None;
+                self.tab = MainTab::Buscar;
                 self.name_draft = self.prefs.contratista_name.clone();
                 let _ = self.store.save_prefs(&self.prefs);
             }
@@ -711,45 +715,364 @@ impl App {
         }
     }
 
-    fn show_header(&mut self, ctx: &egui::Context) {
-        egui::TopBottomPanel::top("top").show(ctx, |ui| {
-            ui.add_space(4.0);
-            ui.horizontal(|ui| {
-                let name = self.prefs.display_name().to_string();
-                ui.heading(&name);
-                ui.label(
-                    RichText::new(match self.prefs.role {
-                        Role::Mandante => "Mandante · quien paga",
-                        Role::Contratista => "Contratista · quien construye",
-                    })
-                    .weak(),
-                );
-                if ui.small_button("Cambiar perfil").clicked() {
-                    self.change_profile = true;
-                    self.picking_role = true;
-                    self.selected = None;
-                }
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    let label = if self.prefs.dark {
-                        "Tema: oscuro"
-                    } else {
-                        "Tema: claro"
-                    };
-                    if ui.button(label).clicked() {
-                        self.prefs.dark = !self.prefs.dark;
-                        let _ = self.store.save_prefs(&self.prefs);
+    fn chrome_label(&self) -> String {
+        let role = match self.prefs.role {
+            Role::Mandante => "Mandante",
+            Role::Contratista => "Contratista",
+        };
+        let who = format!("{} · {}", self.prefs.display_name(), role);
+        match self.selected_entry() {
+            Some(e) if e.role == Role::Contratista && !e.peer_name.is_empty() => {
+                format!("{}  ·  {} — con {}", who, e.name, e.peer_name)
+            }
+            Some(e) => format!("{}  ·  {}", who, e.name),
+            None => format!("{who}  ·  —"),
+        }
+    }
+
+    fn show_chrome(&mut self, ctx: &egui::Context) {
+        egui::TopBottomPanel::top("chrome")
+            .exact_height(52.0)
+            .show(ctx, |ui| {
+                ui.horizontal_centered(|ui| {
+                    let current = self.chrome_label();
+                    let works = self.works_for_role();
+                    let mut pick: Option<String> = None;
+                    let mut new_obra = false;
+                    let mut change_profile = false;
+                    egui::ComboBox::from_id_salt("wallet-switcher")
+                        .width(420.0)
+                        .selected_text(RichText::new(current).strong().size(16.0))
+                        .show_ui(ui, |ui| {
+                            ui.label(
+                                RichText::new(format!(
+                                    "{} · {}",
+                                    self.prefs.display_name(),
+                                    match self.prefs.role {
+                                        Role::Mandante => "Mandante",
+                                        Role::Contratista => "Contratista",
+                                    }
+                                ))
+                                .weak(),
+                            );
+                            if ui.selectable_label(false, "Cambiar perfil…").clicked() {
+                                change_profile = true;
+                            }
+                            ui.separator();
+                            if works.is_empty() {
+                                ui.label(RichText::new("Sin obras todavía").weak().italics());
+                            }
+                            for w in &works {
+                                let label =
+                                    if w.role == Role::Contratista && !w.peer_name.is_empty() {
+                                        format!("{} — con {}", w.name, w.peer_name)
+                                    } else {
+                                        w.name.clone()
+                                    };
+                                let sel = self.selected.as_deref() == Some(w.slug.as_str());
+                                if ui.selectable_label(sel, label).clicked() {
+                                    pick = Some(w.slug.clone());
+                                }
+                            }
+                            if self.prefs.role == Role::Mandante {
+                                ui.separator();
+                                if ui.selectable_label(false, "＋ Nueva obra…").clicked() {
+                                    new_obra = true;
+                                }
+                            }
+                        });
+                    if change_profile {
+                        self.change_profile = true;
+                        self.picking_role = true;
+                        self.selected = None;
                     }
-                    net_badge(ui, self.net_light, &self.net_line);
+                    if let Some(slug) = pick {
+                        self.selected = Some(slug);
+                        self.tab = if self.prefs.role == Role::Contratista {
+                            MainTab::Trato
+                        } else {
+                            MainTab::Obra
+                        };
+                    }
+                    if new_obra {
+                        self.selected = None;
+                        self.tab = MainTab::Obra;
+                    }
+
+                    if let Some(b) = &self.busy {
+                        ui.add_space(8.0);
+                        ui.spinner();
+                        ui.label(RichText::new(b).small().italics());
+                    }
+
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui
+                            .small_button(if self.prefs.dark { "Claro" } else { "Oscuro" })
+                            .clicked()
+                        {
+                            self.prefs.dark = !self.prefs.dark;
+                            let _ = self.store.save_prefs(&self.prefs);
+                        }
+                        net_badge(ui, self.net_light, &self.net_line);
+                    });
                 });
             });
-            if let Some(b) = &self.busy {
-                ui.horizontal(|ui| {
-                    ui.spinner();
-                    ui.label(RichText::new(format!("Pensando… {b}")).italics());
+    }
+
+    fn show_tabs(&mut self, ui: &mut egui::Ui) {
+        let tabs: &[(MainTab, &str)] = match self.prefs.role {
+            Role::Mandante => &[
+                (MainTab::Obra, "Obra"),
+                (MainTab::Red, "Red"),
+                (MainTab::Trato, "Trato"),
+                (MainTab::Pago, "Pago"),
+            ],
+            Role::Contratista => &[
+                (MainTab::Buscar, "Buscar"),
+                (MainTab::Trato, "Trato"),
+                (MainTab::Red, "Red"),
+                (MainTab::Pago, "Pago"),
+            ],
+        };
+        ui.horizontal(|ui| {
+            for (tab, label) in tabs {
+                let selected = self.tab == *tab;
+                let disabled = *tab == MainTab::Pago;
+                let text = if disabled {
+                    RichText::new(*label).weak()
+                } else if selected {
+                    RichText::new(*label)
+                        .strong()
+                        .color(accent_blue(self.prefs.dark))
+                } else {
+                    RichText::new(*label)
+                };
+                if ui
+                    .add_enabled(!disabled, egui::SelectableLabel::new(selected, text))
+                    .clicked()
+                {
+                    self.tab = *tab;
+                }
+            }
+        });
+        ui.separator();
+    }
+
+    fn show_tab_body(&mut self, ui: &mut egui::Ui) {
+        match self.tab {
+            MainTab::Obra => self.show_tab_obra(ui),
+            MainTab::Buscar => self.show_tab_buscar(ui),
+            MainTab::Red => self.show_tab_red(ui),
+            MainTab::Trato => self.show_tab_trato(ui),
+            MainTab::Pago => {
+                panel_card(ui, self.prefs.dark, |ui| {
+                    ui.label(RichText::new("Pago").strong());
+                    ui.label(
+                        RichText::new("Próximamente. El fondeo en cadena no es este paso.")
+                            .color(accent_amber(self.prefs.dark)),
+                    );
                 });
             }
-            ui.add_space(2.0);
+        }
+    }
+
+    fn show_tab_obra(&mut self, ui: &mut egui::Ui) {
+        if self.prefs.role != Role::Mandante {
+            ui.label("La obra la arma el mandante.");
+            return;
+        }
+        let Some(slug) = self.selected.clone() else {
+            ui.add_space(8.0);
+            panel_card(ui, self.prefs.dark, |ui| {
+                ui.label(RichText::new("Nueva obra").strong());
+                ui.label("Nombre de la faena, no el tuyo.");
+                show_field(ui, &mut self.new_name, "ej. casa2", self.prefs.dark, 280.0);
+                ui.add_space(8.0);
+                if primary_btn(ui, "Crear obra", self.prefs.dark).clicked() {
+                    self.create_mandante_work();
+                }
+            });
+            return;
+        };
+        let entry = match self.selected_entry().cloned() {
+            Some(e) => e,
+            None => return,
+        };
+        let id = match self.store.load_identity(&slug) {
+            Ok(id) => id,
+            Err(e) => {
+                ui.colored_label(theme_red(), e.to_string());
+                return;
+            }
+        };
+        let has_draft = matches!(self.store.load_draft(&slug), Ok(Some(_)));
+        let has_offer = matches!(self.store.load_offer(&slug), Ok(Some(_)));
+        let has_signed = matches!(self.store.load_signed(&slug), Ok(Some(_)));
+        self.show_construction(ui, &slug, &id, &entry, has_draft, has_offer, has_signed);
+        ui.add_space(12.0);
+        ui.collapsing("Billetera y respaldo", |ui| {
+            self.show_wallet(ui, &slug);
+            self.show_backup(ui, &slug);
         });
+    }
+
+    fn show_tab_buscar(&mut self, ui: &mut egui::Ui) {
+        panel_card(ui, self.prefs.dark, |ui| {
+            ui.label(RichText::new("Buscar mandante").strong());
+            ui.label("Su nombre (como lo conoces), no el de la obra.");
+            show_field(
+                ui,
+                &mut self.lookup_name,
+                "ej. Felipe",
+                self.prefs.dark,
+                280.0,
+            );
+            ui.add_space(8.0);
+            let net_ok = self.overlay.is_some();
+            if !net_ok {
+                if primary_btn(ui, "Conectarme", self.prefs.dark).clicked() {
+                    self.connect_network();
+                }
+            } else if primary_btn(ui, "Buscar", self.prefs.dark).clicked() {
+                self.spawn_lookup();
+            }
+        });
+        ui.add_space(12.0);
+        ui.label(RichText::new("Mis tratos").weak());
+        self.work_list(ui, true);
+    }
+
+    fn show_tab_red(&mut self, ui: &mut egui::Ui) {
+        let entry = self.selected_entry().cloned();
+        panel_card(ui, self.prefs.dark, |ui| {
+            ui.horizontal(|ui| {
+                ui.label(RichText::new("Red").strong());
+                net_badge(ui, self.net_light, &self.net_line);
+            });
+            ui.label(RichText::new(&self.net_line).small());
+            ui.add_space(6.0);
+            let busy = self.busy.is_some() || self.net_light == NetLight::Connecting;
+            let connected = self.overlay.is_some();
+            if !connected {
+                if primary_btn(
+                    ui,
+                    if busy { "Conectando…" } else { "Conectarme" },
+                    self.prefs.dark,
+                )
+                .clicked()
+                    && !busy
+                {
+                    self.connect_network();
+                }
+            } else if self.prefs.role == Role::Mandante {
+                if let Some(e) = entry.as_ref() {
+                    if e.published {
+                        ui.label(
+                            RichText::new(format!(
+                                "Te buscan como {} · obra {}",
+                                if e.publisher_name.is_empty() {
+                                    self.prefs.display_name()
+                                } else {
+                                    e.publisher_name.as_str()
+                                },
+                                e.name
+                            ))
+                            .color(accent_green(self.prefs.dark)),
+                        );
+                    } else if primary_btn(ui, "Publicar", self.prefs.dark).clicked() {
+                        self.spawn_announce(e);
+                    }
+                } else {
+                    ui.label("Crea una obra en la pestaña Obra.");
+                }
+            } else {
+                ui.label(
+                    RichText::new("En la red. Busca al mandante en Buscar.")
+                        .color(accent_green(self.prefs.dark)),
+                );
+            }
+        });
+        ui.add_space(8.0);
+        ui.collapsing("Avanzado", |ui| {
+            if !self.own_onion.is_empty() {
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new(format!("Tu código: {}", self.own_onion)).small());
+                    if ui.small_button("Copiar").clicked() {
+                        ui.output_mut(|o| o.copied_text = self.own_onion.clone());
+                        self.note("Código copiado");
+                    }
+                });
+            }
+            ui.horizontal(|ui| {
+                show_field(
+                    ui,
+                    &mut self.bootstrap,
+                    "xxxx.onion",
+                    self.prefs.dark,
+                    280.0,
+                );
+                if ui
+                    .add_enabled(
+                        self.overlay.is_some() && self.busy.is_none(),
+                        egui::Button::new("Usar código"),
+                    )
+                    .clicked()
+                {
+                    let raw = self.bootstrap.clone();
+                    self.spawn_bootstrap(&raw);
+                }
+            });
+            if let Some(o) = &self.overlay {
+                ui.label(
+                    RichText::new(format!("contactos {} · {}", o.peer_count(), o.local_addr()))
+                        .small()
+                        .weak(),
+                );
+            }
+        });
+    }
+
+    fn show_tab_trato(&mut self, ui: &mut egui::Ui) {
+        let Some(slug) = self.selected.clone() else {
+            ui.label(RichText::new("Elige una obra arriba, o búsca al mandante.").weak());
+            return;
+        };
+        let entry = match self.selected_entry().cloned() {
+            Some(e) => e,
+            None => return,
+        };
+        let id = match self.store.load_identity(&slug) {
+            Ok(id) => id,
+            Err(e) => {
+                ui.colored_label(theme_red(), e.to_string());
+                return;
+            }
+        };
+        let has_draft = matches!(self.store.load_draft(&slug), Ok(Some(_)));
+        let has_offer = matches!(self.store.load_offer(&slug), Ok(Some(_)));
+        let has_pending = matches!(self.store.load_pending(&slug), Ok(Some(_)));
+        let has_signed = matches!(self.store.load_signed(&slug), Ok(Some(_)));
+        self.show_next_card(
+            ui,
+            &slug,
+            &id,
+            &entry,
+            has_draft,
+            has_offer,
+            has_pending,
+            has_signed,
+        );
+        if entry.role == Role::Contratista && (has_offer || has_draft) && !has_signed {
+            ui.add_space(8.0);
+            if let Ok(Some(draft)) = self.store.load_draft(&slug) {
+                ui.label(format!(
+                    "Total {} {} · {} partidas",
+                    format_major_amount(draft.total_minor(), draft.unit),
+                    draft.unit,
+                    draft.partidas.len()
+                ));
+            }
+        }
     }
 
     fn show_log_panel(&mut self, ctx: &egui::Context) {
@@ -807,96 +1130,6 @@ impl App {
         });
     }
 
-    fn show_mandante_sidebar(&mut self, ui: &mut egui::Ui) {
-        ui.heading("Mis obras");
-        ui.label(
-            RichText::new("Las casas o faenas que tú publicas. Tú no eres una carpeta.")
-                .small()
-                .weak(),
-        );
-        ui.separator();
-        self.work_list(ui, false);
-        ui.separator();
-        ui.label(RichText::new("Nueva obra").strong());
-        ui.label("Nombre de la faena, no el tuyo");
-        show_field(
-            ui,
-            &mut self.new_name,
-            "ej. Casa Norte",
-            self.prefs.dark,
-            220.0,
-        );
-        if big_btn(ui, "Crear obra").clicked() {
-            self.create_mandante_work();
-        }
-    }
-
-    fn show_contratista_sidebar(&mut self, ui: &mut egui::Ui) {
-        ui.heading("Buscar mandante");
-        ui.label(
-            RichText::new("Escribe cómo le dicen (Don José). Verás su obra, no un código raro.")
-                .small()
-                .weak(),
-        );
-        let busy = self.busy.is_some() || self.net_light == NetLight::Connecting;
-        if self.overlay.is_none() {
-            if ui
-                .add_enabled(
-                    !busy,
-                    egui::Button::new(if busy { "Conectando…" } else { "Conectarme" })
-                        .min_size(Vec2::new(200.0, 32.0)),
-                )
-                .clicked()
-            {
-                self.connect_network();
-            }
-        }
-        show_field(
-            ui,
-            &mut self.lookup_name,
-            "nombre del mandante",
-            self.prefs.dark,
-            220.0,
-        );
-        if ui
-            .add_enabled(
-                self.overlay.is_some() && self.busy.is_none(),
-                egui::Button::new("Buscar").min_size(Vec2::new(200.0, 32.0)),
-            )
-            .clicked()
-        {
-            self.spawn_lookup();
-        }
-        ui.separator();
-        ui.label(RichText::new("Mis tratos").strong());
-        ui.label(
-            RichText::new("Obras que ya encontraste o aceptaste.")
-                .small()
-                .weak(),
-        );
-        self.work_list(ui, true);
-    }
-
-    fn show_role_home(&mut self, ui: &mut egui::Ui) {
-        ui.add_space(12.0);
-        match self.prefs.role {
-            Role::Mandante => {
-                ui.heading(format!("Hola, {}", self.prefs.display_name()));
-                ui.label(
-                    "Crea una obra a la izquierda. Ahí van el total, las partidas y los plazos.",
-                );
-                ui.label("Cuando esté lista, la propuesta se la mandas al maestro por la red.");
-            }
-            Role::Contratista => {
-                ui.heading(format!("Hola, {}", self.prefs.display_name()));
-                ui.label(
-                    "Tú no creas la obra. Buscas al mandante por su nombre y esperas su propuesta.",
-                );
-                ui.label("Cuando llegue, aparece Aceptar.");
-            }
-        }
-    }
-
     fn work_list(&mut self, ui: &mut egui::Ui, as_trato: bool) {
         let works = self.works_for_role();
         if works.is_empty() {
@@ -927,62 +1160,16 @@ impl App {
             .create_product_work(&self.new_name, Role::Mandante, None)
         {
             Ok(e) => {
+                let _ = self
+                    .store
+                    .set_publisher_name(&e.slug, self.prefs.display_name());
                 self.note(format!("Obra creada: {}", e.name));
                 self.selected = Some(e.slug);
+                self.tab = MainTab::Obra;
                 self.new_name.clear();
             }
             Err(e) => self.fail(friendly_store_err(&e.to_string())),
         }
-    }
-
-    fn show_work(&mut self, ui: &mut egui::Ui, slug: &str) {
-        let entry = match self.selected_entry().cloned() {
-            Some(e) => e,
-            None => return,
-        };
-        let id = match self.store.load_identity(slug) {
-            Ok(id) => id,
-            Err(e) => {
-                ui.colored_label(Color32::RED, e.to_string());
-                return;
-            }
-        };
-        let has_draft = matches!(self.store.load_draft(slug), Ok(Some(_)));
-        let has_offer = matches!(self.store.load_offer(slug), Ok(Some(_)));
-        let has_pending = matches!(self.store.load_pending(slug), Ok(Some(_)));
-        let has_signed = matches!(self.store.load_signed(slug), Ok(Some(_)));
-
-        ui.heading(&entry.name);
-        if !entry.peer_name.is_empty() {
-            ui.label(format!("Trato con {}", entry.peer_name));
-        } else {
-            ui.label(match entry.role {
-                Role::Mandante => "Tu obra",
-                Role::Contratista => "Trato (aún sin nombre del mandante)",
-            });
-        }
-        ui.separator();
-
-        egui::ScrollArea::vertical().show(ui, |ui| {
-            self.show_next_card(
-                ui,
-                slug,
-                &id,
-                &entry,
-                has_draft,
-                has_offer,
-                has_pending,
-                has_signed,
-            );
-            ui.add_space(10.0);
-            self.show_network_simple(ui, &entry);
-            ui.add_space(10.0);
-            self.show_construction(ui, slug, &id, &entry, has_draft, has_offer, has_signed);
-            ui.add_space(10.0);
-            self.show_wallet(ui, slug);
-            ui.add_space(10.0);
-            self.show_backup(ui, slug);
-        });
     }
 
     fn show_next_card(
@@ -1014,21 +1201,46 @@ impl App {
             }
             ui.add_space(4.0);
         }
-        let fill = if self.prefs.dark {
-            Color32::from_rgb(36, 48, 40)
+        let waiting = step.button.is_none() && step.kind == NextKind::None && !has_signed;
+        let (fill, stroke) = if has_signed {
+            (
+                if self.prefs.dark {
+                    Color32::from_rgb(28, 48, 36)
+                } else {
+                    Color32::from_rgb(226, 242, 230)
+                },
+                accent_green(self.prefs.dark),
+            )
+        } else if waiting {
+            (
+                if self.prefs.dark {
+                    Color32::from_rgb(52, 42, 24)
+                } else {
+                    Color32::from_rgb(255, 243, 220)
+                },
+                accent_amber(self.prefs.dark),
+            )
         } else {
-            Color32::from_rgb(232, 240, 232)
+            (
+                if self.prefs.dark {
+                    Color32::from_rgb(28, 40, 56)
+                } else {
+                    Color32::from_rgb(226, 236, 252)
+                },
+                accent_blue(self.prefs.dark),
+            )
         };
         egui::Frame::none()
             .fill(fill)
-            .stroke(egui::Stroke::new(1.0, Color32::from_rgb(70, 140, 80)))
-            .inner_margin(10.0)
+            .stroke(egui::Stroke::new(1.0, stroke))
+            .inner_margin(12.0)
             .rounding(6.0)
             .show(ui, |ui| {
                 ui.label(RichText::new("Qué hacer ahora").strong());
                 ui.label(&step.sentence);
                 if let Some(label) = step.button {
-                    if big_btn(ui, label).clicked() {
+                    ui.add_space(6.0);
+                    if primary_btn(ui, label, self.prefs.dark).clicked() {
                         self.run_next_kind(step.kind, slug, id, entry);
                     }
                 }
@@ -1047,98 +1259,11 @@ impl App {
                 if self.lookup_name.trim().is_empty() && !entry.peer_name.is_empty() {
                     self.lookup_name = entry.peer_name.clone();
                 }
+                self.tab = MainTab::Buscar;
                 self.spawn_lookup();
             }
             NextKind::None => {}
         }
-    }
-
-    fn show_network_simple(&mut self, ui: &mut egui::Ui, entry: &WorkEntry) {
-        ui.heading("La red");
-        ui.label("Un botón te pone en contacto. El maestro te busca por tu nombre.");
-        ui.horizontal(|ui| {
-            let busy = self.busy.is_some() || self.net_light == NetLight::Connecting;
-            let label = if busy { "Conectando…" } else { "Conectarme" };
-            if ui
-                .add_enabled(
-                    !busy,
-                    egui::Button::new(label).min_size(Vec2::new(160.0, 32.0)),
-                )
-                .clicked()
-            {
-                self.connect_network();
-            }
-            net_badge(ui, self.net_light, &self.net_line);
-        });
-        ui.label(RichText::new(&self.net_line).italics());
-
-        match entry.role {
-            Role::Mandante => {
-                if entry.published {
-                    ui.label(
-                        RichText::new(
-                            "Obra publicada. El maestro te busca por tu nombre. Si no aparece, usen Avanzado.",
-                        )
-                        .small()
-                        .weak(),
-                    );
-                } else {
-                    ui.label(
-                        RichText::new(
-                            "Cuando toque publicar, el botón está arriba en Qué hacer ahora.",
-                        )
-                        .small()
-                        .weak(),
-                    );
-                }
-            }
-            Role::Contratista => {
-                ui.label(
-                    RichText::new("Busca al mandante a la izquierda, por su nombre.")
-                        .small()
-                        .weak(),
-                );
-            }
-        }
-
-        ui.collapsing("Avanzado — código de respaldo", |ui| {
-            ui.label("Solo si el nombre no aparece. Pega el código de la otra persona.");
-            if !self.own_onion.is_empty() {
-                ui.horizontal(|ui| {
-                    ui.label(RichText::new(format!("Tu código: {}", self.own_onion)).small());
-                    if ui.small_button("Copiar").clicked() {
-                        ui.output_mut(|o| o.copied_text = self.own_onion.clone());
-                        self.note("Código copiado");
-                    }
-                });
-            }
-            ui.horizontal(|ui| {
-                show_field(
-                    ui,
-                    &mut self.bootstrap,
-                    "xxxx.onion",
-                    self.prefs.dark,
-                    320.0,
-                );
-                if ui
-                    .add_enabled(
-                        self.overlay.is_some() && self.busy.is_none(),
-                        egui::Button::new("Usar código"),
-                    )
-                    .clicked()
-                {
-                    let raw = self.bootstrap.clone();
-                    self.spawn_bootstrap(&raw);
-                }
-            });
-            if let Some(o) = &self.overlay {
-                ui.label(
-                    RichText::new(format!("contactos {} · {}", o.peer_count(), o.local_addr()))
-                        .small()
-                        .weak(),
-                );
-            }
-        });
     }
 
     fn show_construction(
@@ -1151,25 +1276,30 @@ impl App {
         has_offer: bool,
         has_signed: bool,
     ) {
-        ui.heading("La obra");
-        ui.label(
-            "El total se parte en partidas. El 10% es la boleta (la misma plata en cada partida: total 100 → boleta 10 → 10 partidas de 10).",
-        );
-        ui.label(
-            "Si ambos están de acuerdo, se paga normal. Si no, en el primer plazo se quema la mitad y en el segundo el resto. Nadie se queda esa plata.",
-        );
-
-        if has_signed {
+        ui.horizontal(|ui| {
+            ui.label(RichText::new("Obra").strong().size(18.0));
+            if ui.small_button("¿Qué es esto?").clicked() {
+                self.help_open = !self.help_open;
+            }
+        });
+        if self.help_open {
             ui.label(
-                RichText::new("Trato cerrado: las dos partes firmaron.")
-                    .color(Color32::from_rgb(80, 160, 100)),
+                RichText::new(format!(
+                    "{} Total ÷ 10 = boleta y cada partida. Sin acuerdo se quema a dos plazos.",
+                    unit_helper(self.unit)
+                ))
+                .small()
+                .weak(),
             );
+        }
+        if has_signed {
+            ui.label(RichText::new("Trato cerrado.").color(accent_green(self.prefs.dark)));
         }
 
         match entry.role {
             Role::Mandante => {
                 ui.add_space(6.0);
-                ui.label(RichText::new("1. Monto y plazos").strong());
+                ui.label(RichText::new("Monto y plazos").strong());
                 ui.horizontal(|ui| {
                     ui.label("Total");
                     show_field(ui, &mut self.total_major, "100", self.prefs.dark, 80.0);
@@ -1182,7 +1312,6 @@ impl App {
                             }
                         });
                 });
-                ui.label(RichText::new(unit_helper(self.unit)).small().weak());
                 self.show_fx_line(ui);
                 if let Ok(total) = parse_major_amount(&self.total_major, self.unit) {
                     if let Ok(bond) = bond_minor(total, DEFAULT_BOND_BPS) {
@@ -1197,64 +1326,46 @@ impl App {
                         );
                     }
                 }
-                ui.label("Primer plazo (si no hay acuerdo, se quema la mitad)");
+                ui.label("Primer plazo");
                 deadline_editor(ui, "t1", &mut self.t1);
-                ui.label("Segundo plazo (se quema el resto)");
+                ui.label("Segundo plazo");
                 deadline_editor(ui, "t2", &mut self.t2);
-                ui.label("Nombres de las partidas (una por línea, opcional)");
+                ui.label("Partidas (opcional, una por línea)");
                 show_multiline(
                     ui,
                     &mut self.stage_descs,
                     "Radier\nMuros\nTechumbre",
                     self.prefs.dark,
-                    520.0,
+                    420.0,
                     3,
                 );
-                ui.add_space(6.0);
-                if big_btn(ui, "Preparar partidas").clicked() {
-                    self.build_draft(slug, id, entry);
-                }
-                ui.add_space(4.0);
-                if has_draft {
-                    if big_btn(ui, "Firmar propuesta").clicked() {
+                ui.add_space(8.0);
+                if !has_draft {
+                    if primary_btn(ui, "Preparar partidas", self.prefs.dark).clicked() {
+                        self.build_draft(slug, id, entry);
+                    }
+                } else if !has_offer {
+                    if primary_btn(ui, "Firmar propuesta", self.prefs.dark).clicked() {
                         self.emit_offer(slug, id);
                     }
                 } else {
-                    ui.add_enabled(false, egui::Button::new("Firmar propuesta"));
-                }
-                if has_offer {
                     ui.label(
-                        RichText::new("Propuesta lista.").color(Color32::from_rgb(80, 160, 100)),
-                    );
-                    ui.label(
-                        RichText::new(
-                            "Se envía desde Qué hacer ahora cuando el maestro te encuentre. El archivo queda de respaldo.",
-                        )
-                        .small()
-                        .weak(),
+                        RichText::new("Propuesta lista · envía en Trato")
+                            .color(accent_green(self.prefs.dark)),
                     );
                 }
             }
             Role::Contratista => {
-                ui.add_space(6.0);
                 if has_offer || has_draft {
-                    ui.label(
-                        RichText::new(
-                            "Llegó una propuesta. Mírala abajo y acepta si estás de acuerdo.",
-                        )
-                        .strong(),
-                    );
-                    if big_btn(ui, "Aceptar trato").clicked() {
-                        self.accept_from_store(slug, id);
-                    }
+                    ui.label(RichText::new("Propuesta recibida.").strong());
                 } else {
-                    ui.label("Cuando el mandante envíe, aparece aquí. También puedes abrir un archivo de respaldo.");
+                    ui.label("Espera el envío. Archivo de respaldo:");
                     show_field(
                         ui,
                         &mut self.accept_path,
-                        "archivo de propuesta (opcional)",
+                        "archivo (opcional)",
                         self.prefs.dark,
-                        420.0,
+                        320.0,
                     );
                     if ui.button("Abrir archivo").clicked() {
                         self.accept_from_file(slug, id);
@@ -1343,10 +1454,8 @@ impl App {
     }
 
     fn show_wallet(&mut self, ui: &mut egui::Ui, slug: &str) {
-        ui.heading("Tu billetera (solo en este aparato)");
-        ui.label(
-            "Pega la clave pública de tu billetera (xpub / vpub). Sirve para ver tus monedas y direcciones después. No se la enviamos a nadie.",
-        );
+        ui.label(RichText::new("Billetera local").strong());
+        ui.label(RichText::new("xpub / vpub. No se envía.").small().weak());
         show_field(
             ui,
             &mut self.xpub_draft,
@@ -1669,32 +1778,43 @@ impl App {
         } else {
             self.own_onion.trim().to_string()
         };
-        let person = self.prefs.display_name().to_string();
+        let person = {
+            let from_prefs = self.prefs.display_name().to_string();
+            let from_entry = entry.publisher_name.trim().to_string();
+            if !from_prefs.is_empty() {
+                from_prefs
+            } else {
+                from_entry
+            }
+        };
         if person.is_empty() {
-            return self.fail("Escribe tu nombre arriba (así te busca el maestro).");
+            return self.fail("Escribe tu nombre (así te busca el maestro), no el de la obra.");
         }
+        let _ = self.store.set_publisher_name(&entry.slug, &person);
         let slug = entry.slug.clone();
+        let work = entry.name.clone();
+        let persona_topic = literal_topic(&person);
         let ann = WorkAnnounce {
-            work_name: entry.name.clone(),
+            work_name: work.clone(),
             onion,
             offer_id: None,
             role: "mandante".into(),
-            person_name: person,
+            person_name: person.clone(),
         };
+        let _ = announce_topics(&ann);
         self.start_job("publicando la obra", move |tx| {
             let dht = o.announce_work(&ann).map_err(|e| e.to_string());
             let board = o.publish_rendezvous(&ann);
             let msg = match (dht, board) {
-                (Ok(_), Ok(_)) => {
-                    "Obra publicada. El maestro te busca por tu nombre o por el de la obra."
-                        .into()
-                }
+                (Ok(_), Ok(_)) => format!(
+                    "Publicado: te buscan como {person} (tema {persona_topic}), obra {work}."
+                ),
                 (Ok(_), Err(e)) => format!(
-                    "Publicada en la red local. El tablero público no respondió ({e}). Si no aparece, usen el código de respaldo."
+                    "Publicada en la red local. El tablero no respondió ({e}). Si no aparece, usen Avanzado."
                 ),
                 (Err(e), _) => e.to_string(),
             };
-            let ok = msg.starts_with("Obra") || msg.starts_with("Publicada");
+            let ok = msg.starts_with("Publicad") || msg.starts_with("Obra");
             if ok {
                 let _ = tx.send(JobEvent::AnnounceDone(Ok((slug, msg))));
             } else {
@@ -1813,6 +1933,67 @@ fn friendly_store_err(e: &str) -> String {
 
 fn big_btn(ui: &mut egui::Ui, label: &str) -> egui::Response {
     ui.add(egui::Button::new(label).min_size(Vec2::new(220.0, 32.0)))
+}
+
+fn primary_btn(ui: &mut egui::Ui, label: &str, dark: bool) -> egui::Response {
+    ui.add(
+        egui::Button::new(RichText::new(label).color(Color32::WHITE).strong())
+            .fill(accent_green(dark))
+            .min_size(Vec2::new(220.0, 34.0)),
+    )
+}
+
+fn panel_card(ui: &mut egui::Ui, dark: bool, add: impl FnOnce(&mut egui::Ui)) {
+    egui::Frame::none()
+        .fill(panel_fill(dark))
+        .stroke(egui::Stroke::new(1.0, panel_stroke(dark)))
+        .inner_margin(12.0)
+        .rounding(6.0)
+        .show(ui, add);
+}
+
+fn accent_blue(dark: bool) -> Color32 {
+    if dark {
+        Color32::from_rgb(91, 141, 239)
+    } else {
+        Color32::from_rgb(43, 108, 176)
+    }
+}
+
+fn accent_green(dark: bool) -> Color32 {
+    if dark {
+        Color32::from_rgb(61, 155, 95)
+    } else {
+        Color32::from_rgb(47, 133, 90)
+    }
+}
+
+fn accent_amber(dark: bool) -> Color32 {
+    if dark {
+        Color32::from_rgb(212, 160, 23)
+    } else {
+        Color32::from_rgb(192, 86, 33)
+    }
+}
+
+fn theme_red() -> Color32 {
+    Color32::from_rgb(200, 64, 64)
+}
+
+fn panel_fill(dark: bool) -> Color32 {
+    if dark {
+        Color32::from_rgb(36, 40, 50)
+    } else {
+        Color32::from_rgb(255, 255, 255)
+    }
+}
+
+fn panel_stroke(dark: bool) -> Color32 {
+    if dark {
+        Color32::from_rgb(70, 78, 96)
+    } else {
+        Color32::from_rgb(198, 206, 220)
+    }
 }
 
 fn deadline_editor(ui: &mut egui::Ui, id: &str, fields: &mut DeadlineFields) {
@@ -1973,27 +2154,31 @@ fn apply_theme(ctx: &egui::Context, dark: bool) {
     v.override_text_color = Some(fg);
     paint_widgets(&mut v, fg);
     if dark {
-        v.extreme_bg_color = Color32::from_rgb(72, 78, 94);
-        v.faint_bg_color = Color32::from_rgb(28, 32, 40);
-        v.widgets.inactive.bg_fill = Color32::from_rgb(36, 40, 50);
-        v.widgets.hovered.bg_fill = Color32::from_rgb(50, 56, 70);
-        v.widgets.active.bg_fill = Color32::from_rgb(50, 56, 70);
-        v.widgets.open.bg_fill = Color32::from_rgb(50, 56, 70);
-        v.window_fill = Color32::from_rgb(20, 22, 28);
-        v.panel_fill = Color32::from_rgb(20, 22, 28);
-        v.selection.bg_fill = Color32::from_rgb(50, 90, 160);
+        v.extreme_bg_color = Color32::from_rgb(28, 32, 42);
+        v.faint_bg_color = Color32::from_rgb(32, 36, 48);
+        v.widgets.inactive.bg_fill = Color32::from_rgb(44, 50, 64);
+        v.widgets.hovered.bg_fill = Color32::from_rgb(58, 72, 104);
+        v.widgets.active.bg_fill = Color32::from_rgb(61, 155, 95);
+        v.widgets.open.bg_fill = Color32::from_rgb(44, 50, 64);
+        v.window_fill = Color32::from_rgb(22, 24, 30);
+        v.panel_fill = Color32::from_rgb(26, 28, 36);
+        v.selection.bg_fill = Color32::from_rgb(43, 90, 176);
         v.selection.stroke.color = fg;
+        v.warn_fg_color = Color32::from_rgb(212, 160, 23);
+        v.error_fg_color = Color32::from_rgb(220, 80, 80);
     } else {
-        v.extreme_bg_color = Color32::WHITE;
-        v.faint_bg_color = Color32::from_rgb(236, 238, 242);
-        v.widgets.inactive.bg_fill = Color32::from_rgb(242, 244, 247);
-        v.widgets.hovered.bg_fill = Color32::from_rgb(226, 230, 238);
-        v.widgets.active.bg_fill = Color32::from_rgb(226, 230, 238);
-        v.widgets.open.bg_fill = Color32::from_rgb(226, 230, 238);
-        v.window_fill = Color32::from_rgb(248, 249, 251);
-        v.panel_fill = Color32::from_rgb(248, 249, 251);
-        v.selection.bg_fill = Color32::from_rgb(180, 205, 245);
-        v.selection.stroke.color = fg;
+        v.extreme_bg_color = Color32::from_rgb(255, 255, 255);
+        v.faint_bg_color = Color32::from_rgb(232, 236, 244);
+        v.widgets.inactive.bg_fill = Color32::from_rgb(236, 240, 248);
+        v.widgets.hovered.bg_fill = Color32::from_rgb(214, 226, 246);
+        v.widgets.active.bg_fill = Color32::from_rgb(47, 133, 90);
+        v.widgets.open.bg_fill = Color32::from_rgb(236, 240, 248);
+        v.window_fill = Color32::from_rgb(236, 238, 244);
+        v.panel_fill = Color32::from_rgb(244, 245, 247);
+        v.selection.bg_fill = Color32::from_rgb(190, 214, 245);
+        v.selection.stroke.color = Color32::from_rgb(20, 32, 48);
+        v.warn_fg_color = Color32::from_rgb(180, 90, 20);
+        v.error_fg_color = Color32::from_rgb(180, 40, 40);
     }
     ctx.set_visuals(v);
 }

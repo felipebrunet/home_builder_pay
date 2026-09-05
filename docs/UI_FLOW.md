@@ -1,51 +1,55 @@
 # UI flow — personas, obras, tratos
 
-Approved product map (2026-09-05). Step 1 is identity + chrome + next action. **No PSBT** in this step.
+Approved product map (2026-09-05). Step 1 is identity + chrome + next action. **No PSBT.**
 
 ## Words
 
 | Word | Meaning |
 |---|---|
-| **Persona** | How a human is called. Mandante and contratista each have a display name (e.g. “Don José”). Shown in the header. **Not** a folder slug (`contratista1`). |
-| **Obra** | The job the mandante creates and publishes (e.g. “Casa Norte”). Only the mandante creates obras. |
-| **Trato** | The contratista engaging that obra: find → wait for proposal → accept → mandante confirms. |
+| **Persona** | Display name (e.g. “Felipe”). Header switcher. **Not** a folder slug. |
+| **Obra** | Job the mandante creates (`casa2`). Only the mandante creates obras. |
+| **Trato** | Contratista engaging that obra: find → wait → accept → confirm. |
 | **Propuesta** | Signed offer (`00-offer.json` / `NetMessage::Offer`). |
 
-## Who does what
+## Shell (Electrum-like)
 
-**Mandante (pays)**
+One top row: **profile/obra switcher** (`Felipe · Mandante  ·  casa2`) plus network dot and theme. Tabs, not a long scroll:
 
-1. First open: “Yo pago — Mandante” → “¿Cómo te dicen?” → **Seguir**.
-2. Header shows *Don José · Mandante*.
-3. **Crear obra** (Casa Norte) — this is an obra, not a persona.
-4. **Qué hacer ahora** drives one button: Preparar partidas → Firmar propuesta → Conectarme → Publicar obra → espera al contratista → **Enviar** (only when the peer handle is known). Finished steps stay muted with a check; Publicar is never the green CTA after the obra is already published.
-5. Contratista accepts; mandante auto-confirms on the wire. Card: “Trato cerrado… el pago en cadena viene después.”
+| Mandante | Contratista |
+|---|---|
+| **Obra** — monto, plazos, partidas; one green CTA (Preparar / Firmar) | **Buscar** — persona name + tratos |
+| **Red** — Conectarme / Publicar / status | **Trato** — Qué hacer ahora |
+| **Trato** — Qué hacer ahora + Enviar | **Red** — Conectarme / Avanzado |
+| **Pago** — grey, “próximamente” | **Pago** — grey stub |
 
-**Contratista (builds)**
+Finished steps are muted checks. Waiting cards are amber; success green; primary actions green. Help is behind **¿Qué es esto?**. **Notas** stay collapsed (Ver / Limpiar).
 
-1. First open: “Yo construyo — Contratista” → tu nombre.
-2. Home is not “crear obra”. Big actions: **Conectarme** then **Buscar** the mandante by *their* name (Don José). Obra name still works as fallback.
-3. A hit becomes a **trato** in “Mis tratos” (`Casa Norte — con Don José`), never a random folder as the identity.
-4. **Qué hacer ahora**: Espera la propuesta → **Aceptar** when it arrives → espera confirmación → trato cerrado.
+**Cambiar perfil** lives in the switcher, not a second header row.
 
-**Cambiar perfil** (header) is how you switch role on the same PC. Each role keeps its own name.
+## Discovery (persona is primary)
 
-## Discovery (partial in step 1)
+Publish writes the same announce JSON to:
 
-Ideal: find **mandante**, then see their published obras.
+1. literal **`hbpn-felipe`** (normalized persona)
+2. hashed `hbp` + SHA-256(`hbp-rendezvous-v1:felipe`)[:12]
+3. literal **`hbpn-casa2`** + hashed obra topic
+4. directory **`hbpn-dir-v1`** (scan `person_name` / `work_name` in the payload)
 
-Shipped now: the primary publish/lookup key is the mandante persona (`hbp-person:{normalized}`, e.g. `felipe`); obra title (`hbp-work:casa2`) is secondary. Buscar `Felipe` must open their published obra (`casa2 — con Felipe`). Full mandante directory / several obras per person is a later step. Onion paste stays under **Avanzado**.
+DHT keys stay `hbp-person:felipe` (primary) and `hbp-work:casa2` (secondary). Isolated onions hit the board **before** remote DHT. Buscar `Felipe` must return the casa2 announce without typing the obra title.
 
-**Send / find handshake.** A one-sided find is not enough for **Enviar**. When the contratista finds the mandante, they DELIVER a `Hello` with their own onion (and name). The mandante inbox stores that handle on the matching obra, the card moves from “esperando contratista” to **Enviar**, and Enviar DELIVERs the offer to that onion — no Avanzado paste. The mandante replies `Hello` once so both sides have a usable dest. “Ya estamos en contacto” is reserved for that two-way handle; a one-sided find says “Encontré su señal; esperando que el mandante pueda enviarte”.
+**Handshake:** after find, contratista DELIVERs `Hello` with their onion; mandante stores it and Enviar works without Avanzado paste.
 
-## Notes panel
+## Retest (persona search)
 
-Collapsed by default. **Ver / Ocultar**, height resizable when open, **Limpiar**, scroll. Repeated errors collapse to `×N`.
+Both windows online. No Avanzado onion paste.
+
+1. **Mandante:** Yo pago → name **Felipe** → Seguir. Switcher: `Felipe · Mandante`. Tab **Obra** → crear **casa2**. Preparar → Firmar. Tab **Red** → **Conectarme** (auto-publica). Notas must mention tema `hbpn-felipe`, not only `casa2`.
+2. **Contratista:** Yo construyo → nombre → Seguir. Tab **Buscar** → **Conectarme** → type **`Felipe`** (not casa2) → **Buscar**.
+3. Trato `casa2 — con Felipe` appears; switcher and tab **Trato** open it.
+4. Mandante **Trato** → **Enviar**. Contratista **Aceptar**.
+
+If step 2 fails with only `casa2` working, persona board is still broken.
 
 ## Out of step 1
 
-PSBT / funding wizard, fee-burn arming, Tor rewrite, complete mandante directory.
-
-## What a tester clicks
-
-See the PR / agent report: Mandante path vs Contratista path after this slice.
+PSBT / funding wizard, fee-burn arming, Tor rewrite, several obras per persona.

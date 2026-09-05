@@ -216,26 +216,51 @@ impl OverlayHandle {
     fn lookup_key(&self, key: [u8; 32]) -> crate::Result<Option<WorkAnnounce>> {
         match self.iterative_find_value(key)? {
             Some(rec) => Ok(Some(serde_json::from_slice(&rec.value)?)),
-            None => {
-                let s = self.state.lock().expect("dht");
-                match s.store.get(&key) {
-                    Some(rec) => Ok(Some(serde_json::from_slice(&rec.value)?)),
-                    None => Ok(None),
-                }
-            }
+            None => Ok(self.lookup_local(key)),
         }
     }
 
-    /// Persona name first (primary), then obra title, then the public board.
-    /// DHT errors must not skip the board — two isolated onions rely on it.
+    fn lookup_local(&self, key: [u8; 32]) -> Option<WorkAnnounce> {
+        let s = self.state.lock().ok()?;
+        let rec = s.store.get(&key)?;
+        serde_json::from_slice(&rec.value).ok()
+    }
+
+    /// Local store → (LAN DHT if not onion) → public board (persona literal/hash +
+    /// directory payload) → remote DHT. Isolated onions must hit the board before
+    /// waiting on dead peers.
     pub fn discover_work(&self, query: &str) -> crate::Result<Option<WorkAnnounce>> {
-        if let Ok(Some(ann)) = self.lookup_person(query) {
+        let q = query.trim();
+        if q.is_empty() {
+            return Ok(None);
+        }
+        if let Some(ann) = self.lookup_local(person_topic_key(q)) {
             return Ok(Some(ann));
         }
-        if let Ok(Some(ann)) = self.lookup_work(query) {
+        if let Some(ann) = self.lookup_local(work_topic_key(q)) {
             return Ok(Some(ann));
         }
-        crate::rendezvous::lookup_announce(self.socks(), query)
+        let onion_wan = self.advertised().is_onion();
+        if !onion_wan {
+            if let Ok(Some(ann)) = self.lookup_person(q) {
+                return Ok(Some(ann));
+            }
+            if let Ok(Some(ann)) = self.lookup_work(q) {
+                return Ok(Some(ann));
+            }
+        }
+        if let Some(ann) = crate::rendezvous::lookup_announce(self.socks(), q)? {
+            return Ok(Some(ann));
+        }
+        if onion_wan {
+            if let Ok(Some(ann)) = self.lookup_person(q) {
+                return Ok(Some(ann));
+            }
+            if let Ok(Some(ann)) = self.lookup_work(q) {
+                return Ok(Some(ann));
+            }
+        }
+        Ok(None)
     }
 
     /// Publish to the public name board. Best-effort; DHT announce is separate.
