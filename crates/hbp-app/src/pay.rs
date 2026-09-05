@@ -11,12 +11,13 @@ use bitcoin::psbt::Psbt;
 use bitcoin::{Address, Amount, OutPoint, Transaction};
 use hbp_bitcoin::{
     apply_key_spend_sig, attach_prev_tx, bond_address, bond_escrow_from_body, build_funding_psbt,
-    build_key_spend_tx, combine_partials, combine_psbts, encode_partial, encode_pubnonce,
-    extract_signed_funding_tx, key_spend_sighash, keys_from_body, new_nonce_seed,
-    our_partial_signature, parse_partial, parse_pubnonce, partida_address,
-    partida_escrow_from_body, sign_quote, signer_index, start_round, to_btc_network,
+    build_key_spend_tx, build_partial_funding_psbt, combine_partials, combine_psbts,
+    complete_partial_funding_psbt, encode_partial, encode_pubnonce, extract_signed_funding_tx,
+    funding_share, key_spend_sighash, keys_from_body, new_nonce_seed, our_partial_signature,
+    parse_partial, parse_pubnonce, partida_address, partida_escrow_from_body,
+    psbt_signed_input_count, sign_quote, signer_index, start_round, to_btc_network,
     tweaked_key_agg, validate_funding_tx, verify_quote, CoopFile, ExpectedFunding, FundingRequest,
-    Identity, OfferedCoin,
+    Identity, OfferedCoin, WatchScan, WatchedUtxo,
 };
 use hbp_core::{
     bond_minor, fiat_minor_to_sats, minor_from_major, NonceJournal, PartidaQuote, PartidaStatus,
@@ -25,8 +26,10 @@ use hbp_core::{
 use serde::{Deserialize, Serialize};
 
 pub const ART_COIN: &str = "05-coin.json";
+pub const ART_PARTIAL: &str = "06-funding.partial.json";
 pub const ART_PSBT: &str = "06-funding.unsigned.json";
 pub const ART_SIGNED: &str = "07-signed-psbt.json";
+pub const ART_ONESIG: &str = "07-onesig.psbt.json";
 pub const ART_COOP: &str = "08-coop.json";
 pub const ART_TX: &str = "09-funding-tx.json";
 
@@ -77,6 +80,10 @@ pub struct PayUiDraft {
     pub funding_tx_hex: String,
     #[serde(default)]
     pub coop_paste: String,
+    #[serde(default)]
+    pub selected_outpoint: String,
+    #[serde(default)]
+    pub onesig_hex: String,
 }
 
 fn default_fee() -> String {
@@ -102,6 +109,8 @@ impl Default for PayUiDraft {
             unsigned_psbt_hex: String::new(),
             funding_tx_hex: String::new(),
             coop_paste: String::new(),
+            selected_outpoint: String::new(),
+            onesig_hex: String::new(),
         }
     }
 }
@@ -523,7 +532,168 @@ pub fn escrow_addrs(project: &Project) -> Result<(String, String)> {
     let named = project.named_arbiter_pubkey()?;
     let bond = bond_address(&project.contract.body, named)?;
     let p1 = partida_address(&project.contract.body, FIRST_PARTIDA, named)?;
+    if bond.to_string() == p1.to_string() {
+        bail!("boleta y partida 1 no pueden ser la misma dirección");
+    }
     Ok((bond.to_string(), p1.to_string()))
+}
+
+pub fn our_funding_need(project: &Project, role: Role, fee: u64) -> Result<u64> {
+    let quote = project
+        .quote
+        .as_ref()
+        .context("falta la cotización firmada")?;
+    Ok(funding_share(
+        quote.bond_sats,
+        quote.partida_sats(FIRST_PARTIDA)?,
+        fee,
+        role,
+    )?)
+}
+
+pub fn suggest_watched(scan: &WatchScan, need: u64) -> Option<&WatchedUtxo> {
+    let mut ok: Vec<&WatchedUtxo> = scan.utxos.iter().filter(|u| u.sats >= need).collect();
+    ok.sort_by_key(|u| (u.confirmed, u.sats));
+    // Prefer confirmed, then smallest that still covers the share.
+    ok.into_iter()
+        .filter(|u| u.confirmed)
+        .min_by_key(|u| u.sats)
+        .or_else(|| {
+            scan.utxos
+                .iter()
+                .filter(|u| u.sats >= need)
+                .min_by_key(|u| u.sats)
+        })
+}
+
+pub fn coin_from_watched(role: Role, utxo: &WatchedUtxo, change: &str) -> Result<OfferedCoin> {
+    coin_from_fields(
+        role,
+        &utxo.outpoint,
+        &utxo.sats.to_string(),
+        &utxo.address,
+        change,
+    )
+}
+
+fn p1_escrow_pair(
+    project: &Project,
+) -> Result<((bitcoin::ScriptBuf, u64), (bitcoin::ScriptBuf, u64))> {
+    let quote = project
+        .quote
+        .as_ref()
+        .context("falta la cotización firmada")?;
+    if !quote_fully_signed(quote) {
+        bail!("la cotización necesita las dos firmas");
+    }
+    let named = project.named_arbiter_pubkey()?;
+    let body = &project.contract.body;
+    let bond = bond_escrow_from_body(body, named)?;
+    let part = partida_escrow_from_body(body, FIRST_PARTIDA, named)?;
+    if bond.script_pubkey() == part.script_pubkey() {
+        bail!("boleta y partida 1 salieron iguales; eso es un error de protocolo");
+    }
+    Ok((
+        (bond.script_pubkey(), quote.bond_sats),
+        (part.script_pubkey(), quote.partida_sats(FIRST_PARTIDA)?),
+    ))
+}
+
+pub fn build_our_partial(
+    project: &Project,
+    role: Role,
+    coin: &OfferedCoin,
+    fee: u64,
+) -> Result<Psbt> {
+    if project.active_partida_id() != Some(FIRST_PARTIDA) {
+        bail!("solo se fondea la partida activa; ahora no es la 1");
+    }
+    if coin.role != role {
+        bail!("esa moneda no es de tu rol");
+    }
+    let (bond, part) = p1_escrow_pair(project)?;
+    let mut psbt = build_partial_funding_psbt(
+        bond,
+        part,
+        fee,
+        role,
+        &coin.funding_coin(PRODUCT_NETWORK)?,
+        &coin.change_address(PRODUCT_NETWORK)?,
+    )?;
+    if let Some(tx) = coin.prev_tx()? {
+        attach_prev_tx(&mut psbt, coin.outpoint()?, tx)?;
+    }
+    Ok(psbt)
+}
+
+pub fn complete_incoming_partial(
+    project: &Project,
+    role: Role,
+    coin: &OfferedCoin,
+    fee: u64,
+    incoming: &str,
+) -> Result<Psbt> {
+    if coin.role != role {
+        bail!("esa moneda no es de tu rol");
+    }
+    let (bond, part) = p1_escrow_pair(project)?;
+    let mut psbt = parse_psbt(incoming)?;
+    complete_partial_funding_psbt(
+        &mut psbt,
+        bond.clone(),
+        part.clone(),
+        fee,
+        role,
+        &coin.funding_coin(PRODUCT_NETWORK)?,
+        &coin.change_address(PRODUCT_NETWORK)?,
+    )?;
+    if let Some(tx) = coin.prev_tx()? {
+        attach_prev_tx(&mut psbt, coin.outpoint()?, tx)?;
+    }
+    validate_funding_tx(
+        &psbt.unsigned_tx,
+        &ExpectedFunding {
+            bond_script: bond.0,
+            bond_sats: bond.1,
+            partida_script: part.0,
+            partida_sats: part.1,
+            change: vec![],
+            allow_other_outputs: true,
+        },
+    )?;
+    Ok(psbt)
+}
+
+pub fn classify_funding_psbt(raw: &str) -> Result<(usize, usize)> {
+    let psbt = parse_psbt(raw)?;
+    Ok((psbt.unsigned_tx.input.len(), psbt_signed_input_count(&psbt)))
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FundingWire {
+    pub hex: String,
+    #[serde(default)]
+    pub role: Option<Role>,
+    #[serde(default)]
+    pub fee: Option<u64>,
+}
+
+pub fn funding_wire(hex: &str, role: Role, fee: u64) -> serde_json::Value {
+    serde_json::to_value(FundingWire {
+        hex: hex.to_string(),
+        role: Some(role),
+        fee: Some(fee),
+    })
+    .unwrap_or_else(|_| hex_artifact(hex))
+}
+
+pub fn funding_wire_hex(json: &serde_json::Value) -> Option<String> {
+    if let Ok(w) = serde_json::from_value::<FundingWire>(json.clone()) {
+        if !w.hex.trim().is_empty() {
+            return Some(w.hex);
+        }
+    }
+    hex_from_artifact(json)
 }
 
 pub fn parse_fee(raw: &str) -> Result<u64> {
@@ -841,6 +1011,8 @@ mod tests {
         let q = sign_our_quote(&m, &signed, q).unwrap();
         let q = sign_our_quote(&c, &signed, q).unwrap();
         assert!(lock_quote_if_ready(&mut project, &q).unwrap());
+        let (boleta, p1addr) = escrow_addrs(&project).unwrap();
+        assert_ne!(boleta, p1addr, "boleta and partida 1 must be distinct");
         assert_eq!(
             spanish_now(Some(&project), Some(&q)),
             "Ahora: fondear boleta + partida 1"
@@ -922,5 +1094,41 @@ mod tests {
         // 10% of $2000 = $200; $200 / $80k * 1e8 = 250_000 sats. P1 $1000 → 1_250_000.
         assert_eq!(bond, 250_000);
         assert_eq!(p1, 1_250_000);
+    }
+
+    #[test]
+    fn partial_psbt_handshake_then_p2_blocked() {
+        let (m, c) = pair_ids();
+        let signed = signed_two_partidas(&m, &c);
+        let mut project = Project::from_signed(signed.clone()).unwrap();
+        let q = sign_our_quote(
+            &c,
+            &signed,
+            sign_our_quote(
+                &m,
+                &signed,
+                draft_quote(&signed, Some(8_000_000), "fx").unwrap(),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        lock_quote_if_ready(&mut project, &q).unwrap();
+        let m_coin = dummy_coin(Role::Mandante, 1, 5_000_000);
+        let c_coin = dummy_coin(Role::Contratista, 2, 5_000_000);
+        let partial = build_our_partial(&project, Role::Mandante, &m_coin, 400).unwrap();
+        assert_eq!(partial.unsigned_tx.input.len(), 1);
+        let complete = complete_incoming_partial(
+            &project,
+            Role::Contratista,
+            &c_coin,
+            400,
+            &psbt_to_hex(&partial),
+        )
+        .unwrap();
+        assert_eq!(complete.unsigned_tx.input.len(), 2);
+        let txid =
+            apply_verified_p1_funding(&mut project, &serialize_hex(&complete.unsigned_tx)).unwrap();
+        assert!(!txid.is_empty());
+        assert!(!partida_ui_enabled(&project, 2));
     }
 }

@@ -291,7 +291,9 @@ pub fn partida_escrow_from_body(
             let a = crate::convert::parse_btc_pk(pk)?;
             arbiter_escrow(&m, &c, &a, spec.plazo_unix, window, EscrowKind::Partida)
         }
-        DisputePolicy::FeeBurn { t2, .. } => fee_burn_escrow(&m, &c, *t2, EscrowKind::Partida),
+        DisputePolicy::FeeBurn { t2, .. } => {
+            fee_burn_escrow(&m, &c, *t2, EscrowKind::Partida, spec.id)
+        }
         _ => partida_descriptor(&m, &c, spec.plazo_unix),
     }
 }
@@ -307,7 +309,7 @@ pub fn bond_escrow_from_body(
             let a = crate::convert::parse_btc_pk(pk)?;
             arbiter_escrow(&m, &c, &a, body.t_project, window, EscrowKind::Bond)
         }
-        DisputePolicy::FeeBurn { t2, .. } => fee_burn_escrow(&m, &c, *t2, EscrowKind::Bond),
+        DisputePolicy::FeeBurn { t2, .. } => fee_burn_escrow(&m, &c, *t2, EscrowKind::Bond, 0),
         _ => bond_descriptor(&m, &c, body.t_project),
     }
 }
@@ -316,15 +318,21 @@ pub fn bond_escrow_from_body(
 ///
 /// The no-agreement path is a **presigned** key-path chain (see `fee_burn`),
 /// not a script anyone can take. Coop close is the same key-path.
+///
+/// `output_id` must differ per on-chain output (0 = boleta, partida id for
+/// each partida) so each UTXO gets its own Taproot address. The tagged merkle
+/// root is not a spendable leaf; it only unique-tweaks the key-path.
 pub fn fee_burn_escrow(
     mandante: &PublicKey,
     contratista: &PublicKey,
     horizon: u32,
     kind: EscrowKind,
+    output_id: u32,
 ) -> Result<Escrow, Error> {
     let secp = Secp256k1::new();
     let internal = musig_internal_key(mandante, contratista)?;
-    let spend_info = TaprootSpendInfo::new_key_spend(&secp, internal, None);
+    let tag = fee_burn_output_tag(kind, output_id);
+    let spend_info = TaprootSpendInfo::new_key_spend(&secp, internal, Some(tag));
     Ok(Escrow {
         kind,
         spend_info,
@@ -335,7 +343,23 @@ pub fn fee_burn_escrow(
     })
 }
 
-pub fn fee_burn_escrow_from_body(body: &ContractBody, kind: EscrowKind) -> Result<Escrow, Error> {
+fn fee_burn_output_tag(kind: EscrowKind, output_id: u32) -> bitcoin::taproot::TapNodeHash {
+    use bitcoin::hashes::{sha256, Hash as _};
+    let mut data = Vec::from(&b"hbp-feeburn-v1"[..]);
+    data.push(match kind {
+        EscrowKind::Bond => 0,
+        EscrowKind::Partida => 1,
+        EscrowKind::Mad => 2,
+    });
+    data.extend_from_slice(&output_id.to_le_bytes());
+    bitcoin::taproot::TapNodeHash::from_byte_array(sha256::Hash::hash(&data).to_byte_array())
+}
+
+pub fn fee_burn_escrow_from_body(
+    body: &ContractBody,
+    kind: EscrowKind,
+    output_id: u32,
+) -> Result<Escrow, Error> {
     let (t1, t2) = body
         .dispute
         .fee_burn_deadlines()
@@ -343,7 +367,7 @@ pub fn fee_burn_escrow_from_body(body: &ContractBody, kind: EscrowKind) -> Resul
     body.dispute.validate()?;
     let _ = t1;
     let (m, c) = keys_from_body(body)?;
-    fee_burn_escrow(&m, &c, t2, kind)
+    fee_burn_escrow(&m, &c, t2, kind, output_id)
 }
 
 /// Combined MAD stake: key path MuSig2 (return/split); after T only NUMS (burn).

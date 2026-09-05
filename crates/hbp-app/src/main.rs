@@ -6,23 +6,28 @@ use std::time::Duration;
 
 use eframe::egui::{self, Color32, RichText, Vec2};
 use hbp_app::{
-    apply_incoming_quote, apply_verified_p1_funding, build_p1_funding_psbt, coin_from_fields,
-    combine_signed_funding, completed_steps, contratista_accept, coop_finish, coop_propose,
-    coop_sign, default_works_root, draft_equal_stages, draft_quote, escrow_addrs, export_backup,
-    format_unix_local_es, hex_artifact, hex_from_artifact, import_backup, import_signed,
-    lock_quote_if_ready, mandante_commit, next_step, parse_fee, partida_ui_enabled, party_role,
-    pay_stage, preview_quote_sats, price_minor_from_major, psbt_to_hex, quote_fully_signed,
-    read_backup_file, sign_our_quote, spanish_now, validate_deadline_order, write_backup_file,
+    apply_incoming_quote, apply_verified_p1_funding, build_our_partial, classify_funding_psbt,
+    coin_from_watched, complete_incoming_partial, completed_steps, contratista_accept, coop_finish,
+    coop_propose, coop_sign, default_works_root, draft_equal_stages, draft_quote, escrow_addrs,
+    export_backup, format_unix_local_es, funding_wire, funding_wire_hex, hex_artifact,
+    hex_from_artifact, import_backup, import_signed, lock_quote_if_ready, mandante_commit,
+    next_step, our_funding_need, parse_fee, parse_psbt, partida_ui_enabled, party_role, pay_stage,
+    preview_quote_sats, price_minor_from_major, psbt_to_hex, quote_fully_signed, read_backup_file,
+    sign_our_quote, spanish_now, suggest_watched, validate_deadline_order, write_backup_file,
     DeadlineFields, NextKind, PayStage, PayUiDraft, UiPrefs, WorkEntry, WorkProgress, WorkStore,
-    ART_COIN, ART_COOP, ART_PSBT, ART_TX, MONTHS_ES,
+    ART_COOP, ART_ONESIG, ART_PARTIAL, ART_PSBT, ART_TX, MONTHS_ES,
 };
-use hbp_bitcoin::{address_at, sign_body, CoopFile, Identity, OfferedCoin};
+use hbp_bitcoin::{
+    address_at, default_esplora_urls, scan_watch, sign_body, CoopFile, Identity, OfferedCoin,
+    WatchScan,
+};
 use hbp_core::{
     bond_minor, format_major_amount, parse_major_amount, Offer, Quote, Role, SignedContract, Unit,
     DEFAULT_BOND_BPS, PRODUCT_NETWORK,
 };
 use hbp_net::{
-    announce_topics, bring_up_tor_with_hint, env_bootstrap_peers, literal_topic,
+    announce_topics, bring_up_tor_with_hint, env_bootstrap_peers, esplora_address_txs,
+    esplora_address_utxos, esplora_try_bases, esplora_tx_hex, find_dual_amount_txid, literal_topic,
     parse_bootstrap_list, preview_sats, quote_btc, FxQuote, NetMessage, OverlayConfig,
     OverlayHandle, PeerAddr, TorConfig, TorRuntime, WorkAnnounce,
 };
@@ -37,6 +42,8 @@ enum JobEvent {
     /// Background Hello / retry. Must not clear a user-facing `busy` job.
     QuietDeliver(Result<String, String>),
     FxDone(Result<FxQuote, String>),
+    ScanDone(Result<(WatchScan, String), String>),
+    ChainDone(Result<Option<String>, String>),
 }
 
 fn main() -> eframe::Result<()> {
@@ -110,6 +117,11 @@ struct App {
     help_open: bool,
     search_hits: Vec<WorkAnnounce>,
     pay: PayUiDraft,
+    watch_scan: Option<WatchScan>,
+    esplora_base: String,
+    pay_chain_line: String,
+    last_chain_poll: std::time::Instant,
+    chain_busy: bool,
 }
 
 impl App {
@@ -166,6 +178,11 @@ impl App {
             help_open: false,
             search_hits: Vec::new(),
             pay: PayUiDraft::default(),
+            watch_scan: None,
+            esplora_base: String::new(),
+            pay_chain_line: String::new(),
+            last_chain_poll: std::time::Instant::now(),
+            chain_busy: false,
         }
     }
 
@@ -340,6 +357,30 @@ impl App {
                     self.fx_line = format!(
                         "Sin precio ahora ({e}). Sigue igual: el trato es en la moneda de la obra."
                     );
+                }
+                JobEvent::ScanDone(Ok((scan, base))) => {
+                    self.busy = None;
+                    self.esplora_base = base.clone();
+                    let n = scan.utxos.len();
+                    self.watch_scan = Some(scan);
+                    self.note(format!("Encontré {n} moneda(s) en Signet ({base})."));
+                }
+                JobEvent::ScanDone(Err(e)) => {
+                    self.busy = None;
+                    self.fail(e);
+                }
+                JobEvent::ChainDone(Ok(Some(hex))) => {
+                    self.chain_busy = false;
+                    self.pay.funding_tx_hex = hex;
+                    self.pay_note_chain_found();
+                }
+                JobEvent::ChainDone(Ok(None)) => {
+                    self.chain_busy = false;
+                    self.pay_chain_line = "Esperando el fondeo en Signet…".into();
+                }
+                JobEvent::ChainDone(Err(e)) => {
+                    self.chain_busy = false;
+                    self.pay_chain_line = format!("Esplora: {e}");
                 }
             }
             if n >= 16 {
@@ -763,20 +804,21 @@ impl App {
             }
             return;
         }
-        if let Some(hex) = hex_from_artifact(&json) {
-            if name.contains("signed") && name.contains("psbt") {
-                if self.pay.signed_psbt_a.trim().is_empty() {
-                    self.pay.signed_psbt_a = hex;
-                } else {
-                    self.pay.signed_psbt_b = hex;
-                }
-                self.note("Llegó un PSBT firmado. Combínalo en Pago.");
+        if let Some(hex) = funding_wire_hex(&json).or_else(|| hex_from_artifact(&json)) {
+            if name.contains("onesig") || (name.contains("signed") && name.contains("psbt")) {
+                self.pay.onesig_hex = hex;
+                self.note(
+                    "Llegó un PSBT con una firma. Ábrelo en Electrum / Sparrow, firma y difunde.",
+                );
+            } else if name.contains("partial") {
+                self.pay.unsigned_psbt_hex = hex;
+                self.note("Llegó un PSBT parcial. Completa con tu moneda en Pago.");
             } else if name.contains("unsigned") || name.contains("psbt") {
                 self.pay.unsigned_psbt_hex = hex;
-                self.note("Llegó el PSBT sin firmar. Fírmalo en Sparrow / Electrum.");
+                self.note("Llegó el PSBT completo. Expórtalo a Electrum / Sparrow para firmar.");
             } else {
                 self.pay.funding_tx_hex = hex;
-                self.note("Llegó el tx de fondeo. Verifícalo en Pago.");
+                self.note("Llegó el tx de fondeo. Lo verifico si hace falta.");
             }
             let _ = self.store.save_pay_draft(&slug, &self.pay);
             self.tab = MainTab::Pago;
@@ -810,8 +852,11 @@ impl eframe::App for App {
                     self.peer_onion.clear();
                 }
                 self.pay = self.store.load_pay_draft(&slug).unwrap_or_default();
+                self.watch_scan = None;
+                self.pay_chain_line.clear();
             } else {
                 self.pay = PayUiDraft::default();
+                self.watch_scan = None;
             }
             self.last_slug = self.selected.clone();
         }
@@ -823,6 +868,7 @@ impl eframe::App for App {
             return;
         }
 
+        self.maybe_poll_funding_chain();
         self.show_chrome(ctx);
         self.show_log_panel(ctx);
 
@@ -1977,91 +2023,217 @@ impl App {
         project: &hbp_core::Project,
     ) {
         let dark = self.prefs.dark;
-        let coins = self.store.load_pay_coins(slug).unwrap_or_default();
+        let role = match party_role(id, &project.contract.body) {
+            Ok(r) => r,
+            Err(e) => {
+                ui.colored_label(theme_red(), e.to_string());
+                return;
+            }
+        };
+        let fee = parse_fee(&self.pay.fee_sats).unwrap_or(500);
+        let need = our_funding_need(project, role, fee).ok();
+        let has_watch = matches!(
+            self.store.load_watch(slug, Some(self.passphrase.as_str())),
+            Ok(Some(_))
+        );
+        let our_coin = self.our_saved_coin(slug, role);
+        let psbt = self.pay.unsigned_psbt_hex.trim().to_string();
+        let class = if psbt.is_empty() {
+            None
+        } else {
+            classify_funding_psbt(&psbt).ok()
+        };
+
         panel_card(ui, dark, |ui| {
             ui.label(RichText::new("Fondeo — boleta + partida 1").strong());
             if let Ok((bond, p1)) = escrow_addrs(project) {
                 ui.label(RichText::new(format!("Boleta: {bond}")).small());
                 ui.label(RichText::new(format!("Partida 1: {p1}")).small());
+                if bond == p1 {
+                    ui.label(
+                        RichText::new("Error: las dos direcciones salieron iguales.")
+                            .color(theme_red()),
+                    );
+                }
             }
-            ui.label(
-                RichText::new(
-                    "Pega un UTXO Signet por lado (txid:vout, sats, dirección, cambio). Watch-only no firma.",
-                )
-                .small()
-                .weak(),
-            );
             ui.horizontal(|ui| {
                 ui.label("Comisión");
                 show_field(ui, &mut self.pay.fee_sats, "500", dark, 80.0);
                 ui.label(RichText::new("sats (sale del cambio)").small().weak());
+                if let Some(n) = need {
+                    ui.label(RichText::new(format!("Tu parte ≈ {n} sats")).small());
+                }
             });
+
+            if !has_watch {
+                ui.label(
+                    RichText::new("Primero guarda tu xpub / vpub (watch-only, no se envía).")
+                        .color(accent_amber(dark)),
+                );
+                return;
+            }
 
             ui.add_space(4.0);
-            ui.label(RichText::new("Mandante").small().strong());
-            self.pay_coin_fields(ui, true, coins.mandante.as_ref());
-            ui.label(RichText::new("Contratista (boleta)").small().strong());
-            self.pay_coin_fields(ui, false, coins.contratista.as_ref());
-
-            ui.add_space(6.0);
-            ui.horizontal(|ui| {
-                if ui.button("Guardar mi moneda").clicked() {
-                    self.pay_save_my_coin(slug, id, project);
+            if primary_btn(ui, "Buscar mis monedas", dark).clicked() {
+                self.pay_scan_coins(slug);
+            }
+            if let Some(scan) = &self.watch_scan {
+                if scan.utxos.is_empty() {
+                    ui.label(
+                        RichText::new("No hay UTXO en esta xpub. Recibe Signet y vuelve a buscar.")
+                            .weak(),
+                    );
+                } else {
+                    ui.label(RichText::new("Elige una moneda (la app sugiere la justa).").small());
+                    if let Some(n) = need {
+                        if let Some(sug) = suggest_watched(scan, n) {
+                            ui.label(
+                                RichText::new(format!(
+                                    "Sugerida: {} · {} sats{}",
+                                    sug.outpoint,
+                                    sug.sats,
+                                    if sug.confirmed {
+                                        ""
+                                    } else {
+                                        " (sin confirmar)"
+                                    }
+                                ))
+                                .small()
+                                .weak(),
+                            );
+                        }
+                    }
+                    let change = scan.change.clone();
+                    let utxos = scan.utxos.clone();
+                    for u in &utxos {
+                        let selected = self.pay.selected_outpoint == u.outpoint
+                            || our_coin
+                                .as_ref()
+                                .map(|c| c.outpoint == u.outpoint)
+                                .unwrap_or(false);
+                        let label = format!(
+                            "{} · {} sats{}",
+                            u.outpoint,
+                            u.sats,
+                            if u.confirmed { "" } else { " · mempool" }
+                        );
+                        if ui.selectable_label(selected, label).clicked() {
+                            self.pay_take_utxo(slug, role, u, &change);
+                        }
+                    }
                 }
-                if ui.button("Enviar mi moneda").clicked() {
-                    self.pay_send_my_coin(slug, id, project);
-                }
-            });
-            ui.horizontal(|ui| {
-                if primary_btn(ui, "Armar PSBT (boleta + P1)", dark).clicked() {
-                    self.pay_build_psbt(slug, project);
-                }
-                if ui.button("Enviar PSBT").clicked() {
-                    self.pay_send_psbt(slug);
-                }
-            });
-
-            if !self.pay.unsigned_psbt_hex.is_empty() {
-                ui.label(RichText::new("PSBT sin firmar (hex) — cada uno firma SU input").small());
-                show_multiline(
-                    ui,
-                    &mut self.pay.unsigned_psbt_hex,
-                    "hex…",
-                    dark,
-                    ui.available_width().min(720.0),
-                    3,
+            }
+            if let Some(c) = &our_coin {
+                ui.label(
+                    RichText::new(format!("Usando {} · {} sats", c.outpoint, c.sats))
+                        .small()
+                        .color(accent_green(dark)),
                 );
             }
-            ui.label(RichText::new("PSBT firmados (pega hex o base64)").small());
-            show_multiline(
-                ui,
-                &mut self.pay.signed_psbt_a,
-                "firmado A",
-                dark,
-                ui.available_width().min(720.0),
-                2,
-            );
-            show_multiline(
-                ui,
-                &mut self.pay.signed_psbt_b,
-                "firmado B",
-                dark,
-                ui.available_width().min(720.0),
-                2,
-            );
-            ui.horizontal(|ui| {
-                if ui.button("Combinar y extraer tx").clicked() {
-                    self.pay_combine(slug);
+
+            ui.add_space(8.0);
+            match class {
+                None if our_coin.is_some() => {
+                    ui.label("Arma un PSBT solo con tu input y mándalo al otro.");
+                    if primary_btn(ui, "Armar y enviar parcial", dark).clicked() {
+                        self.pay_start_partial(slug, role, project);
+                    }
                 }
-                if primary_btn(ui, "Verificar fondeo", dark).clicked() {
+                Some((1, _)) => {
+                    let ours = our_coin
+                        .as_ref()
+                        .and_then(|c| {
+                            classify_funding_psbt(&psbt)
+                                .ok()
+                                .map(|_| c.outpoint.clone())
+                        })
+                        .unwrap_or_default();
+                    let we_started = parse_psbt_has_outpoint(&psbt, &ours);
+                    if we_started {
+                        ui.label(
+                            RichText::new("Esperando que el otro complete el PSBT.")
+                                .color(accent_amber(dark)),
+                        );
+                    } else if our_coin.is_some() {
+                        ui.label("Llegó su parcial. Añade tu moneda.");
+                        if primary_btn(ui, "Completar y devolver", dark).clicked() {
+                            self.pay_complete_partial(slug, role, project);
+                        }
+                    } else {
+                        ui.label("Llegó un parcial. Elige tu moneda arriba.");
+                    }
+                }
+                Some((n, 0)) if n >= 2 => {
+                    ui.label("PSBT completo (2 inputs). Expórtalo, fírmalo en Electrum / Sparrow.");
+                    ui.label(RichText::new("Hex / base64 — no difundir todavía").small());
+                    show_multiline(
+                        ui,
+                        &mut self.pay.unsigned_psbt_hex,
+                        "PSBT…",
+                        dark,
+                        ui.available_width().min(720.0),
+                        3,
+                    );
+                    if primary_btn(ui, "Tengo 1 firma — enviarla", dark).clicked() {
+                        self.pay_send_onesig_from_box(slug, role, fee);
+                    }
+                    ui.label(RichText::new("Pega aquí el PSBT con TU firma").small());
+                    show_multiline(
+                        ui,
+                        &mut self.pay.onesig_hex,
+                        "PSBT firmado…",
+                        dark,
+                        ui.available_width().min(720.0),
+                        2,
+                    );
+                    if ui.button("Enviar PSBT de 1 firma").clicked() {
+                        self.pay_send_onesig(slug, role, fee);
+                    }
+                }
+                Some((_, sigs)) if sigs >= 1 => {
+                    ui.label("Este PSBT ya tiene firma(s). El otro firma y difunde en Electrum.");
+                    if primary_btn(ui, "Enviar al otro", dark).clicked() {
+                        self.pay_send_onesig(slug, role, fee);
+                    }
+                }
+                _ => {
+                    ui.label(
+                        RichText::new("Elige una moneda y arma el parcial, o espera el del otro.")
+                            .weak(),
+                    );
+                }
+            }
+
+            if !self.pay.onesig_hex.is_empty() && class.map(|c| c.0).unwrap_or(0) < 2 {
+                ui.label("PSBT de 1 firma listo para Electrum (el otro firma y difunde).");
+                show_multiline(
+                    ui,
+                    &mut self.pay.onesig_hex,
+                    "PSBT…",
+                    dark,
+                    ui.available_width().min(720.0),
+                    2,
+                );
+            }
+
+            ui.add_space(8.0);
+            ui.label(RichText::new("En cadena (Esplora)").small().strong());
+            if !self.pay_chain_line.is_empty() {
+                ui.label(RichText::new(&self.pay_chain_line).color(accent_amber(dark)));
+            }
+            if self.chain_busy {
+                ui.spinner();
+                ui.label("Consultando Signet…");
+            }
+            ui.horizontal(|ui| {
+                if ui.button("Buscar fondeo ahora").clicked() {
+                    self.pay_poll_chain(slug, true);
+                }
+                if ui.small_button("Verificar hex (rescate)").clicked() {
                     self.pay_verify(slug);
                 }
-                if ui.button("Enviar tx").clicked() {
-                    self.pay_send_tx(slug);
-                }
             });
-            if !self.pay.funding_tx_hex.is_empty() {
-                ui.label(RichText::new("Tx de fondeo (hex) — difúndelo en Signet").small());
+            ui.collapsing("Avanzado: pegar tx hex", |ui| {
                 show_multiline(
                     ui,
                     &mut self.pay.funding_tx_hex,
@@ -2070,37 +2242,238 @@ impl App {
                     ui.available_width().min(720.0),
                     2,
                 );
-            }
+            });
         });
     }
 
-    fn pay_coin_fields(&mut self, ui: &mut egui::Ui, mandante: bool, have: Option<&OfferedCoin>) {
-        let dark = self.prefs.dark;
-        if let Some(c) = have {
-            ui.label(
-                RichText::new(format!("Guardada: {} · {} sats", c.outpoint, c.sats))
-                    .small()
-                    .color(accent_green(dark)),
-            );
+    fn our_saved_coin(&self, slug: &str, role: Role) -> Option<OfferedCoin> {
+        let coins = self.store.load_pay_coins(slug).ok()?;
+        match role {
+            Role::Mandante => coins.mandante,
+            Role::Contratista => coins.contratista,
         }
-        ui.horizontal(|ui| {
-            if mandante {
-                show_field(ui, &mut self.pay.m_outpoint, "txid:vout", dark, 260.0);
-                show_field(ui, &mut self.pay.m_sats, "sats", dark, 80.0);
-            } else {
-                show_field(ui, &mut self.pay.c_outpoint, "txid:vout", dark, 260.0);
-                show_field(ui, &mut self.pay.c_sats, "sats", dark, 80.0);
+    }
+
+    fn pay_take_utxo(
+        &mut self,
+        slug: &str,
+        role: Role,
+        utxo: &hbp_bitcoin::WatchedUtxo,
+        change: &str,
+    ) {
+        match coin_from_watched(role, utxo, change) {
+            Ok(mut coin) => {
+                if let Some(base) = self.esplora_base_or_default() {
+                    let socks = self.socks();
+                    let txid = utxo.outpoint.split(':').next().unwrap_or("").to_string();
+                    if let Ok(hex) = esplora_tx_hex(&base, socks, &txid) {
+                        coin.prev_tx_hex = Some(hex);
+                    }
+                }
+                if let Err(e) = self.store.save_offered_coin(slug, &coin) {
+                    return self.fail(e);
+                }
+                self.pay.selected_outpoint = utxo.outpoint.clone();
+                let _ = self.store.save_pay_draft(slug, &self.pay);
+                self.note(format!("Elegí {} ({} sats).", utxo.outpoint, utxo.sats));
             }
+            Err(e) => self.fail(e),
+        }
+    }
+
+    fn esplora_base_or_default(&self) -> Option<String> {
+        if !self.esplora_base.trim().is_empty() {
+            return Some(self.esplora_base.trim().trim_end_matches('/').to_string());
+        }
+        default_esplora_urls(PRODUCT_NETWORK)
+            .first()
+            .map(|s| (*s).to_string())
+    }
+
+    fn pay_scan_coins(&mut self, slug: &str) {
+        let acc = match self.store.load_watch(slug, Some(self.passphrase.as_str())) {
+            Ok(Some(a)) => a,
+            Ok(None) => return self.fail("Guarda primero la xpub / vpub."),
+            Err(e) => return self.fail(e),
+        };
+        let socks = self.socks();
+        let urls: Vec<String> = default_esplora_urls(PRODUCT_NETWORK)
+            .iter()
+            .map(|s| (*s).to_string())
+            .collect();
+        self.start_job("buscando monedas en Signet", move |tx| {
+            let refs: Vec<&str> = urls.iter().map(|s| s.as_str()).collect();
+            let r = (|| {
+                let base = esplora_try_bases(&refs, socks).map_err(|e| e.to_string())?;
+                let b = base.clone();
+                let scan = scan_watch(&acc, |addr| {
+                    let list = esplora_address_utxos(&b, socks, &addr.to_string())
+                        .map_err(|e| hbp_bitcoin::Error::msg(e.to_string()))?;
+                    list.into_iter()
+                        .map(|u| {
+                            let op = format!("{}:{}", u.txid, u.vout)
+                                .parse()
+                                .map_err(|e| hbp_bitcoin::Error::msg(format!("{e}")))?;
+                            Ok((op, u.sats, u.confirmed))
+                        })
+                        .collect()
+                })
+                .map_err(|e| e.to_string())?;
+                Ok((scan, base))
+            })();
+            let _ = tx.send(JobEvent::ScanDone(r));
         });
-        ui.horizontal(|ui| {
-            if mandante {
-                show_field(ui, &mut self.pay.m_addr, "dirección del UTXO", dark, 280.0);
-                show_field(ui, &mut self.pay.m_change, "cambio", dark, 280.0);
-            } else {
-                show_field(ui, &mut self.pay.c_addr, "dirección del UTXO", dark, 280.0);
-                show_field(ui, &mut self.pay.c_change, "cambio", dark, 280.0);
+    }
+
+    fn pay_start_partial(&mut self, slug: &str, role: Role, project: &hbp_core::Project) {
+        let Some(coin) = self.our_saved_coin(slug, role) else {
+            return self.fail("Elige una moneda de la lista.");
+        };
+        let fee = match parse_fee(&self.pay.fee_sats) {
+            Ok(f) => f,
+            Err(e) => return self.fail(e),
+        };
+        match build_our_partial(project, role, &coin, fee) {
+            Ok(psbt) => {
+                self.pay.unsigned_psbt_hex = psbt_to_hex(&psbt);
+                let _ = self.store.save_pay_draft(slug, &self.pay);
+                self.note("Parcial armado. Lo mando; el otro añade su moneda.");
+                self.spawn_deliver(
+                    NetMessage::Artifact {
+                        name: ART_PARTIAL.into(),
+                        json: funding_wire(&self.pay.unsigned_psbt_hex, role, fee),
+                    },
+                    "PSBT parcial enviado.",
+                );
             }
+            Err(e) => self.fail(e),
+        }
+    }
+
+    fn pay_complete_partial(&mut self, slug: &str, role: Role, project: &hbp_core::Project) {
+        let Some(coin) = self.our_saved_coin(slug, role) else {
+            return self.fail("Elige una moneda de la lista.");
+        };
+        let fee = match parse_fee(&self.pay.fee_sats) {
+            Ok(f) => f,
+            Err(e) => return self.fail(e),
+        };
+        match complete_incoming_partial(project, role, &coin, fee, &self.pay.unsigned_psbt_hex) {
+            Ok(psbt) => {
+                self.pay.unsigned_psbt_hex = psbt_to_hex(&psbt);
+                let _ = self.store.save_pay_draft(slug, &self.pay);
+                self.note("PSBT completo (2 inputs). Lo devuelvo. Ahora se firma fuera.");
+                self.spawn_deliver(
+                    NetMessage::Artifact {
+                        name: ART_PSBT.into(),
+                        json: funding_wire(&self.pay.unsigned_psbt_hex, role, fee),
+                    },
+                    "PSBT completo enviado.",
+                );
+            }
+            Err(e) => self.fail(e),
+        }
+    }
+
+    fn pay_send_onesig_from_box(&mut self, slug: &str, role: Role, fee: u64) {
+        if self.pay.onesig_hex.trim().is_empty() {
+            self.pay.onesig_hex = self.pay.unsigned_psbt_hex.clone();
+        }
+        self.pay_send_onesig(slug, role, fee);
+    }
+
+    fn pay_send_onesig(&mut self, slug: &str, role: Role, fee: u64) {
+        let hex = if !self.pay.onesig_hex.trim().is_empty() {
+            self.pay.onesig_hex.clone()
+        } else {
+            self.pay.unsigned_psbt_hex.clone()
+        };
+        if hex.trim().is_empty() {
+            return self.fail("Pega el PSBT firmado por ti.");
+        }
+        self.pay.onesig_hex = hex.clone();
+        let _ = self.store.save_pay_draft(slug, &self.pay);
+        self.spawn_deliver(
+            NetMessage::Artifact {
+                name: ART_ONESIG.into(),
+                json: funding_wire(&hex, role, fee),
+            },
+            "PSBT de 1 firma enviado. El otro firma y difunde en Electrum.",
+        );
+        self.pay_chain_line = "Esperando el fondeo en Signet…".into();
+    }
+
+    fn maybe_poll_funding_chain(&mut self) {
+        if self.tab != MainTab::Pago || self.chain_busy {
+            return;
+        }
+        let Some(slug) = self.selected.clone() else {
+            return;
+        };
+        let Ok(project) = self.store.ensure_pay_project(&slug) else {
+            return;
+        };
+        if !matches!(pay_stage(Some(&project), None), PayStage::FundBondP1) {
+            return;
+        }
+        if project.quote.is_none() {
+            return;
+        }
+        if self.last_chain_poll.elapsed() < std::time::Duration::from_secs(8) {
+            return;
+        }
+        self.pay_poll_chain(&slug, false);
+    }
+
+    fn pay_poll_chain(&mut self, slug: &str, force: bool) {
+        if self.chain_busy && !force {
+            return;
+        }
+        let project = match self.store.ensure_pay_project(slug) {
+            Ok(p) => p,
+            Err(_) => return,
+        };
+        let quote = match &project.quote {
+            Some(q) if quote_fully_signed(q) => q.clone(),
+            _ => return,
+        };
+        let Ok((bond_addr, _)) = escrow_addrs(&project) else {
+            return;
+        };
+        let socks = self.socks();
+        let urls: Vec<String> = if !self.esplora_base.is_empty() {
+            vec![self.esplora_base.clone()]
+        } else {
+            default_esplora_urls(PRODUCT_NETWORK)
+                .iter()
+                .map(|s| (*s).to_string())
+                .collect()
+        };
+        let bond_sats = quote.bond_sats;
+        let p1_sats = quote.partida_sats(1).unwrap_or(0);
+        self.chain_busy = true;
+        self.last_chain_poll = std::time::Instant::now();
+        self.spawn_quiet(move |tx| {
+            let refs: Vec<&str> = urls.iter().map(|s| s.as_str()).collect();
+            let r = (|| {
+                let base = esplora_try_bases(&refs, socks).map_err(|e| e.to_string())?;
+                let txs =
+                    esplora_address_txs(&base, socks, &bond_addr).map_err(|e| e.to_string())?;
+                let Some(txid) = find_dual_amount_txid(&txs, bond_sats, p1_sats) else {
+                    return Ok(None);
+                };
+                let hex = esplora_tx_hex(&base, socks, txid).map_err(|e| e.to_string())?;
+                Ok(Some(hex))
+            })();
+            let _ = tx.send(JobEvent::ChainDone(r));
         });
+    }
+
+    fn pay_note_chain_found(&mut self) {
+        let Some(slug) = self.selected.clone() else {
+            return;
+        };
+        self.pay_verify(&slug);
     }
 
     fn show_pay_coop(
@@ -2252,126 +2625,13 @@ impl App {
         }
     }
 
-    fn my_coin_fields(&self, role: Role) -> Result<OfferedCoin, String> {
-        match role {
-            Role::Mandante => coin_from_fields(
-                role,
-                &self.pay.m_outpoint,
-                &self.pay.m_sats,
-                &self.pay.m_addr,
-                &self.pay.m_change,
-            )
-            .map_err(|e| e.to_string()),
-            Role::Contratista => coin_from_fields(
-                role,
-                &self.pay.c_outpoint,
-                &self.pay.c_sats,
-                &self.pay.c_addr,
-                &self.pay.c_change,
-            )
-            .map_err(|e| e.to_string()),
-        }
-    }
-
-    fn pay_save_my_coin(&mut self, slug: &str, id: &Identity, project: &hbp_core::Project) {
-        let role = match party_role(id, &project.contract.body) {
-            Ok(r) => r,
-            Err(e) => return self.fail(e),
-        };
-        match self.my_coin_fields(role) {
-            Ok(coin) => match self.store.save_offered_coin(slug, &coin) {
-                Ok(()) => {
-                    let _ = self.store.save_pay_draft(slug, &self.pay);
-                    self.note("Moneda guardada aquí. No es la xpub.");
-                }
-                Err(e) => self.fail(e),
-            },
-            Err(e) => self.fail(e),
-        }
-    }
-
-    fn pay_send_my_coin(&mut self, slug: &str, id: &Identity, project: &hbp_core::Project) {
-        self.pay_save_my_coin(slug, id, project);
-        let role = match party_role(id, &project.contract.body) {
-            Ok(r) => r,
-            Err(e) => return self.fail(e),
-        };
-        let coins = self.store.load_pay_coins(slug).unwrap_or_default();
-        let coin = match role {
-            Role::Mandante => coins.mandante,
-            Role::Contratista => coins.contratista,
-        };
-        let Some(coin) = coin else {
-            return;
-        };
-        let json = match serde_json::to_value(&coin) {
-            Ok(v) => v,
-            Err(e) => return self.fail(e),
-        };
-        self.spawn_deliver(
-            NetMessage::Artifact {
-                name: ART_COIN.into(),
-                json,
-            },
-            "Moneda enviada (un UTXO, no la xpub).",
-        );
-    }
-
-    fn pay_build_psbt(&mut self, slug: &str, project: &hbp_core::Project) {
-        let coins = self.store.load_pay_coins(slug).unwrap_or_default();
-        let (Some(m), Some(c)) = (coins.mandante, coins.contratista) else {
-            return self.fail("Faltan las dos monedas (mandante y contratista).");
-        };
-        let fee = match parse_fee(&self.pay.fee_sats) {
-            Ok(f) => f,
-            Err(e) => return self.fail(e),
-        };
-        match build_p1_funding_psbt(project, &m, &c, fee) {
-            Ok(psbt) => {
-                self.pay.unsigned_psbt_hex = psbt_to_hex(&psbt);
-                let _ = self.store.save_pay_draft(slug, &self.pay);
-                self.note(
-                    "PSBT listo. Cada uno firma SU input en Sparrow / Electrum. No lo difundan aún.",
-                );
-            }
-            Err(e) => self.fail(e),
-        }
-    }
-
-    fn pay_send_psbt(&mut self, slug: &str) {
-        if self.pay.unsigned_psbt_hex.trim().is_empty() {
-            return self.fail("Primero arma el PSBT.");
-        }
-        let _ = self.store.save_pay_draft(slug, &self.pay);
-        self.spawn_deliver(
-            NetMessage::Artifact {
-                name: ART_PSBT.into(),
-                json: hex_artifact(&self.pay.unsigned_psbt_hex),
-            },
-            "PSBT enviado.",
-        );
-    }
-
-    fn pay_combine(&mut self, slug: &str) {
-        match combine_signed_funding(&[&self.pay.signed_psbt_a, &self.pay.signed_psbt_b]) {
-            Ok(hex) => {
-                self.pay.funding_tx_hex = hex;
-                let _ = self.store.save_pay_draft(slug, &self.pay);
-                self.note(
-                    "Tx armado. Verifícalo y luego difúndelo en Signet (Sparrow / Electrum).",
-                );
-            }
-            Err(e) => self.fail(e),
-        }
-    }
-
     fn pay_verify(&mut self, slug: &str) {
         let mut project = match self.store.ensure_pay_project(slug) {
             Ok(p) => p,
             Err(e) => return self.fail(e),
         };
         if self.pay.funding_tx_hex.trim().is_empty() {
-            return self.fail("Falta el hex del tx (combina los PSBT o pégalo).");
+            return self.fail("Aún no veo el tx. Espera Esplora o pega el hex.");
         }
         match apply_verified_p1_funding(&mut project, &self.pay.funding_tx_hex) {
             Ok(txid) => {
@@ -2379,26 +2639,11 @@ impl App {
                     return self.fail(e);
                 }
                 let _ = self.store.save_pay_draft(slug, &self.pay);
-                self.note(format!(
-                    "Fondeo verificado. txid {txid}. Partida 1 en curso."
-                ));
+                self.pay_chain_line.clear();
+                self.note(format!("Fondeo visto. txid {txid}. Partida 1 en curso."));
             }
             Err(e) => self.fail(e),
         }
-    }
-
-    fn pay_send_tx(&mut self, slug: &str) {
-        if self.pay.funding_tx_hex.trim().is_empty() {
-            return self.fail("No hay tx para enviar.");
-        }
-        let _ = self.store.save_pay_draft(slug, &self.pay);
-        self.spawn_deliver(
-            NetMessage::Artifact {
-                name: ART_TX.into(),
-                json: hex_artifact(&self.pay.funding_tx_hex),
-            },
-            "Tx de fondeo enviado al otro.",
-        );
     }
 
     fn pay_import_coop_paste(&mut self, slug: &str) {
@@ -3237,6 +3482,20 @@ fn paint_widgets(v: &mut egui::Visuals, fg: Color32) {
     v.widgets.hovered.fg_stroke.color = fg;
     v.widgets.active.fg_stroke.color = fg;
     v.widgets.open.fg_stroke.color = fg;
+}
+
+fn parse_psbt_has_outpoint(raw: &str, outpoint: &str) -> bool {
+    let Ok(psbt) = parse_psbt(raw) else {
+        return false;
+    };
+    let want = outpoint.trim();
+    if want.is_empty() {
+        return false;
+    }
+    psbt.unsigned_tx
+        .input
+        .iter()
+        .any(|i| i.previous_output.to_string() == want)
 }
 
 fn apply_theme(ctx: &egui::Context, dark: bool) {

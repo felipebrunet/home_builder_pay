@@ -635,11 +635,16 @@ fn funding_mad_amounts_exact() {
 }
 
 #[test]
-fn funding_fee_burn_shared_script_distinguishes_by_amount() {
+fn funding_fee_burn_bond_and_partida_are_distinct() {
     let (_ms, mp, _cs, cp) = pair();
-    let bond = crate::fee_burn_escrow(&mp, &cp, 1_800_000_000, crate::EscrowKind::Bond).unwrap();
-    let part = crate::fee_burn_escrow(&mp, &cp, 1_800_000_000, crate::EscrowKind::Partida).unwrap();
-    assert_eq!(bond.script_pubkey(), part.script_pubkey());
+    let bond = crate::fee_burn_escrow(&mp, &cp, 1_800_000_000, crate::EscrowKind::Bond, 0).unwrap();
+    let part =
+        crate::fee_burn_escrow(&mp, &cp, 1_800_000_000, crate::EscrowKind::Partida, 1).unwrap();
+    assert_ne!(
+        bond.script_pubkey(),
+        part.script_pubkey(),
+        "boleta and partida 1 must be distinct Taproot addresses"
+    );
     let other = partida_descriptor(&mp, &cp, 1_710_000_000).unwrap();
     let chg = bitcoin::Address::p2tr_tweaked(other.output_key(), Network::Regtest);
     let req = crate::FundingRequest {
@@ -676,14 +681,89 @@ fn funding_fee_burn_shared_script_distinguishes_by_amount() {
         },
     )
     .unwrap();
-    let amounts: Vec<u64> = tx
+    assert_eq!(
+        tx.output
+            .iter()
+            .find(|o| o.script_pubkey == bond.script_pubkey())
+            .unwrap()
+            .value
+            .to_sat(),
+        20_000
+    );
+    assert_eq!(
+        tx.output
+            .iter()
+            .find(|o| o.script_pubkey == part.script_pubkey())
+            .unwrap()
+            .value
+            .to_sat(),
+        30_000
+    );
+}
+
+#[test]
+fn partial_then_complete_funding_psbt_balances() {
+    use hbp_core::Role;
+    let (_ms, mp, _cs, cp) = pair();
+    let bond = crate::fee_burn_escrow(&mp, &cp, 1_800_000_000, crate::EscrowKind::Bond, 0).unwrap();
+    let part =
+        crate::fee_burn_escrow(&mp, &cp, 1_800_000_000, crate::EscrowKind::Partida, 1).unwrap();
+    let (s1, a1, s2, a2) = p2wpkh_pair();
+    let m_coin = crate::FundingCoin {
+        outpoint: dummy_outpoint(),
+        sats: 100_000,
+        script_pubkey: a1.script_pubkey(),
+    };
+    let c_coin = crate::FundingCoin {
+        outpoint: OutPoint {
+            txid: Txid::from_byte_array([8u8; 32]),
+            vout: 1,
+        },
+        sats: 80_000,
+        script_pubkey: a2.script_pubkey(),
+    };
+    let mut partial = crate::build_partial_funding_psbt(
+        (bond.script_pubkey(), 20_000),
+        (part.script_pubkey(), 30_000),
+        200,
+        Role::Mandante,
+        &m_coin,
+        &a1,
+    )
+    .unwrap();
+    assert_eq!(partial.unsigned_tx.input.len(), 1);
+    crate::complete_partial_funding_psbt(
+        &mut partial,
+        (bond.script_pubkey(), 20_000),
+        (part.script_pubkey(), 30_000),
+        200,
+        Role::Contratista,
+        &c_coin,
+        &a2,
+    )
+    .unwrap();
+    assert_eq!(partial.unsigned_tx.input.len(), 2);
+    validate_funding_tx(
+        &partial.unsigned_tx,
+        &ExpectedFunding {
+            bond_script: bond.script_pubkey(),
+            bond_sats: 20_000,
+            partida_script: part.script_pubkey(),
+            partida_sats: 30_000,
+            change: vec![],
+            allow_other_outputs: true,
+        },
+    )
+    .unwrap();
+    let ins: u64 = 100_000 + 80_000;
+    let outs: u64 = partial
+        .unsigned_tx
         .output
         .iter()
-        .filter(|o| o.script_pubkey == part.script_pubkey())
         .map(|o| o.value.to_sat())
-        .collect();
-    assert!(amounts.contains(&20_000), "{amounts:?}");
-    assert!(amounts.contains(&30_000), "{amounts:?}");
+        .sum();
+    assert_eq!(ins - outs, 200);
+    let _ = (s1, s2);
 }
 
 #[test]
@@ -938,7 +1018,7 @@ fn fee_burn_t1_t2_shapes_and_coop_key_path() {
     let (m_sk, m_pk, c_sk, c_pk) = pair();
     let t1 = 1_700_000_000u32;
     let t2 = 1_800_000_000u32;
-    let escrow = crate::fee_burn_escrow(&m_pk, &c_pk, t2, crate::EscrowKind::Partida).unwrap();
+    let escrow = crate::fee_burn_escrow(&m_pk, &c_pk, t2, crate::EscrowKind::Partida, 1).unwrap();
     assert!(escrow.is_key_path_only());
     assert_output_key_matches(&escrow, &m_pk, &c_pk).unwrap();
 
@@ -1022,12 +1102,20 @@ fn fee_burn_from_body_differs_from_unwind_address() {
         work_name: "Casa".into(),
         bond_bps: 1000,
         t_project: 1_800_000_000,
-        partidas: vec![hbp_core::PartidaSpec {
-            id: 1,
-            description: "Radier".into(),
-            amount_minor: 100_000,
-            plazo_unix: 1_700_000_000,
-        }],
+        partidas: vec![
+            hbp_core::PartidaSpec {
+                id: 1,
+                description: "Radier".into(),
+                amount_minor: 100_000,
+                plazo_unix: 1_700_000_000,
+            },
+            hbp_core::PartidaSpec {
+                id: 2,
+                description: "Muros".into(),
+                amount_minor: 100_000,
+                plazo_unix: 1_710_000_000,
+            },
+        ],
         mandante_pubkey: hex::encode(mp.serialize()),
         contratista_pubkey: Some(hex::encode(cp.serialize())),
         dispute: hbp_core::DisputePolicy::fee_burn(1_700_000_000, 1_800_000_000),
@@ -1050,4 +1138,16 @@ fn fee_burn_from_body_differs_from_unwind_address() {
     .unwrap();
     assert_eq!(plan.continuation_sats, 10_000);
     assert_eq!(plan.t1_fee_sats, 10_000);
+    let boleta = crate::bond_escrow_from_body(&body, None).unwrap();
+    let p2 = crate::partida_escrow_from_body(&body, 2, None).unwrap();
+    assert_ne!(
+        boleta.script_pubkey(),
+        burn.script_pubkey(),
+        "fee-burn boleta and partida 1 must not share an address"
+    );
+    assert_ne!(
+        burn.script_pubkey(),
+        p2.script_pubkey(),
+        "fee-burn partidas must have distinct addresses"
+    );
 }

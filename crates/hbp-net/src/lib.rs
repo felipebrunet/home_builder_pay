@@ -11,6 +11,7 @@
 
 mod bundle;
 mod dht;
+mod esplora;
 mod fx;
 mod http;
 mod message;
@@ -26,6 +27,10 @@ pub use bundle::{
 pub use dht::{
     dht_key, normalize_work_name, person_topic_key, work_topic_key, DhtRecord, PeerInfo,
     WorkAnnounce,
+};
+pub use esplora::{
+    esplora_address_txs, esplora_address_utxos, esplora_try_bases, esplora_tx_hex,
+    find_dual_amount_txid, EsploraTx, EsploraTxOut, EsploraUtxo,
 };
 pub use fx::{fiat_ticker, preview_sats, quote_btc, FxQuote};
 pub use message::{NetMessage, FILE_FALLBACK};

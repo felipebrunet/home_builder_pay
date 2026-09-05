@@ -64,7 +64,15 @@ After **Trato cerrado**, the next-step card is **Ir a Pago**. Status lines:
 
 **Quote.** Use the local xpub/watch if present (never sent). Price: **Yadio → CoinGecko → CoinMarketCap**, or a manual BTC price both sides confirm. GUI drafts `Quote` (all partidas, because the protocol requires it) but the banner only highlights boleta + P1 sats. Each side signs (`sign_quote`); both signatures required before `set_quote`. Wired as `NetMessage::Quote` over Tor, same as offer/accept.
 
-**Funding.** Paste Signet outpoints (txid:vout, sats, address, change) for **both** sides — watch-only cannot spend. **Armar PSBT** calls `hbp-bitcoin` `build_funding_psbt` for **bond + P1 only** (no `--partida-only`, no MAD). Each laptop signs its input in Sparrow / Electrum. **Combinar** (`combine_psbts` + `extract_signed_funding_tx`) then **Verificar fondeo** (`validate_funding_tx` + `note_bond_funding` + `note_partida_funding`). Coins / unsigned PSBT / signed PSBT / tx hex can also travel as `NetMessage::Artifact`.
+**Funding (PSBT handshake).** Primary path is watch-only xpub + Esplora (blockstream → mempool Signet), not paste-both-outpoints.
+
+1. **Mis monedas** — `Buscar mis monedas` scans the local xpub. User picks a UTXO (app suggests the smallest confirmed that covers their share + fee).
+2. **Armar/enviar parcial** — either side builds a 1-input PSBT (their coin + change) that already has exact **boleta + P1** outputs. Wired as `Artifact` `06-funding.partial.json`.
+3. **Completar** — peer picks their UTXO the same way, adds the second input, sends back the complete unsigned 2-in PSBT.
+4. **Firmar** — export hex/base64 → Electrum/Sparrow. Import the **1-signature** PSBT; app sends it. Counterparty signs and **broadcasts in Electrum**.
+5. **En cadena** — both apps poll Esplora on the boleta address until a tx with both quoted amounts appears, then mark **Partida 1 en curso**. Manual tx-hex verify stays as rescue.
+
+Boleta and partida 1 are **distinct** Taproot addresses (fee-burn key-path + unique tagged tweak per output). Later partidas stay grey until P1 is terminal.
 
 **Reception.** When P1 is locked: dest address + MuSig2 file/network rounds (`coop-propose` / `coop-sign` / `coop-finish`). Finish marks P1 `Paid` and unlocks the P2 row. P2 funding itself is **not** on this screen (CLI `--partida-only`).
 
@@ -72,9 +80,9 @@ Persisted under `{obra}/pay/` (`state.json`, `02-quote.json`, `coins.json`, `08-
 
 ## What this slice verified vs two Signet laptops
 
-**Covered by `cargo test --workspace`:** quote both-sign + lock; Spanish stages; P2 stays blocked until P1 is terminal; `build_funding_psbt` + `validate_funding_tx` + `note_bond_funding`/`note_partida_funding` on a constructed P1 tx; fee-burn bond and partida share one MuSig2 script (verify matches by quoted amounts); existing bitcoin tests (`quote_signatures_roundtrip`, `funding_partida_only_mandante_pays_fee`, `cannot_fund_segunda_before_primera`).
+**Covered by `cargo test --workspace`:** quote both-sign + lock; Spanish stages; P2 stays blocked until P1 is terminal; boleta ≠ P1 ≠ P2 Taproot addresses; partial→complete PSBT balances and verifies; constructed P1 fund/verify; Esplora JSON helpers; existing bitcoin tests (`quote_signatures_roundtrip`, `funding_partida_only_mandante_pays_fee`, `cannot_fund_segunda_before_primera`).
 
-**Needs two Signet laptops (not claimed here):** Tor delivery of Quote/Artifact, Sparrow/Electrum signing the real PSBT, broadcasting the funding tx, live Esplora scan of the watch-only xpub, and a live MuSig2 close against a mined P1 UTXO.
+**Needs two live Signet wallets (not claimed here):** Esplora listing real xpub UTXOs, Tor partial-PSBT exchange, Electrum/Sparrow signing + broadcast, chain detect on a mined funding tx, live MuSig2 close.
 
 ## Retest (two obras, same mandante)
 

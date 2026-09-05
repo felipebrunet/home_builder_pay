@@ -19,8 +19,9 @@ pub use fee_burn::{
     T2_OP_RETURN,
 };
 pub use fund::{
-    attach_prev_tx, build_funding_psbt, combine_psbts, extract_signed_funding_tx, funding_tx,
-    FundingCoin, FundingRequest,
+    attach_prev_tx, build_funding_psbt, build_partial_funding_psbt, combine_psbts,
+    complete_partial_funding_psbt, extract_signed_funding_tx, funding_share, funding_tx,
+    psbt_signed_input_count, FundingCoin, FundingRequest,
 };
 pub use identity::{generate_identity, identity_from_secret, Identity};
 pub use musig::{
