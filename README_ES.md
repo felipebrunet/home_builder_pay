@@ -8,7 +8,7 @@ Esto es un MVP: CLI de escritorio, **regtest/signet**, archivos y PSBT pasados a
 
 Protocolo nuevo: [docs/P2WSH.md](docs/P2WSH.md). Checkpoint: [docs/PROJECT.md](docs/PROJECT.md) §0. Taproot/MuSig2 queda en la rama `musig-mode`.
 
-Hito actual: **MVP-0** más catálogo minado (**136 PASS / 6 humano**). La **política** de disputa (default unwind; MAD / slot de árbitro) la propone el oferente; a la *persona* la nombran después los dos: [docs/DISPUTE.md](docs/DISPUTE.md). Catálogo: [docs/SCENARIOS.md](docs/SCENARIOS.md). Correr todo: `scripts/run_catalog.sh`. Unwind 1–8: [docs/REGTEST_SCENARIOS.md](docs/REGTEST_SCENARIOS.md).
+Hito actual: coordinador P2WSH **hold / burn**. UI de prueba: `cargo run -p hbp-ui` → http://127.0.0.1:3847.
 
 ## Protocolo (resumen)
 
@@ -18,16 +18,9 @@ Un UTXO P2WSH, partida = boleta:
 wsh(sortedmulti(2, A/*, B/*))
 ```
 
-- **Hold:** 1 firma cada uno al fondear. Sin acuerdo el UTXO queda indefinido.
-- **Burn:** primero firman la quema (`nLockTime=T`, OP_RETURN + 100 % fee), después el funding.
-
-- Cierre cooperativo (recepción conforme): ambas partes firman con MuSig2. En cadena parece un pago normal.
-- Vencimiento de una partida: el mandante recupera **solo** ese pago.
-- Vencimiento del proyecto: el contratista recupera **solo** la boleta.
-
-La boleta es **global** (10 % del proyecto por defecto, configurable en puntos básicos) y permanece bloqueada hasta la última partida. Se fondea una partida a la vez. Los montos del contrato están en fiat/UF; los sats se cotizan al fondear.
-
-El unwind **no** es una boleta bancaria: Bitcoin no puede ver si el muro está construido. La defensa del contratista son partidas pequeñas y detener el trabajo si no hay recepción.
+- **Hold:** 1 firma cada uno al fondear (`m/84'`). Sin acuerdo el UTXO queda indefinido.
+- **Burn:** primero firman la quema (`m/48'`, `nLockTime=T`, OP_RETURN + 100 % fee), después el funding.
+- **Coop:** las dos `m/48'` pagan a la address acordada.
 
 ## Compilación
 
@@ -42,71 +35,51 @@ Nombre del ejecutable: `hbp`.
 
 ## Esquema de la CLI
 
-Dos directorios, uno por parte:
+`hbp` no tiene seeds. Dos directorios, uno por parte:
 
 ```bash
 # mandante
-hbp --dir .m init --network regtest --role mandante
-# opcional: cifrar identity.json (cualquier passphrase; toy, sin fortaleza)
-# hbp --dir .m --passphrase ab init --network regtest --role mandante
-hbp --dir .m identity                 # solo public_key — eso es lo que lleva el offer
-# hbp --dir .m identity --backup      # TU secreto; restaurar con init --secret HEX
-hbp --dir .m new --unit USD --bond-bps 1000 --t-project 1800000000
-hbp --dir .m add-partida --desc Cimentación --amount 1500 --plazo 1700000000
-hbp --dir .m add-partida --desc Muros --amount 500 --plazo 1710000000
-hbp --dir .m offer                         # escribe .m/00-offer.json
+hbp --dir .mh init --network signet --role mandante
+hbp --dir .mh cosigner Vpub...          # m/48' — esto SÍ se comparte
+hbp --dir .mh watch-import --xpub vpub...  # m/84' — solo local
+hbp --dir .mh new --mode hold --sats 5000 --fee 500
+# burn:  hbp --dir .mh new --mode burn --sats 5000 --fee 500 --t-unix $(date -d '+1 hour' +%s)
+hbp --dir .mh offer                     # .mh/00-offer.json
 
 # contratista
-hbp --dir .c init --network regtest --role contratista
-hbp --dir .c accept .m/00-offer.json      # escribe .c/01-accepted.pending.json
+hbp --dir .ch init --network signet --role contratista
+hbp --dir .ch cosigner Vpub...
+hbp --dir .ch watch-import --xpub vpub...
+hbp --dir .ch accept .mh/00-offer.json  # .ch/01-accepted.json
 
-# el mandante contrafirma
-hbp --dir .m commit .c/01-accepted.pending.json
+hbp --dir .mh import .ch/01-accepted.json
+hbp --dir .mh addresses
 
-# el contratista importa el contrato firmado
-hbp --dir .c import .m/contracts/<id>/01-accepted.json
+hbp --dir .mh coins
+hbp --dir .mh offer-coin --outpoint TXID:VOUT   # .mh/05-coin.json
+# igual en .ch, después:
+hbp --dir .mh fund --mine .mh/05-coin.json --peer .ch/05-coin.json
 
-# ambos firman una cotización en sats (precio de BTC en la unidad del contrato)
-hbp --dir .m quote --btc-price 80000 --fx-note "manual"
-hbp --dir .c accept-quote .m/contracts/<id>/02-quote.json
-hbp --dir .m accept-quote .c/contracts/<id>/02-quote.json   # el mandante importa la cotización ya contrafirmada
+# hold: cada hot wallet firma funding.psbt (su input)
+# burn: primero burn.psbt con m/48', combine-burn; después funding
+hbp --dir .mh combine-fund mio.signed.psbt el-del-otro.signed.psbt
 
-# opcional, solo si --dispute arbiter: ambos nombran el mismo pubkey antes de las addresses
-# hbp --dir .m propose-arbiter --pubkey 02...
-# hbp --dir .c accept-arbiter .m/contracts/<id>/03-arbiter.json
-# hbp --dir .m accept-arbiter .c/contracts/<id>/03-arbiter.json
+hbp --dir .mh coop --dest tb1q... --fee 200
+hbp --dir .mh combine-coop mio.signed.psbt el-del-otro.signed.psbt
 
-hbp --dir .m addresses
-hbp --dir .c status
-
-# Blue (las dos puntas): watch-only local, después se comparte UNA moneda — nunca el xpub
-hbp --dir .m watch-import --xpub vpub...
-hbp --dir .m coins
-hbp --dir .m offer-coin --outpoint TXID:VOUT
-hbp --dir .m fund --mine contracts/<id>/05-coin.json --peer 05-coin-del-otro.json
-hbp --dir .m fund-combine mio-firmado.psbt el-del-otro.psbt
-
-# Core/Sparrow sigue con outpoints explícitos:
-hbp --dir .m fund --m-outpoint TXID:VOUT --m-sats N --m-prev ADDR --m-change ADDR \
-  --c-outpoint TXID:VOUT --c-sats N --c-prev ADDR --c-change ADDR
-
-# Cierre MuSig2 entre dos laptops (archivos). Demo en una máquina: coop-close --peer-dir
-hbp --dir .m coop-propose --kind partida --partida 1 --outpoint TXID:VOUT --sats N --dest ADDR
-hbp --dir .c coop-sign .m/04-coop.json
-hbp --dir .m coop-finish .c/04-coop.json
+# solo burn, pasado T:
+hbp --dir .mh publish-burn
 ```
 
-`verify-funding` comprueba una transacción de fondeo en crudo contra los montos cotizados (rechaza un monto de partida malicioso). `unwind` arma la transacción de timeout por script path después de `T`.
-
-Por defecto las claves van en **texto plano** en `.hbp/identity.json`. Con `--passphrase` (o `HBP_PASSPHRASE`) se cifran; no hay largo mínimo. Solo para pruebas. No usar en mainnet. La otra punta no ve ese archivo: recibe un pubkey comprimido dentro de `00-offer.json`. Restaurar: `hbp init --secret HEX`.
+La UI hace este flujo: `cargo run -p hbp-ui` → http://127.0.0.1:3847
 
 ## Crates
 
 | crate | función |
 |---|---|
-| `hbp-core` | JSON del contrato, máquina de estados, registro de nonces |
-| `hbp-bitcoin` | descriptores Taproot, key-path MuSig2, unwind CLTV, comprobación de fondeo |
-| `hbp-cli` | protocolo por archivos |
+| `hbp-core` | términos hold/burn y estado |
+| `hbp-bitcoin` | `wsh(sortedmulti(2))`, PSBT de funding/quema/coop |
+| `hbp-cli` | coordinador (xpubs in, PSBT out) |
 
 ## Licencia
 

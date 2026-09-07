@@ -8,26 +8,19 @@ This is an MVP: desktop CLI, **regtest/signet**, files and PSBTs passed by hand.
 
 Full protocol, architecture, roadmap, and **where the last session left off**: [docs/PROJECT.md](docs/PROJECT.md) (start at section 0). That document is currently in Spanish. Mined Signet happy path: [docs/SIGNET_HAPPY_PATH.md](docs/SIGNET_HAPPY_PATH.md). Two-PC Signet (Sparrow): [docs/SIGNET_TWO_PCS.md](docs/SIGNET_TWO_PCS.md). Watch-only + atomic PSBT (Blue/Electrum): [docs/BLUE_FUNDING.md](docs/BLUE_FUNDING.md).
 
-Current milestone: **MVP-0** plus mined catalog (**136 PASS / 6 human-only**). Dispute **policy** (unwind default; optional MAD / arbiter slot) is set by the offeror; the arbiter *person* is named later by both: [docs/DISPUTE.md](docs/DISPUTE.md). Catalog: [docs/SCENARIOS.md](docs/SCENARIOS.md). Run everything: `scripts/run_catalog.sh`. Unwind index: [docs/REGTEST_SCENARIOS.md](docs/REGTEST_SCENARIOS.md).
+Current milestone: P2WSH **hold / burn** coordinator. Test UI: `cargo run -p hbp-ui` → http://127.0.0.1:3847.
 
 ## Protocol (short)
 
-Two Taproot outputs, never mixed:
+One P2WSH UTXO; installment equals the bond:
 
 ```
-bond     = tr(musig(M,C), pk(C) && after(T_project))
-package  = tr(musig(M,C), pk(M) && after(T_package))
+wsh(sortedmulti(2, A/*, B/*))
 ```
 
-In the code and CLI those outputs are still named `boleta` (bond) and `partida` (work package).
-
-- Cooperative close (acceptance of the work): both parties sign with MuSig2. On-chain it looks like a normal payment.
-- Timeout of a work package: the principal recovers **only** that payment.
-- Timeout of the project: the contractor recovers **only** the bond.
-
-The bond is **global** (default 10% of the whole project, configurable in basis points) and stays locked until the last package is done. One package is funded at a time. Contract amounts are fiat/UF; sats are quoted at funding time.
-
-Unwind is **not** a bank performance bond: Bitcoin cannot see whether the wall was built. The contractor’s defense is small packages and stopping work if there is no acceptance.
+- **Hold:** one signature each at funding (`m/84'`). No agreement → UTXO sits forever.
+- **Burn:** sign the burn first (`m/48'`, nLockTime=T, OP_RETURN + 100% fee), then funding.
+- **Coop:** both `m/48'` keys pay the agreed address.
 
 ## Build
 
@@ -42,73 +35,36 @@ Binary name: `hbp`.
 
 ## CLI sketch
 
-Two directories, one per party:
+`hbp` holds no seeds. Two directories, one per party:
 
 ```bash
-# principal
-hbp --dir .m init --network regtest --role mandante
-# optional: encrypt identity.json (any passphrase; toy, no strength check)
-# hbp --dir .m --passphrase ab init --network regtest --role mandante
-hbp --dir .m identity                 # public_key only — that is what the offer carries
-# hbp --dir .m identity --backup      # YOUR secret; restore later with init --secret HEX
-hbp --dir .m new --unit USD --bond-bps 1000 --t-project 1800000000
-hbp --dir .m add-partida --desc Foundation --amount 1500 --plazo 1700000000
-hbp --dir .m add-partida --desc Walls --amount 500 --plazo 1710000000
-hbp --dir .m offer                         # writes .m/00-offer.json
+hbp --dir .mh init --network signet --role mandante
+hbp --dir .mh cosigner Vpub...             # m/48' — share this
+hbp --dir .mh watch-import --xpub vpub...  # m/84' — local only
+hbp --dir .mh new --mode hold --sats 5000 --fee 500
+hbp --dir .mh offer
 
-# contractor
-hbp --dir .c init --network regtest --role contratista
-hbp --dir .c accept .m/00-offer.json      # writes .c/01-accepted.pending.json
+hbp --dir .ch init --network signet --role contratista
+hbp --dir .ch cosigner Vpub...
+hbp --dir .ch watch-import --xpub vpub...
+hbp --dir .ch accept .mh/00-offer.json
 
-# principal countersigns
-hbp --dir .m commit .c/01-accepted.pending.json
-
-# contractor imports the signed contract
-hbp --dir .c import .m/contracts/<id>/01-accepted.json
-
-# both sign a sats quote (BTC price in the contract unit)
-hbp --dir .m quote --btc-price 80000 --fx-note "manual"
-hbp --dir .c accept-quote .m/contracts/<id>/02-quote.json
-hbp --dir .m accept-quote .c/contracts/<id>/02-quote.json   # principal imports the fully signed quote
-
-# optional, only if --dispute arbiter: both name the same pubkey before addresses exist
-# hbp --dir .m propose-arbiter --pubkey 02...
-# hbp --dir .c accept-arbiter .m/contracts/<id>/03-arbiter.json
-# hbp --dir .m accept-arbiter .c/contracts/<id>/03-arbiter.json
-
-hbp --dir .m addresses
-hbp --dir .c status
-
-# Blue (both parties): local watch-only, then share one coin each — never the xpub
-hbp --dir .m watch-import --xpub vpub...          # YOUR Blue xpub; stays on this machine
-hbp --dir .m coins                                # Esplora (signet: blockstream, then mempool.space)
-hbp --dir .m offer-coin --outpoint TXID:VOUT      # writes 05-coin.json (send that file)
-hbp --dir .m fund --mine contracts/<id>/05-coin.json --peer 05-coin-from-peer.json
-# each Blue signs the .psbt (do not broadcast) →
-hbp --dir .m fund-combine mine-signed.psbt peer-signed.psbt   # hex; either side broadcasts
-
-# Core/Sparrow still works with explicit outpoints:
-#   bitcoin-cli -rpcwallet=hbp_mandante walletprocesspsbt <psbt>
-hbp --dir .m fund --m-outpoint TXID:VOUT --m-sats N --m-prev ADDR --m-change ADDR \
-  --c-outpoint TXID:VOUT --c-sats N --c-prev ADDR --c-change ADDR
-
-# MuSig2 close across two laptops (files). Same-machine demo: coop-close --peer-dir
-hbp --dir .m coop-propose --kind partida --partida 1 --outpoint TXID:VOUT --sats N --dest ADDR
-hbp --dir .c coop-sign .m/04-coop.json
-hbp --dir .m coop-finish .c/04-coop.json
+hbp --dir .mh import .ch/01-accepted.json
+hbp --dir .mh fund --mine .mh/05-coin.json --peer .ch/05-coin.json
+hbp --dir .mh combine-fund mine.signed.psbt peer.signed.psbt
+hbp --dir .mh coop --dest tb1q... --fee 200
+hbp --dir .mh combine-coop mine.signed.psbt peer.signed.psbt
 ```
 
-`verify-funding` checks a raw funding transaction against the quoted amounts (rejects a malicious package amount). `unwind` builds the script-path timeout transaction after `T`.
-
-Keys default to **plaintext** in `.hbp/identity.json`. Pass `--passphrase` (or `HBP_PASSPHRASE`) to encrypt; there is no minimum length. Toy only. Do not use on mainnet. The other party never sees that file: they get a compressed pubkey inside `00-offer.json`. Restore with `hbp init --secret HEX`.
+Test UI: `cargo run -p hbp-ui` → http://127.0.0.1:3847
 
 ## Crates
 
 | crate | role |
 |---|---|
-| `hbp-core` | contract JSON, state machine, nonce journal |
-| `hbp-bitcoin` | Taproot descriptors, MuSig2 key-path, CLTV unwind, funding checks |
-| `hbp-cli` | file protocol |
+| `hbp-core` | hold/burn terms and state |
+| `hbp-bitcoin` | `wsh(sortedmulti(2))`, funding/burn/coop PSBTs |
+| `hbp-cli` | coordinator (xpubs in, PSBTs out) |
 
 ## License
 

@@ -528,11 +528,16 @@ fn cmd_combine_burn(store: &Store, files: Vec<PathBuf>) -> Result<()> {
 
 fn try_broadcast(store: &Store, hex: &str, esplora: Option<&str>) -> Result<Option<String>> {
     match resolve_esplora(store, esplora) {
-        Ok(c) => {
-            let txid = c.broadcast(hex)?;
-            eprintln!("broadcast {txid}");
-            Ok(Some(txid))
-        }
+        Ok(c) => match c.broadcast(hex) {
+            Ok(txid) => {
+                eprintln!("broadcast {txid}");
+                Ok(Some(txid))
+            }
+            Err(e) => {
+                eprintln!("broadcast failed ({e:#}); hex is on stdout — send it yourself");
+                Ok(None)
+            }
+        },
         Err(_) => {
             eprintln!("no Esplora; broadcast the hex yourself");
             Ok(None)
@@ -550,10 +555,10 @@ fn cmd_combine_fund(store: &Store, files: Vec<PathBuf>, esplora: Option<&str>) -
     let tx = extract_signed_funding_tx(comb).context("funding not fully signed")?;
     let hex = hex::encode(bitcoin::consensus::serialize(&tx));
     let txid = tx.compute_txid().to_string();
+    println!("{hex}");
     let _ = try_broadcast(store, &hex, esplora)?;
     p.mark_funded(txid.clone(), 0, p.terms.escrow_sats())?;
     store.save_project(&p)?;
-    println!("{hex}");
     eprintln!("funded {txid} vout 0");
     Ok(())
 }
@@ -595,10 +600,10 @@ fn cmd_combine_coop(store: &Store, files: Vec<PathBuf>, esplora: Option<&str>) -
     let tx = extract_wsh_tx(comb).context("coop PSBT not fully signed")?;
     let hex = hex::encode(bitcoin::consensus::serialize(&tx));
     let txid = tx.compute_txid().to_string();
+    println!("{hex}");
     let _ = try_broadcast(store, &hex, esplora)?;
     p.mark_closed(txid.clone())?;
     store.save_project(&p)?;
-    println!("{hex}");
     eprintln!("closed {txid}");
     Ok(())
 }
@@ -613,21 +618,12 @@ fn cmd_publish_burn(store: &Store, esplora: Option<&str>) -> Result<()> {
     let psbt = Psbt::deserialize(&raw)?;
     let tx = extract_wsh_tx(psbt)?;
     let hex = hex::encode(bitcoin::consensus::serialize(&tx));
-    match try_broadcast(store, &hex, esplora) {
-        Ok(Some(txid)) => {
-            p.mark_burned(txid.clone())?;
-            store.save_project(&p)?;
-            println!("{hex}");
-            eprintln!("burned {txid}");
-        }
-        Ok(None) => {
-            println!("{hex}");
-        }
-        Err(e) => {
-            println!("{hex}");
-            bail!("broadcast failed: {e:#}");
-        }
-    }
+    let txid = tx.compute_txid().to_string();
+    println!("{hex}");
+    let _ = try_broadcast(store, &hex, esplora)?;
+    p.mark_burned(txid.clone())?;
+    store.save_project(&p)?;
+    eprintln!("burned {txid}");
     Ok(())
 }
 
@@ -636,12 +632,14 @@ fn cmd_put_psbt(store: &Store, kind: &str, input: &str) -> Result<()> {
     if !matches!(kind.as_str(), "funding" | "burn" | "coop") {
         bail!("kind must be funding|burn|coop");
     }
-    let psbt = if PathBuf::from(input).exists() {
-        psbt_io::load_psbt(&PathBuf::from(input))?
+    let trimmed = input.trim();
+    let psbt = if PathBuf::from(trimmed).exists() {
+        psbt_io::load_psbt(&PathBuf::from(trimmed))?
     } else {
+        let compact: String = trimmed.chars().filter(|c| !c.is_whitespace()).collect();
         let raw = base64::engine::general_purpose::STANDARD
-            .decode(input.trim())
-            .or_else(|_| hex::decode(input.trim()))
+            .decode(&compact)
+            .or_else(|_| hex::decode(&compact))
             .context("not a file, base64 PSBT, or hex PSBT")?;
         Psbt::deserialize(&raw).context("PSBT deserialize")?
     };

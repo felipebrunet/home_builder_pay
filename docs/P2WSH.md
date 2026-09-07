@@ -1,6 +1,6 @@
 # P2WSH 2-de-2 — protocolo (hold / burn)
 
-Fuente de verdad del on-chain **nuevo**. Taproot + MuSig2 queda congelado en la rama `musig-mode`. El código en `crates/` todavía implementa MuSig2 hasta que se porte esto.
+Fuente de verdad del on-chain **nuevo**. Taproot + MuSig2 queda congelado en la rama `musig-mode`. El código en `crates/` implementa este protocolo.
 
 `hbp` es coordinador: xpubs in, PSBT out. **Nunca** mnemonic, xprv ni secreto. Las firmas viven en Blue, Electrum, Sparrow, Ledger o Trezor.
 
