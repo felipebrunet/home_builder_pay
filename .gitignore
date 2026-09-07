@@ -4,7 +4,7 @@
 *.swp
 *~
 
-# Toy wallets and MuSig2 nonce material (plaintext secrets)
+# Local session dirs (regtest / Signet / P2WSH test UI)
 .hbp/
 .m/
 .c/
@@ -14,13 +14,13 @@
 .csu/
 .mh/
 .ch/
+
+# Coordinator files (no seeds; still live xpubs, coins, state)
+**/session.json
 **/identity.json
 **/nonces.json
 **/watch.json
 **/*.secnonce
-
-# Local contract working copies (not fixtures). Secrets live in identity.json;
-# these still carry pubkeys, amounts and signatures from a live run.
 **/draft.json
 **/00-offer.json
 **/01-accepted.json
