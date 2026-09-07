@@ -90,7 +90,7 @@
     <button type="button" id="btn-signet" class="on">Signet</button>
     <button type="button" id="btn-regtest">Regtest</button>
   </div>
-  <p id="net-hint" class="lead">Electrum / Blue + faucet. Sin nodo. Carpetas nuevas: .ms y .cs.</p>
+  <p id="net-hint" class="lead">Electrum / Blue + faucet. Sin nodo. Ensayo 1 h: .msu y .csu (no uses .ms/.cs).</p>
 
   <p>¿Quién sos?</p>
   <div class="who">
@@ -99,14 +99,14 @@
   </div>
 
   <div class="card">
-    <p>Esta punta escribe en <span class="copy" id="dir-show">.ms</span>. La otra usa <span class="copy" id="peer-show">.cs</span> — pegá esas rutas, no copies archivos.</p>
-    <input id="dir" type="hidden" value=".ms"/>
+    <p>Esta punta escribe en <span class="copy" id="dir-show">.msu</span>. La otra usa <span class="copy" id="peer-show">.csu</span> — pegá esas rutas, no copies archivos.</p>
+    <input id="dir" type="hidden" value=".msu"/>
     <details>
       <summary>Opciones (casi nunca hace falta)</summary>
       <label>Contraseña de tu clave hbp (opcional)</label>
       <input id="pass" type="password" autocomplete="off"/>
       <label>Carpeta (si no querés la default de la red)</label>
-      <input id="dir-override" placeholder=".ms"/>
+      <input id="dir-override" placeholder=".msu"/>
     </details>
   </div>
 
@@ -118,9 +118,10 @@
 
   <div class="card hide" id="s2m">
     <h2><span class="n">2</span> Armar el acuerdo</h2>
-    <p>Montos de prueba: dos trabajos de 5 USD y boleta 10%. Los plazos se calculan solos (7, 14 y 21 días).</p>
+    <p>Montos de prueba: un trabajo de 5 USD y boleta igual (5 000 + 5 000 sats). Fee de fondeo 500 (250 cada uno). P1 y boleta vencen juntas en <b>1 hora</b> desde que creás el acuerdo, no desde el fondeo.</p>
     <button class="go" data-step="draft">Crear acuerdo y archivo para el otro</button>
     <p id="offer-hint" class="ok hide">Mandale al otro (USB, Signal) el archivo <span class="copy" id="offer-path"></span></p>
+    <p id="plazos-hint" class="ok hide"></p>
     <label><span class="req">*</span> Archivo que te devolvió (termina en pending.json)</label>
     <input id="pending-file" placeholder="01-accepted.pending.json"/>
     <button class="go sec" data-step="commit">Confirmar su aceptación</button>
@@ -148,7 +149,7 @@
 
   <div class="card" id="s4">
     <h2><span class="n">4</span> Encerrar el bitcoin (Blue Wallet, Signet)</h2>
-    <p>Una sola transacción, dos inputs. Nadie queda locked si el otro no firma. Blue <b>solo firma su input</b>. El xpub se queda en esta computadora.</p>
+    <p>Una sola transacción, dos inputs: boleta 5 000 + partida 5 000. Fee 500 sats (250 cada uno). Nadie queda locked si el otro no firma. Blue <b>solo firma su input</b>. El xpub se queda en esta computadora.</p>
     <label>Tu xpub de Blue (Wallet → details). Nunca se lo mandes al otro.</label>
     <textarea id="xpub" rows="2" placeholder="vpub… / zpub… / tpub… o descriptor wpkh(tpub…/0/*)"></textarea>
     <label>Tipo</label>
@@ -204,14 +205,17 @@
 
   <div class="card" id="s5">
     <h2><span class="n">5</span> Pagar el trabajo (los dos firman)</h2>
-    <p>El UTXO cerrado lo saca <code>hbp</code> del contrato (después de comprobar el fondeo). Lo único que hay que pegar a mano es <b>dónde cobra</b> el que trabaja: una address <b>nueva</b> de Receive de su Electrum — no la del faucet ni el vuelto.</p>
+    <p>El UTXO y la Receive nueva salen del contrato + tu xpub. No hace falta pegar address. <b>Proponer el pago</b> lo hace quien cobra (contratista): hbp elige su Receive.</p>
+    <button class="go sec" data-step="sync">Actualizar estado (chain)</button>
     <button class="go sec" data-step="load-escrow">Cargar UTXO de la partida 1</button>
-    <label>Dónde está el dinero cerrado (txid:vout)</label>
-    <input id="escrow-op" placeholder="sale de Cargar UTXO / status"/>
-    <label>Sats de la partida</label>
-    <input id="escrow-sats" placeholder="5000"/>
-    <label><span class="req">*</span> Address de cobro (Electrum del que trabaja)</label>
-    <input id="pay-dest" placeholder="tb1q… Receive nueva"/>
+    <button class="go sec" data-step="load-bond">Cargar UTXO de la boleta</button>
+    <div id="status-box"></div>
+    <label>Dónde está el dinero cerrado (txid:vout) — vacío = lo saca hbp</label>
+    <input id="escrow-op" placeholder="opcional"/>
+    <label>Sats (partida o boleta)</label>
+    <input id="escrow-sats" placeholder="opcional"/>
+    <label>Address de cobro (vacío = Receive nueva de tu xpub)</label>
+    <input id="pay-dest" placeholder="(automático)"/>
     <button class="go" data-step="propose">Proponer el pago</button>
     <label><span class="req">*</span> Archivo 04-coop.json</label>
     <input id="coop-file" placeholder="04-coop.json"/>
@@ -221,7 +225,7 @@
 
   <details class="card">
     <summary>Si no se ponen de acuerdo (plazo vencido)</summary>
-    <p>El que pagó puede recuperar <b>solo</b> el trabajo. El que trabajó recupera <b>solo</b> la boleta. Usá las mismas cajas del paso 5 (outpoint, sats, tu address).</p>
+    <p>Un clic: hbp elige la Receive, firma, transmite y cierra el estado si ya está minado. No reemite si la chain ya gastó el UTXO.</p>
     <button class="go sec" data-step="unwind-p">Recuperar el trabajo (quien pagó)</button>
     <button class="go sec" data-step="unwind-b">Recuperar la boleta (quien trabajó)</button>
   </details>
@@ -237,11 +241,11 @@ let role = localStorage.getItem('hbp-role') || 'mandante';
 let net = localStorage.getItem('hbp-net') || 'signet';
 
 function sessionDir() {
-  if (net === 'signet') return role === 'mandante' ? '.ms' : '.cs';
+  if (net === 'signet') return role === 'mandante' ? '.msu' : '.csu';
   return role === 'mandante' ? '.m' : '.c';
 }
 function peerDir() {
-  if (net === 'signet') return role === 'mandante' ? '.cs' : '.ms';
+  if (net === 'signet') return role === 'mandante' ? '.csu' : '.msu';
   return role === 'mandante' ? '.c' : '.m';
 }
 
@@ -251,7 +255,7 @@ function showSession() {
   $('btn-m').classList.toggle('on', role === 'mandante');
   $('btn-c').classList.toggle('on', role === 'contratista');
   $('net-hint').textContent = net === 'signet'
-    ? 'Electrum / Blue + faucet. Sin nodo. Carpetas nuevas: .ms (quien paga) y .cs (quien trabaja).'
+    ? 'Electrum / Blue + faucet. Sin nodo. Ensayo 1 h: .msu (quien paga) y .csu (quien trabaja). No uses .ms/.cs.'
     : 'Nodo bitcoind local. Carpetas viejas: .m y .c (no uses estas en Signet).';
   const mine = sessionDir();
   const peer = peerDir();
@@ -277,7 +281,8 @@ $('btn-c').onclick = () => { role = 'contratista'; $('dir-override').value = '';
 $('dir-override').addEventListener('input', showSession);
 showSession();
 
-function unix(d) { return String(Math.floor(Date.now()/1000) + d*86400); }
+function unixHours(h) { return String(Math.floor(Date.now()/1000) + Math.round(h*3600)); }
+function fmtUnix(ts) { return new Date(Number(ts) * 1000).toLocaleString(); }
 
 async function hbp(args) {
   $('out').textContent = '… ' + args[0] + ' …';
@@ -305,6 +310,26 @@ function need(el, name) {
   return true;
 }
 
+function showStatus(raw) {
+  let p = null;
+  try { p = JSON.parse((raw || '').trim()); } catch (e) { p = null; }
+  if (!p) {
+    $('status-box').innerHTML = '';
+    return;
+  }
+  const bond = p.bond && p.bond.status;
+  const part = (p.partidas || []).find((x) => x.id === 1);
+  const ps = part && part.state && (part.state.status || part.state);
+  let html = '<p>Proyecto: <b>' + (p.status || '?') + '</b> · boleta: <b>' + (bond || '?') + '</b> · partida 1: <b>' + (ps || '?') + '</b></p>';
+  if (ps === 'unwound' || ps === 'paid') {
+    html += '<p class="ok">Partida 1 cerrada. No se reemite.</p>';
+  }
+  if (bond === 'unwound' || bond === 'released') {
+    html += '<p class="ok">Boleta cerrada. No se reemite.</p>';
+  }
+  $('status-box').innerHTML = html;
+}
+
 document.body.addEventListener('click', async (ev) => {
   const b = ev.target.closest('[data-step]');
   if (!b) return;
@@ -313,14 +338,15 @@ document.body.addEventListener('click', async (ev) => {
     if (s === 'init') {
       await hbp(['init', '--network', net, '--role', role]);
     } else if (s === 'draft') {
-      const t1 = unix(7), t2 = unix(14), tp = unix(21);
-      await hbp(['new', '--unit', 'USD', '--bond-bps', '1000', '--t-project', tp, '--dispute', 'unwind']);
+      const t1 = unixHours(1), tp = t1;
+      await hbp(['new', '--unit', 'USD', '--bond-bps', '10000', '--t-project', tp, '--dispute', 'unwind']);
       await hbp(['add-partida', '--desc', 'Trabajo 1', '--amount', '5', '--plazo', t1]);
-      await hbp(['add-partida', '--desc', 'Trabajo 2', '--amount', '5', '--plazo', t2]);
       const o = await hbp(['offer']);
       const path = (o.j.stdout || '').trim().split('\n').pop();
       $('offer-path').textContent = path;
       $('offer-hint').classList.remove('hide');
+      $('plazos-hint').textContent = 'P1 y boleta unwind juntos a las ' + fmtUnix(t1) + ' (5 000 + 5 000 sats)';
+      $('plazos-hint').classList.remove('hide');
     } else if (s === 'commit') {
       if (!need($('pending-file'), 'archivo pending')) return;
       await hbp(['commit', $('pending-file').value.trim()]);
@@ -332,7 +358,7 @@ document.body.addEventListener('click', async (ev) => {
       if (!need($('accepted-file'), 'contrato firmado')) return;
       await hbp(['import', $('accepted-file').value.trim()]);
     } else if (s === 'quote') {
-      await hbp(['quote', '--btc-price', '100000', '--fx-note', 'ui']);
+      await hbp(['quote', '--btc-price', '100000', '--bond-sats', '5000', '--fx-note', 'ui']);
     } else if (s === 'accept-quote') {
       if (!need($('quote-file'), 'archivo de quote')) return;
       await hbp(['accept-quote', $('quote-file').value.trim()]);
@@ -385,12 +411,13 @@ document.body.addEventListener('click', async (ev) => {
       const mine = $('coin-path').textContent.trim();
       if (!mine || mine.indexOf('05-coin') < 0) { alert('Primero armá tu 05-coin.json'); return; }
       if (!need($('peer-coin'), '05-coin.json del otro')) return;
-      await hbp(['fund', '--mine', mine, '--peer', $('peer-coin').value.trim()]);
+      await hbp(['fund', '--fee', '500', '--mine', mine, '--peer', $('peer-coin').value.trim()]);
     } else if (s === 'fund-combine') {
       if (!need($('psbt-mine'), 'tu PSBT firmado') || !need($('psbt-peer'), 'PSBT del otro')) return;
       const o = await hbp(['fund-combine', $('psbt-mine').value.trim(), $('psbt-peer').value.trim()]);
       const hex = (o.j.stdout || '').trim().split('\n').pop();
       if (hex) $('txhex').value = hex;
+      await hbp(['sync']);
     } else if (s === 'addresses') {
       const o = await hbp(['addresses']);
       $('addr-box').innerHTML = '<pre class="copy">' + (o.j.stdout || '').replace(/</g,'') + '</pre>'
@@ -398,6 +425,7 @@ document.body.addEventListener('click', async (ev) => {
     } else if (s === 'verify') {
       if (!need($('txhex'), 'hex de la transacción')) return;
       await hbp(['verify-funding', '--tx-hex', $('txhex').value.trim(), '--partida', '1']);
+      await hbp(['sync']);
     } else if (s === 'fund') {
       if (!need($('my-op'), 'tu txid:vout') || !need($('my-sats'), 'tus sats')) return;
       const args = ['fund', '--fee', '500',
@@ -419,6 +447,20 @@ document.body.addEventListener('click', async (ev) => {
       }
       $('escrow-op').value = st.txid + ':' + st.vout;
       $('escrow-sats').value = String(st.sats);
+    } else if (s === 'load-bond') {
+      const o = await hbp(['status']);
+      let p = null;
+      try { p = JSON.parse((o.j.stdout || '').trim()); } catch (e) { p = null; }
+      const b = p && p.bond;
+      if (!b || b.txid == null || b.vout == null) {
+        alert('No hay boleta fondeada en esta carpeta. Primero Comprobar que cerró bien (paso 4).');
+        return;
+      }
+      $('escrow-op').value = b.txid + ':' + b.vout;
+      $('escrow-sats').value = String(b.sats);
+    } else if (s === 'sync') {
+      const o = await hbp(['sync']);
+      showStatus(o.j.stdout);
     } else if (s === 'propose') {
       if (!$('escrow-op').value.trim()) {
         const o = await hbp(['status']);
@@ -433,27 +475,37 @@ document.body.addEventListener('click', async (ev) => {
       }
       if (!need($('escrow-op'), 'UTXO de la partida (Cargar UTXO, o Comprobar en el paso 4)') ) return;
       if (!need($('escrow-sats'), 'sats')) return;
-      if (!need($('pay-dest'), 'address de cobro del que trabaja (Receive nueva de su Electrum)')) return;
-      if (!confirm('¿Pagar ' + $('escrow-sats').value + ' sats a\n' + $('pay-dest').value + '?')) return;
-      await hbp(['coop-propose', '--kind', 'partida', '--partida', '1',
+      const dest = $('pay-dest').value.trim();
+      if (!confirm('¿Proponer el pago de ' + $('escrow-sats').value + ' sats' + (dest ? (' a\n' + dest) : ' (Receive de tu xpub)') + '?')) return;
+      const args = ['coop-propose', '--kind', 'partida', '--partida', '1',
         '--outpoint', $('escrow-op').value.trim(), '--sats', $('escrow-sats').value.trim(),
-        '--dest', $('pay-dest').value.trim(), '--fee', '200']);
+        '--fee', '200'];
+      if (dest) args.push('--dest', dest);
+      await hbp(args);
     } else if (s === 'sign') {
       if (!need($('coop-file'), '04-coop.json')) return;
       if (!confirm('¿Firmar este pago?')) return;
       await hbp(['coop-sign', $('coop-file').value.trim()]);
     } else if (s === 'finish') {
       if (!need($('coop-file'), '04-coop.json')) return;
-      if (!confirm('¿Cerrar y generar el hex?')) return;
+      if (!confirm('¿Cerrar, transmitir y actualizar estado?')) return;
       await hbp(['coop-finish', $('coop-file').value.trim()]);
+      const syn = await hbp(['sync']);
+      showStatus(syn.j.stdout);
     } else if (s === 'unwind-p' || s === 'unwind-b') {
-      if (!need($('escrow-op'), 'txid:vout') || !need($('pay-dest'), 'tu address') || !need($('escrow-sats'), 'sats')) return;
       const kind = s === 'unwind-p' ? 'partida' : 'bond';
-      if (!confirm('¿Recuperar ' + kind + ' a ' + $('pay-dest').value + '?')) return;
-      const args = ['unwind', '--kind', kind, '--outpoint', $('escrow-op').value.trim(),
-        '--sats', $('escrow-sats').value.trim(), '--dest', $('pay-dest').value.trim(), '--fee', '200'];
+      if (!confirm('¿Recuperar ' + kind + '? hbp elige tu Receive, transmite y cierra el estado.')) return;
+      const args = ['unwind', '--kind', kind, '--fee', '200'];
       if (kind === 'partida') args.push('--partida', '1');
+      const op = $('escrow-op').value.trim();
+      const sats = $('escrow-sats').value.trim();
+      const dest = $('pay-dest').value.trim();
+      if (op) args.push('--outpoint', op);
+      if (sats) args.push('--sats', sats);
+      if (dest) args.push('--dest', dest);
       await hbp(args);
+      const syn = await hbp(['sync']);
+      showStatus(syn.j.stdout);
     }
   } catch (e) {
     $('out').textContent = String(e);

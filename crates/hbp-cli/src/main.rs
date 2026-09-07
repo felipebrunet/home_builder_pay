@@ -216,7 +216,7 @@ enum Cmd {
         #[arg(long)]
         c_change: Option<String>,
     },
-    /// Combine Blue-signed PSBTs (each party signed their input) and print tx hex.
+    /// Combine Blue-signed PSBTs (each party signed their input), broadcast if Esplora exists.
     FundCombine {
         files: Vec<PathBuf>,
     },
@@ -229,7 +229,7 @@ enum Cmd {
         #[arg(long)]
         sats: u64,
         #[arg(long)]
-        dest: String,
+        dest: Option<String>,
         #[arg(long, default_value_t = 200)]
         fee: u64,
         #[arg(long)]
@@ -245,7 +245,7 @@ enum Cmd {
     CoopSign {
         file: PathBuf,
     },
-    /// Originator: aggregate partials and print the signed tx hex.
+    /// Originator: aggregate partials, broadcast if Esplora exists.
     CoopFinish {
         file: PathBuf,
     },
@@ -302,15 +302,17 @@ enum Cmd {
         peer_dir: Option<PathBuf>,
     },
     /// Build+sign a script-path unwind (after T). Mandante: partida. Contratista: boleta.
+    /// Outpoint/sats/dest default from local state + watch-only receive. Broadcasts on Signet.
     Unwind {
         #[arg(long)]
         kind: String,
         #[arg(long)]
-        outpoint: String,
+        outpoint: Option<String>,
         #[arg(long)]
-        sats: u64,
+        sats: Option<u64>,
+        /// Omit to use the next unused receive address from local watch-only (xpub).
         #[arg(long)]
-        dest: String,
+        dest: Option<String>,
         #[arg(long, default_value_t = 200)]
         fee: u64,
         #[arg(long)]
@@ -318,6 +320,11 @@ enum Cmd {
         /// Optional other party's dir, to copy state.json after the unwind.
         #[arg(long)]
         peer_dir: Option<PathBuf>,
+    },
+    /// Look up escrow spends on Esplora and close local state if already mined/broadcast.
+    Sync {
+        #[arg(long, env = "HBP_ESPLORA")]
+        esplora: Option<String>,
     },
 }
 
@@ -456,7 +463,7 @@ fn run() -> Result<()> {
             &kind,
             &outpoint,
             sats,
-            &dest,
+            dest.as_deref(),
             fee,
             partida,
             refund,
@@ -524,8 +531,16 @@ fn run() -> Result<()> {
             partida,
             peer_dir,
         } => cmd_unwind(
-            &store, &kind, &outpoint, sats, &dest, fee, partida, peer_dir,
+            &store,
+            &kind,
+            outpoint.as_deref(),
+            sats,
+            dest.as_deref(),
+            fee,
+            partida,
+            peer_dir,
         ),
+        Cmd::Sync { esplora } => cmd_sync(&store, esplora.as_deref()),
     }
 }
 
@@ -1134,13 +1149,144 @@ fn resolve_esplora(store: &Store, explicit: Option<&str>) -> Result<Esplora> {
     Ok(client)
 }
 
+fn parse_dest_addr(raw: &str, network: hbp_core::Network) -> Result<Address> {
+    Address::from_str(raw.trim())
+        .map_err(|e| anyhow::anyhow!("{e}"))?
+        .require_network(hbp_bitcoin::to_btc_network(network))
+        .map_err(|e| anyhow::anyhow!("{e}"))
+}
+
+/// Next unused receive from local watch-only, or an explicit address.
+fn resolve_receive_dest(
+    store: &Store,
+    dest: Option<&str>,
+    esplora: Option<&str>,
+) -> Result<Address> {
+    let id = store.load_identity()?;
+    if let Some(d) = dest.map(str::trim).filter(|s| !s.is_empty()) {
+        return parse_dest_addr(d, id.network);
+    }
+    let acc = store
+        .load_watch()
+        .context("no watch.json — pass --dest or: hbp watch-import --xpub …")?;
+    let client = resolve_esplora(store, esplora)?;
+    let scan = scan_watch(&acc, |addr| client.address_utxos(addr).map_err(hbp_err))?;
+    eprintln!(
+        "dest {} (next unused receive from local xpub)",
+        scan.receive
+    );
+    parse_dest_addr(&scan.receive, id.network)
+}
+
+/// Broadcast when a public Esplora exists (Signet). Regtest stays hex-only.
+fn try_broadcast(store: &Store, hex: &str) -> Result<bool> {
+    match resolve_esplora(store, None) {
+        Ok(c) => {
+            let txid = c.broadcast(hex)?;
+            eprintln!("broadcast {txid}");
+            Ok(true)
+        }
+        Err(_) => {
+            eprintln!("no Esplora for this network; broadcast the hex yourself");
+            Ok(false)
+        }
+    }
+}
+
+fn spend_is_unwind(client: &Esplora, txid: &str) -> Result<bool> {
+    let hex = client.tx_hex(txid)?;
+    let raw = hex::decode(hex.trim())?;
+    let tx: bitcoin::Transaction = deserialize(&raw)?;
+    Ok(tx.lock_time.to_consensus_u32() >= 500_000_000)
+}
+
+fn cmd_sync(store: &Store, esplora: Option<&str>) -> Result<()> {
+    let notes = sync_from_chain(store, esplora)?;
+    for n in &notes {
+        eprintln!("{n}");
+    }
+    if notes.is_empty() {
+        eprintln!("sync: no new spends");
+    }
+    let project = store.load_project()?;
+    println!("{}", serde_json::to_string_pretty(&project)?);
+    Ok(())
+}
+
+fn sync_from_chain(store: &Store, esplora: Option<&str>) -> Result<Vec<String>> {
+    let mut project = store.load_project()?;
+    let client = resolve_esplora(store, esplora)?;
+    let mut notes = Vec::new();
+
+    let partidas: Vec<(u32, String, u32)> = project
+        .partidas
+        .iter()
+        .filter_map(|p| {
+            p.onchain_utxo()
+                .map(|(txid, vout, _)| (p.id, txid.to_string(), vout))
+        })
+        .collect();
+    for (id, txid, vout) in partidas {
+        let spends = match client.outspends(&txid) {
+            Ok(s) => s,
+            Err(e) => {
+                notes.push(format!("partida {id} outspends: {e:#}"));
+                continue;
+            }
+        };
+        let Some(sp) = spends.get(vout as usize) else {
+            continue;
+        };
+        if !sp.spent {
+            continue;
+        }
+        let Some(spend_txid) = sp.txid.clone() else {
+            continue;
+        };
+        let via_unwind = spend_is_unwind(&client, &spend_txid).unwrap_or(true);
+        if via_unwind {
+            project.mark_partida_unwound(id, spend_txid.clone())?;
+            notes.push(format!("partida {id} unwound {spend_txid}"));
+        } else {
+            project.mark_paid(id, spend_txid.clone())?;
+            notes.push(format!("partida {id} paid {spend_txid}"));
+        }
+    }
+
+    if let Some((txid, vout, _)) = project.bond_funded_utxo() {
+        match client.outspends(txid) {
+            Ok(spends) => {
+                if let Some(sp) = spends.get(vout as usize) {
+                    if sp.spent {
+                        if let Some(spend_txid) = sp.txid.clone() {
+                            let via_unwind = spend_is_unwind(&client, &spend_txid).unwrap_or(true);
+                            if via_unwind {
+                                project.mark_bond_unwound(spend_txid.clone())?;
+                                notes.push(format!("bond unwound {spend_txid}"));
+                            } else {
+                                project.mark_bond_released(spend_txid.clone())?;
+                                notes.push(format!("bond released {spend_txid}"));
+                            }
+                        }
+                    }
+                }
+            }
+            Err(e) => notes.push(format!("bond outspends: {e:#}")),
+        }
+    }
+
+    store.save_project(&project)?;
+    Ok(notes)
+}
+
 fn cmd_coins(store: &Store, esplora: Option<&str>) -> Result<()> {
     let acc = store.load_watch()?;
     let client = resolve_esplora(store, esplora)?;
     let scan = scan_watch(&acc, |addr| client.address_utxos(addr).map_err(hbp_err))?;
     eprintln!(
-        "{} UTXO(s); suggested change {}; next: hbp offer-coin --outpoint TXID:VOUT",
+        "{} UTXO(s); receive {} ; change {}; next: hbp offer-coin --outpoint TXID:VOUT",
         scan.utxos.len(),
+        scan.receive,
         scan.change
     );
     println!("{}", serde_json::to_string_pretty(&scan)?);
@@ -1459,12 +1605,11 @@ fn cmd_fund_combine(store: &Store, files: Vec<PathBuf>) -> Result<()> {
     if let Ok(id) = store.current_id() {
         let path = store.contract_dir(&id).join("05-funding.signed.hex");
         std::fs::write(&path, &hex)?;
-        eprintln!(
-            "both inputs signed. Either party broadcasts (Blue: Settings → Tools → Broadcast)."
-        );
         eprintln!("{}", path.display());
-    } else {
-        eprintln!("both inputs signed. Broadcast this hex from either Blue.");
+    }
+    let _ = try_broadcast(store, &hex)?;
+    if let Err(e) = cmd_verify_funding(store, &hex, 1, false) {
+        eprintln!("verify-funding after combine: {e:#}");
     }
     println!("{hex}");
     Ok(())
@@ -1674,7 +1819,7 @@ fn cmd_coop_propose(
     kind: &str,
     outpoint: &str,
     sats: u64,
-    dest: &str,
+    dest: Option<&str>,
     fee: u64,
     partida: Option<u32>,
     refund: bool,
@@ -1682,19 +1827,37 @@ fn cmd_coop_propose(
     refund_dest: Option<&str>,
 ) -> Result<()> {
     let id = store.load_identity()?;
+    let role = party_role(&id, &store.load_project()?.contract.body)?;
+    let payee = match (kind, refund) {
+        ("partida", true) => Role::Mandante,
+        _ => Role::Contratista,
+    };
+    let dest_addr = if dest.map(str::trim).filter(|s| !s.is_empty()).is_some() {
+        resolve_receive_dest(store, dest, None)?
+    } else if role == payee {
+        resolve_receive_dest(store, None, None)?
+    } else {
+        let who = match payee {
+            Role::Mandante => "mandante",
+            Role::Contratista => "contratista",
+        };
+        bail!(
+            "pass --dest (payee address) or run coop-propose from the {who} wallet so hbp can pick the next receive from its xpub"
+        );
+    };
+    let dest = dest_addr.to_string();
     let (project, escrow, m_pk, c_pk, unsigned, sighash) = coop_unsigned(
         store,
         kind,
         outpoint,
         sats,
-        dest,
+        &dest,
         fee,
         partida,
         refund,
         pay_sats,
         refund_dest,
     )?;
-    let role = party_role(&id, &project.contract.body)?;
     let idx = hbp_bitcoin::signer_index(role);
     let mut j = store.load_nonces()?;
     let seed = new_nonce_seed(&mut j)?;
@@ -1857,6 +2020,7 @@ fn cmd_coop_finish(store: &Store, file: PathBuf) -> Result<()> {
     let signed = apply_key_spend_sig(unsigned, &sig);
     let hex = serialize_hex(&signed);
     let txid = signed.compute_txid().to_string();
+    let _ = try_broadcast(store, &hex)?;
     println!("{hex}");
     eprintln!("coop-finish {} txid {txid}", coop.kind);
     let state_err = (|| -> Result<()> {
@@ -2018,57 +2182,132 @@ fn cmd_arbiter_close(
 fn cmd_unwind(
     store: &Store,
     kind: &str,
-    outpoint: &str,
-    sats: u64,
-    dest: &str,
+    outpoint: Option<&str>,
+    sats: Option<u64>,
+    dest: Option<&str>,
     fee: u64,
     partida: Option<u32>,
     peer_dir: Option<PathBuf>,
 ) -> Result<()> {
     let id = store.load_identity()?;
+    if resolve_esplora(store, None).is_ok() {
+        match sync_from_chain(store, None) {
+            Ok(notes) => {
+                for n in notes {
+                    eprintln!("{n}");
+                }
+            }
+            Err(e) => eprintln!("sync before unwind: {e:#}"),
+        }
+    }
     let mut project = store.load_project()?;
     let body = &project.contract.body;
     let role = party_role(&id, body)?;
-    let escrow = match kind {
+    let pid = match kind {
+        "partida" => Some(partida.unwrap_or(1)),
+        _ => None,
+    };
+    match kind {
         "partida" => {
             if role != Role::Mandante {
                 bail!("only the mandante can unwind a partida");
             }
-            let pid = partida.context("--partida required")?;
-            partida_escrow_from_body(body, pid, project.named_arbiter_pubkey()?)?
+            let pid = pid.unwrap();
+            if project.partida(pid)?.is_terminal() {
+                eprintln!("partida {pid} already closed; not broadcasting again");
+                println!("{}", serde_json::to_string_pretty(&project)?);
+                return Ok(());
+            }
         }
         "bond" => {
             if role != Role::Contratista {
                 bail!("only the contratista can unwind the bond; timeout is not a bank boleta");
             }
-            bond_escrow_from_body(body, project.named_arbiter_pubkey()?)?
+            if matches!(
+                project.bond,
+                hbp_core::BondStatus::Unwound { .. } | hbp_core::BondStatus::Released { .. }
+            ) {
+                eprintln!("bond already closed; not broadcasting again");
+                println!("{}", serde_json::to_string_pretty(&project)?);
+                return Ok(());
+            }
         }
         other => bail!("kind must be partida|bond, got {other}"),
+    }
+    let escrow = match kind {
+        "partida" => {
+            partida_escrow_from_body(body, pid.unwrap(), project.named_arbiter_pubkey()?)?
+        }
+        "bond" => bond_escrow_from_body(body, project.named_arbiter_pubkey()?)?,
+        _ => unreachable!(),
     };
-    let dest = Address::from_str(dest)
-        .map_err(|e| anyhow::anyhow!("{e}"))?
-        .require_network(hbp_bitcoin::to_btc_network(body.network))?;
-    confirm_spend(store, kind, sats, &dest.to_string(), outpoint, " unwind")?;
-    let outpoint = OutPoint::from_str(outpoint).map_err(|e| anyhow::anyhow!("{e}"))?;
+    let from_state = match kind {
+        "partida" => project
+            .partida(pid.unwrap())?
+            .onchain_utxo()
+            .map(|(t, v, s)| (format!("{t}:{v}"), s)),
+        "bond" => project
+            .bond_funded_utxo()
+            .map(|(t, v, s)| (format!("{t}:{v}"), s)),
+        _ => None,
+    };
+    let (op_str, amount) = match (outpoint, sats, from_state) {
+        (Some(o), Some(s), _) => (o.to_string(), s),
+        (Some(o), None, Some((_, s))) => (o.to_string(), s),
+        (None, Some(s), Some((o, _))) => (o, s),
+        (None, None, Some((o, s))) => (o, s),
+        _ => bail!(
+            "need --outpoint and --sats (or a funded UTXO in state after verify-funding / sync)"
+        ),
+    };
+    let dest = resolve_receive_dest(store, dest, None)?;
+    confirm_spend(store, kind, amount, &dest.to_string(), &op_str, " unwind")?;
+    let outpoint = OutPoint::from_str(&op_str).map_err(|e| anyhow::anyhow!("{e}"))?;
     let tx = build_unwind_tx(
         &escrow,
         outpoint,
-        Amount::from_sat(sats),
+        Amount::from_sat(amount),
         &dest,
         Amount::from_sat(fee),
     )?;
     let prev = bitcoin::TxOut {
-        value: Amount::from_sat(sats),
+        value: Amount::from_sat(amount),
         script_pubkey: escrow.script_pubkey(),
     };
     let signed = sign_unwind(&escrow, tx, &prev, &id.secret()?)?;
     let hex = serialize_hex(&signed);
     let txid = signed.compute_txid().to_string();
-    match kind {
-        "partida" => {
-            let pid = partida.unwrap();
-            project.mark_partida_unwound(pid, txid.clone())?;
+    match try_broadcast(store, &hex) {
+        Ok(false) => eprintln!("unwind hex not broadcast (no Esplora)"),
+        Ok(true) => {}
+        Err(e) => {
+            eprintln!("broadcast failed: {e:#}");
+            println!("{hex}");
+            if resolve_esplora(store, None).is_ok() {
+                if let Ok(notes) = sync_from_chain(store, None) {
+                    for n in notes {
+                        eprintln!("{n}");
+                    }
+                }
+                let p = store.load_project()?;
+                let closed = match kind {
+                    "partida" => p.partida(pid.unwrap()).map(|x| x.is_terminal()).unwrap_or(false),
+                    "bond" => matches!(
+                        p.bond,
+                        hbp_core::BondStatus::Unwound { .. } | hbp_core::BondStatus::Released { .. }
+                    ),
+                    _ => false,
+                };
+                if closed {
+                    eprintln!("already closed on chain; not re-emitting");
+                    return Ok(());
+                }
+            }
+            bail!("unwind not accepted by the network (hex printed above)");
         }
+    }
+    match kind {
+        "partida" => project.mark_partida_unwound(pid.unwrap(), txid.clone())?,
         "bond" => project.mark_bond_unwound(txid.clone())?,
         _ => {}
     }

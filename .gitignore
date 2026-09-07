@@ -10,6 +10,8 @@
 .c/
 .ms/
 .cs/
+.msu/
+.csu/
 **/identity.json
 **/nonces.json
 **/watch.json

@@ -91,6 +91,20 @@ impl PartidaRuntime {
             _ => None,
         }
     }
+
+    /// UTXO still referenced locally, including unconfirmed funding.
+    pub fn onchain_utxo(&self) -> Option<(&str, u32, u64)> {
+        match &self.state {
+            PartidaStatus::Funding {
+                txid, vout, sats, ..
+            }
+            | PartidaStatus::Locked {
+                txid, vout, sats, ..
+            }
+            | PartidaStatus::ReceptionProposed { txid, vout, sats } => Some((txid, *vout, *sats)),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -323,27 +337,36 @@ impl Project {
 
     pub fn mark_paid(&mut self, id: u32, payout_txid: String) -> Result<()> {
         let p = self.partida_mut(id)?;
-        let sats = match &p.state {
-            PartidaStatus::Locked { sats, .. } | PartidaStatus::ReceptionProposed { sats, .. } => {
-                *sats
+        match &p.state {
+            PartidaStatus::Paid { payout_txid: old, .. } if old == &payout_txid => return Ok(()),
+            PartidaStatus::Paid { .. } | PartidaStatus::Unwound { .. } => return Ok(()),
+            PartidaStatus::Locked { sats, .. }
+            | PartidaStatus::ReceptionProposed { sats, .. }
+            | PartidaStatus::Funding { sats, .. } => {
+                p.state = PartidaStatus::Paid {
+                    payout_txid,
+                    sats: *sats,
+                };
+                Ok(())
             }
-            _ => return Err(Error::protocol("cannot pay a partida that is not locked")),
-        };
-        p.state = PartidaStatus::Paid { payout_txid, sats };
-        Ok(())
+            _ => Err(Error::protocol("cannot pay a partida that is not locked")),
+        }
     }
 
     pub fn mark_partida_unwound(&mut self, id: u32, txid: String) -> Result<()> {
         let p = self.partida_mut(id)?;
-        let sats = match &p.state {
+        match &p.state {
+            PartidaStatus::Unwound { txid: old, .. } if old == &txid => return Ok(()),
+            PartidaStatus::Unwound { .. } | PartidaStatus::Paid { .. } => return Ok(()),
             PartidaStatus::Locked { sats, .. }
             | PartidaStatus::Funding { sats, .. }
             | PartidaStatus::ReceptionProposed { sats, .. }
-            | PartidaStatus::AmountAgreed { sats } => *sats,
-            _ => return Err(Error::protocol("partida cannot unwind from this state")),
-        };
-        p.state = PartidaStatus::Unwound { txid, sats };
-        Ok(())
+            | PartidaStatus::AmountAgreed { sats } => {
+                p.state = PartidaStatus::Unwound { txid, sats: *sats };
+                Ok(())
+            }
+            _ => Err(Error::protocol("partida cannot unwind from this state")),
+        }
     }
 
     pub fn has_open_onchain_partida(&self) -> bool {
@@ -358,8 +381,11 @@ impl Project {
     }
 
     pub fn mark_bond_released(&mut self, txid: String) -> Result<()> {
-        if !matches!(self.bond, BondStatus::Funded { .. }) {
-            return Err(Error::protocol("bond is not funded"));
+        match &self.bond {
+            BondStatus::Released { txid: old } if old == &txid => return Ok(()),
+            BondStatus::Released { .. } | BondStatus::Unwound { .. } => return Ok(()),
+            BondStatus::Funded { .. } => {}
+            BondStatus::Unfunded => return Err(Error::protocol("bond is not funded")),
         }
         if self.has_open_onchain_partida() {
             return Err(Error::protocol(
@@ -380,12 +406,24 @@ impl Project {
     }
 
     pub fn mark_bond_unwound(&mut self, txid: String) -> Result<()> {
-        if !matches!(self.bond, BondStatus::Funded { .. }) {
-            return Err(Error::protocol("bond is not funded"));
+        match &self.bond {
+            BondStatus::Unwound { txid: old } if old == &txid => return Ok(()),
+            BondStatus::Unwound { .. } | BondStatus::Released { .. } => return Ok(()),
+            BondStatus::Funded { .. } => {}
+            BondStatus::Unfunded => return Err(Error::protocol("bond is not funded")),
         }
         self.bond = BondStatus::Unwound { txid };
         self.status = ProjectStatus::Cancelled;
         Ok(())
+    }
+
+    pub fn bond_funded_utxo(&self) -> Option<(&str, u32, u64)> {
+        match &self.bond {
+            BondStatus::Funded {
+                txid, vout, sats, ..
+            } => Some((txid, *vout, *sats)),
+            _ => None,
+        }
     }
 
     fn require_previous_terminal(&self, id: u32) -> Result<()> {
@@ -535,6 +573,25 @@ mod tests {
             p.partida(2).unwrap().state,
             PartidaStatus::AmountAgreed { .. }
         ));
+    }
+
+    #[test]
+    fn unwind_marks_are_idempotent_and_close_partida() {
+        let mut p = project();
+        p.set_quote(signed_quote(&p)).unwrap();
+        p.note_bond_funding("bond".into(), 0, 50_000, 1).unwrap();
+        p.note_partida_funding(1, "p1".into(), 1, 20_000, 1, 1)
+            .unwrap();
+        p.mark_partida_unwound(1, "u1".into()).unwrap();
+        p.mark_partida_unwound(1, "u1".into()).unwrap();
+        p.mark_bond_unwound("ub".into()).unwrap();
+        p.mark_bond_unwound("ub".into()).unwrap();
+        assert!(matches!(
+            p.partida(1).unwrap().state,
+            PartidaStatus::Unwound { .. }
+        ));
+        assert_eq!(p.status, ProjectStatus::Cancelled);
+        assert!(p.partida(1).unwrap().is_terminal());
     }
 
     #[test]

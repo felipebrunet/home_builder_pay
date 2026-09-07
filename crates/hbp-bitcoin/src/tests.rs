@@ -758,6 +758,12 @@ fn watch_scan_stops_at_gap_and_picks_change() {
     assert_eq!(scan.utxos.len(), 1);
     assert_eq!(scan.utxos[0].sats, 50_000);
     assert_eq!(
+        scan.receive,
+        crate::address_at(&acc.receive_descriptor, 1, hbp_core::Network::Signet)
+            .unwrap()
+            .to_string()
+    );
+    assert_eq!(
         scan.change,
         crate::address_at(&acc.change_descriptor, 0, hbp_core::Network::Signet)
             .unwrap()

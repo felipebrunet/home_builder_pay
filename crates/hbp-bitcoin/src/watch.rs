@@ -65,9 +65,11 @@ pub struct WatchedUtxo {
     pub index: u32,
 }
 
-/// Scan result: coins plus a fresh change address (first unused on the change chain).
+/// Scan result: coins plus the first unused receive and change addresses.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WatchScan {
+    /// First unused receive address (payout / unwind dest). Never reuse a funded index.
+    pub receive: String,
     pub change: String,
     pub utxos: Vec<WatchedUtxo>,
 }
@@ -204,10 +206,12 @@ where
         "change",
         &mut lookup,
     )?;
+    let receive = address_at(&account.receive_descriptor, recv.unused, account.network)?;
     let change = address_at(&account.change_descriptor, chg.unused, account.network)?;
     let mut utxos = recv.utxos;
     utxos.extend(chg.utxos);
     Ok(WatchScan {
+        receive: receive.to_string(),
         change: change.to_string(),
         utxos,
     })
