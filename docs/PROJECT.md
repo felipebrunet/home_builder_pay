@@ -4,9 +4,9 @@ Cliente Bitcoin P2P para acordar **partidas de obra** y una **boleta de garantí
 
 Este archivo es la fuente de verdad de producto, protocolo, arquitectura, roadmap y plan de trabajo. El `README.md` de la raíz es el atajo de build/CLI.
 
-**Si retomas en una sesión nueva: lee la sección 0 y el checklist de “listo / no listo”. El código en `crates/` es la implementación de MVP-0.**
+**Si retomas en una sesión nueva: lee la sección 0 y el checklist de “listo / no listo”.** On-chain nuevo: [P2WSH.md](P2WSH.md). El código en `crates/` todavía es MVP-0 Taproot/MuSig2 (congelado en `musig-mode`).
 
-Última actualización: 2026-09-01 (Signet feliz minado: fondeo atómico + recepción P1; boleta intacta).
+Última actualización: 2026-09-07 (giro a P2WSH 2-de-2 hold/burn; MuSig2 en rama `musig-mode`).
 
 ---
 
@@ -16,13 +16,13 @@ Checkpoint de sesión. Actualizar **esta sección** cada vez que se cierre un hi
 
 | Campo | Valor |
 |---|---|
-| Fecha | 2026-09-01 |
-| Rama | `master` |
-| Hito | **MVP-0 + catálogo 142 + Signet feliz minado (Electrum, dos browsers)** |
-| Verificar al abrir | `cargo test --workspace` (42 unitarios: `hbp-core` 17, `hbp-bitcoin` 25) y `scripts/run_catalog.sh`. UI de prueba: `cargo run -p hbp-ui` → http://127.0.0.1:3847 |
-| Nodo Bitcoin local | `/home/felipe/projects/btc_clients` — Core 31.1 regtest, RPC `:18443`. Los scripts usan `bitcoin-cli`; `hbp` no embebe el cliente. Signet no usa este nodo. |
+| Fecha | 2026-09-07 |
+| Rama | `master` (nuevo on-chain). Taproot/MuSig2: `musig-mode` @ `fbce280`. |
+| Hito | **Giro P2WSH:** 2-de-2 vainilla, modos hold/burn, `hbp` sin seeds. Código MuSig2 aún en `crates/`. |
+| Verificar al abrir | `cargo test --workspace` (43 unitarios: `hbp-core` 18, `hbp-bitcoin` 25). Protocolo nuevo: [P2WSH.md](P2WSH.md). UI vieja: `cargo run -p hbp-ui` → http://127.0.0.1:3847 |
+| Nodo Bitcoin local | `/home/felipe/projects/btc_clients` — Core 31.1 regtest, RPC `:18443`. Signet no usa este nodo. |
 | Origin | `git@github.com-hbp:felipebrunet/home_builder_pay.git` (MIT, público) |
-| Sesión Signet | Carpetas locales `.ms` / `.cs` (gitignore). Relato: [SIGNET_HAPPY_PATH.md](SIGNET_HAPPY_PATH.md). |
+| Sesión Signet (MuSig2) | `.ms` / `.cs` (gitignore). Relato: [SIGNET_HAPPY_PATH.md](SIGNET_HAPPY_PATH.md). No reusar para el P2WSH. |
 
 ### Historial reciente (changelog)
 
@@ -48,10 +48,14 @@ Checkpoint de sesión. Actualizar **esta sección** cada vez que se cierre un hi
 | 2026-08-31 | Fondeo Blue **camino 2**: xpub watch-only local (nunca al peer); Esplora lista UTXOs; `05-coin.json` = un prevout; `fund --mine/--peer`; Blue/Electrum firma el PSBT; `fund-combine`. Atomicidad 2-in intacta. | `hbp-bitcoin/watch.rs`, CLI, [BLUE_FUNDING.md](BLUE_FUNDING.md) |
 | 2026-09-01 | UI de prueba: red primero (Signet → `.ms`/`.cs`); log sticky; Esplora Blockstream + fallback mempool; paso 5 carga UTXO de `status`. | `hbp-ui` |
 | 2026-09-01 | **Signet feliz minado**: fondeo 2-in, recepción P1 (4 800 al contratista), boleta 1 000 sigue locked. Unwind boleta prefirmado, locktime 2026-09-22. | [SIGNET_HAPPY_PATH.md](SIGNET_HAPPY_PATH.md) |
+| 2026-09-07 | MuSig2 + UI 1 h (`sync`, broadcast, `.msu`/`.csu`) en `master`, luego rama `musig-mode`. | `fbce280` |
+| 2026-09-07 | **Giro:** P2WSH `sortedmulti(2)`, mandante elige `hold` (1 firma, UTXO indefinido) o `burn` (2 firmas, OP_RETURN + 100 % fee). Partida = boleta, un UTXO. Sin árbitro. Sin seeds en `hbp`. Wallets: Blue, Electrum, Sparrow, Ledger, Trezor. | [P2WSH.md](P2WSH.md) |
 
-Default on-chain sigue siendo **`unwind`**. MAD y árbitro están minados. Catálogo: **136 PASS**, **6 NO TEST** (humano). **0 FAIL**.
+Catálogo MuSig2 (histórico): **136 PASS**, **6 NO TEST**. On-chain nuevo aún no hay código.
 
 ### Listo
+
+Lo de abajo es el **snapshot MuSig2** (rama `musig-mode`). El producto que sigue es [P2WSH.md](P2WSH.md); aún no está en `crates/`.
 
 **Producto**
 
@@ -97,12 +101,12 @@ Default on-chain sigue siendo **`unwind`**. MAD y árbitro están minados. Catá
 
 ### Cómo seguir en la próxima sesión
 
-1. Leer esta sección 0, [SIGNET_HAPPY_PATH.md](SIGNET_HAPPY_PATH.md), [BLUE_FUNDING.md](BLUE_FUNDING.md).
-2. Signet unhappy con T ≈ ahora+2 h (partida) y T proyecto ≈ +3 h. Tres ensayos: unwind de partida (mandante recupera el pago, boleta intacta); unwind de boleta; cancel coop. Dirs nuevas.
-3. Recién después: ejecutable nativo (no web, no Electron). Una obra = un nombre en el offer + una identidad. Mandante con varios contratistas; contratista con varios mandantes.
-4. No abrir Tor ni DHT. No cambiar opción C. No mandar xpub al peer. No reusar `.ms`/`.cs` para plazos cortos.
+1. Leer [P2WSH.md](P2WSH.md) y esta sección 0.
+2. Portar `hbp` a coordinador PSBT: xpub `m/48'` compartida, `m/84'` local, funding 2-in 1-out, modos `hold` / `burn`.
+3. No reabrir Taproot/MuSig2 en `master` (está en `musig-mode`). No árbitro. No Tor/DHT. No seeds en el cliente. No OP_TRUE.
+4. No reusar `.ms` / `.cs` / `.msu` / `.csu` para el P2WSH.
 
-El usuario acordó: canal = archivos ahora; Tor p2p después; DHT solo si hay marketplace. MAD nunca a wallet del autor. Árbitro solo si ambos nombran a la misma persona antes de los UTXO. On-chain = **opción C**. Redeem = `hbp`. Fondeo = PSBT 2-in; Electrum/Blue cofirman singlesig. xpub solo local. Identidad **por obra** en el GUI de producto (hoy el CLI es una clave por `--dir`).
+El usuario acordó: `hbp` no custodia; Blue/Electrum/Sparrow/Ledger/Trezor firman; mandante elige hold o burn en el offer; partida = boleta; un UTXO; xpub `m/84'` no se le manda al peer.
 
 ---
 
@@ -125,12 +129,12 @@ Copiar Bisq 2-de-2 con quema simétrica no sirve: los montos son asimétricos (2
 
 | # | Tema | Decisión |
 |---|---|---|
-| 1 | Disputa | Default **unwind**. Opcionales **MAD chico** (quema NUMS) y **árbitro** (hojas A+M / A+C). El oferente propone la *política*; el *quién* del árbitro lo firman **ambos** antes de fondear, no va en el aviso. Ver [DISPUTE.md](DISPUTE.md). |
-| 2 | Boleta | **Una, global**, `bond_bps` configurable (default 1000 = 10% del total). Se fondea una vez. **Una partida viva a la vez.** |
+| 1 | Disputa | Mandante propone **`hold`** (UTXO indefinido) o **`burn`** (quema 100 % a fee en T) en el offer. Contratista acepta o no. Sin árbitro. Ver [P2WSH.md](P2WSH.md). (Histórico MuSig2: [DISPUTE.md](DISPUTE.md), rama `musig-mode`.) |
+| 2 | Boleta | **Igual a la partida viva**, mismo UTXO. Obra grande → etapas del tamaño de la boleta. Una partida viva a la vez. |
 | 3 | Moneda | Contrato en USD / UF / CLP. Los sats se fijan **al quotear/fondear**. |
 | 4 | Red | **Sin servidor propio, siempre.** El canal no es parte del contrato. MVP: **archivos** (USB, Signal, mail, carpeta). Después: socket LAN opcional, luego **Tor punto a punto** (onion ya conocido, va en el contrato). **DHT / offer book al final**, solo si el producto es marketplace. |
 | 5 | Lenguaje | **100% Rust** |
-| 6 | On-chain (opción C) | Se **conserva** Taproot + MuSig2 key-path + hojas (`after(T)`, MAD NUMS, árbitro A&&M/A&&C). Catálogo 142 no transable. No se recorta a 2-de-2 `wsh`/Electrum para ganar Sparrow/Blue en el redeem. Fondeo: hot wallet externa (Sparrow/Blue/Core). Redeem: firmante que hable MuSig2 (hoy `hbp`; después Core/Ledger/Nunchuk si calzan). |
+| 6 | On-chain | **P2WSH** `wsh(sortedmulti(2,A,B))`. `hbp` no firma. Hold = 1 firma funding; burn = quema prefirmada + funding. Opción C (Taproot/MuSig2) congelada en `musig-mode`. |
 
 Cómo se “conectan”: Bitcoin no necesita un socket. Dos laptops que se pasan `00-offer.json` ya cierran un 2-de-2. Tor oculta IP cuando el contacto ya existe; la DHT es para *encontrar* extraños. No se finge un marketplace antes de minar una recepción en regtest.
 

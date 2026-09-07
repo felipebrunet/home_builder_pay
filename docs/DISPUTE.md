@@ -1,4 +1,6 @@
-# Política de disputa (opcional)
+# Política de disputa (opcional) — histórico MuSig2
+
+**Supersedido para trabajo nuevo.** On-chain actual: [P2WSH.md](P2WSH.md) (`hold` / `burn`, sin árbitro). Este archivo describe la rama `musig-mode`.
 
 La **política** la propone el oferente en `hbp new`. El contratista la acepta o no con el resto del contrato. No se puede cambiar después del fondeo: el árbol Taproot (y por tanto la address) depende de ella.
 
