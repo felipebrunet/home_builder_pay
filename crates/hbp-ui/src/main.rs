@@ -14,7 +14,6 @@ const INDEX: &str = include_str!("index.html");
 #[derive(Deserialize)]
 struct Req {
     dir: String,
-    passphrase: Option<String>,
     args: Vec<String>,
 }
 
@@ -49,12 +48,7 @@ async fn api(Json(req): Json<Req>) -> Json<Resp> {
         });
     }
     let mut cmd = Command::new(hbp_bin());
-    cmd.arg("--dir").arg(&req.dir).arg("--yes");
-    if let Some(p) = req.passphrase.as_deref() {
-        if !p.is_empty() {
-            cmd.arg("--passphrase").arg(p);
-        }
-    }
+    cmd.arg("--dir").arg(&req.dir);
     cmd.args(&req.args);
     cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
     match cmd.output().await {

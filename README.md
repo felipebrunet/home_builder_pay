@@ -2,9 +2,9 @@
 
 [Español](README_ES.md)
 
-Peer-to-peer Bitcoin escrow for **work packages** plus a **performance bond**. Two parties — the principal (`mandante`) and the contractor (`contratista`) — lock funds in a Taproot 2-of-2 (MuSig2). There is no server.
+Peer-to-peer Bitcoin escrow for **work packages** plus a **performance bond**. Two parties — the principal (`mandante`) and the contractor (`contratista`) — lock funds in a P2WSH 2-of-2. There is no server. `hbp` never holds seeds; wallets sign PSBTs (Blue, Electrum, Sparrow, Ledger, Trezor).
 
-This is an MVP: desktop CLI, **regtest/signet**, files passed by hand. No Tor, no DHT. An optional arbiter exists as a Taproot leaf, jointly named by both parties before funding — not picked by the offeror in the listing.
+This is an MVP: desktop CLI, **regtest/signet**, files and PSBTs passed by hand. No Tor, no DHT. The principal picks **hold** (UTXO sits forever) or **burn** (pre-signed 100% fee after T). New protocol: [docs/P2WSH.md](docs/P2WSH.md). MuSig2/Taproot is frozen on branch `musig-mode`.
 
 Full protocol, architecture, roadmap, and **where the last session left off**: [docs/PROJECT.md](docs/PROJECT.md) (start at section 0). That document is currently in Spanish. Mined Signet happy path: [docs/SIGNET_HAPPY_PATH.md](docs/SIGNET_HAPPY_PATH.md). Two-PC Signet (Sparrow): [docs/SIGNET_TWO_PCS.md](docs/SIGNET_TWO_PCS.md). Watch-only + atomic PSBT (Blue/Electrum): [docs/BLUE_FUNDING.md](docs/BLUE_FUNDING.md).
 

@@ -12,6 +12,8 @@
 .cs/
 .msu/
 .csu/
+.mh/
+.ch/
 **/identity.json
 **/nonces.json
 **/watch.json

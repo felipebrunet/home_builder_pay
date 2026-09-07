@@ -102,7 +102,7 @@ Lo de abajo es el **snapshot MuSig2** (rama `musig-mode`). El producto que sigue
 ### Cómo seguir en la próxima sesión
 
 1. Leer [P2WSH.md](P2WSH.md) y esta sección 0.
-2. Portar `hbp` a coordinador PSBT: xpub `m/48'` compartida, `m/84'` local, funding 2-in 1-out, modos `hold` / `burn`.
+2. Probar la UI en Signet: `cargo run -p hbp-ui` → http://127.0.0.1:3847 (carpetas `.mh` / `.ch`). Hold primero; burn si las wallets firman la PSBT de quema.
 3. No reabrir Taproot/MuSig2 en `master` (está en `musig-mode`). No árbitro. No Tor/DHT. No seeds en el cliente. No OP_TRUE.
 4. No reusar `.ms` / `.cs` / `.msu` / `.csu` para el P2WSH.
 

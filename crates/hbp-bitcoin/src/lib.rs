@@ -1,46 +1,25 @@
-//! Taproot descriptors, MuSig2 cooperative spends, and unwind script-path spends.
+//! P2WSH sortedmulti 2-of-2 and PSBT helpers. No keys live here.
 
 mod convert;
 mod error;
 mod fund;
-mod identity;
-mod musig;
-mod sign_contract;
+mod p2wsh;
 mod spend;
-mod taproot;
-mod validate;
 mod watch;
 
+pub use convert::to_btc_network;
 pub use error::Error;
 pub use fund::{
     attach_prev_tx, build_funding_psbt, combine_psbts, extract_signed_funding_tx, funding_tx,
     FundingCoin, FundingRequest,
 };
-pub use identity::{generate_identity, identity_from_secret, Identity};
-pub use musig::{
-    agg_nonce, combine_partials, consume_nonce_seed, encode_partial, encode_pubnonce,
-    finish_coop_signature, new_nonce_seed, our_partial_signature, parse_partial, parse_pubnonce,
-    signer_index, start_round, verify_aggregated, CoopFile, CoopSession,
-};
-pub use sign_contract::{
-    sign_arbiter, sign_body, sign_quote, verify_arbiter, verify_body, verify_quote,
-};
+pub use p2wsh::{escrow_at, normalize_cosigner_key, wsh_sortedmulti, Escrow};
 pub use spend::{
-    apply_key_spend_sig, build_key_spend_tx, build_script_path_tx, build_split_key_spend_tx,
-    build_split_script_path_tx, build_unwind_tx, key_spend_sighash, sign_arbiter_leaf, sign_unwind,
-    verify_key_spend_sig, verify_unwind_control_block, UnwindRole,
+    build_burn_psbt, build_coop_psbt, extract_wsh_tx, CoopOutput, BURN_TAG,
 };
-pub use taproot::{
-    assert_output_key_matches, bond_address, bond_descriptor, bond_escrow_from_body,
-    keys_from_body, mad_address, mad_escrow, mad_escrow_from_body, nums_xonly, partida_address,
-    partida_descriptor, partida_escrow_from_body, to_btc_network, tweaked_key_agg, ArbiterWith,
-    Escrow, EscrowKind,
-};
-pub use validate::{validate_funding_tx, ExpectedFunding, FundingIssue};
 pub use watch::{
     address_at, default_esplora_url, default_esplora_urls, import_watch, scan_watch, script_at,
-    slip132_to_xpub,
-    OfferedCoin, WatchAccount, WatchKind, WatchScan, WatchedUtxo,
+    slip132_to_xpub, OfferedCoin, WatchAccount, WatchKind, WatchScan, WatchedUtxo,
 };
 
 pub type Result<T> = std::result::Result<T, Error>;

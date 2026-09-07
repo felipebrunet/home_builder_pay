@@ -1,12 +1,10 @@
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use crate::amount::Unit;
 use crate::error::Error;
 use crate::Result;
 
-/// 32-byte contract id, hex-encoded in JSON.
-pub type ContractId = String;
+pub const CONTRACT_ID_TAG: &[u8] = b"hbp-p2wsh-terms";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -50,495 +48,123 @@ impl std::str::FromStr for Role {
     }
 }
 
+/// Unhappy path. Chosen by the mandante in the offer; contractor accepts or walks.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct PartidaSpec {
-    pub id: u32,
-    pub description: String,
-    /// Amount in 1/100 of [`ContractBody::unit`].
-    pub amount_minor: u64,
-    /// Absolute CLTV as Bitcoin-style locktime (unix if >= 500_000_000).
-    pub plazo_unix: u32,
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum Mode {
+    /// 2-of-2 forever. No agreement → UTXO sits indefinitely.
+    Hold,
+    /// Pre-signed nLockTime burn: OP_RETURN + 100% fee after `t_unix`.
+    Burn { t_unix: u32 },
 }
 
-/// Default 7 days between arbiter-window start (plazo) and last-resort unwind.
-pub const DEFAULT_ARBITER_WINDOW_SECS: u32 = 7 * 24 * 60 * 60;
-
-/// Offeror proposes this; accept locks it. Cannot change after funding (address depends on it).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "policy", rename_all = "snake_case")]
-pub enum DisputePolicy {
-    /// Timeout: each recovers their own funds. Default.
-    Unwind,
-    /// Same unwind, plus a small symmetric stake that becomes unspendable if nobody cooperates after T.
-    Mad {
-        /// Basis points of partida 1 sats, **each** party (100 = 1%).
-        mad_bps: u16,
-    },
-    /// Slot for a late arbiter. Who it is is **not** in the offer: both name
-    /// the same pubkey later ([`ArbiterNomination`]) before funding.
-    Arbiter { window_secs: u32 },
-}
-
-impl Default for DisputePolicy {
-    fn default() -> Self {
-        Self::Unwind
-    }
-}
-
-impl DisputePolicy {
-    pub fn validate(&self) -> Result<()> {
+impl Mode {
+    pub fn t_unix(&self) -> Option<u32> {
         match self {
-            Self::Unwind => Ok(()),
-            Self::Mad { mad_bps } => {
-                if *mad_bps == 0 || *mad_bps > 500 {
-                    return Err(Error::protocol("mad_bps must be in 1..=500 (0.01%–5%)"));
-                }
-                Ok(())
-            }
-            Self::Arbiter { window_secs } => {
-                if *window_secs == 0 {
-                    return Err(Error::protocol("arbiter window_secs must be > 0"));
-                }
-                Ok(())
-            }
+            Mode::Hold => None,
+            Mode::Burn { t_unix } => Some(*t_unix),
         }
+    }
+
+    pub fn is_burn(&self) -> bool {
+        matches!(self, Mode::Burn { .. })
     }
 }
 
+/// Shared terms. Identity of each party is their BIP48 cosigner xpub — no secret in hbp.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ContractBody {
-    pub network: Network,
-    pub unit: Unit,
-    /// Basis points of the sum of partidas (1000 = 10%).
-    pub bond_bps: u16,
-    pub t_project: u32,
-    pub partidas: Vec<PartidaSpec>,
-    pub mandante_pubkey: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub contratista_pubkey: Option<String>,
-    /// Offeror-defined; default unwind. Both lock it at accept.
-    #[serde(default)]
-    pub dispute: DisputePolicy,
-}
-
-impl ContractBody {
-    pub fn total_minor(&self) -> u64 {
-        self.partidas.iter().map(|p| p.amount_minor).sum()
-    }
-
-    pub fn partida(&self, id: u32) -> Result<&PartidaSpec> {
-        self.partidas
-            .iter()
-            .find(|p| p.id == id)
-            .ok_or_else(|| Error::protocol(format!("unknown partida {id}")))
-    }
-
-    pub fn validate(&self) -> Result<()> {
-        if self.partidas.is_empty() {
-            return Err(Error::protocol("need at least one partida"));
-        }
-        if self.bond_bps == 0 || self.bond_bps > 10_000 {
-            return Err(Error::protocol("bond_bps must be in 1..=10000"));
-        }
-        if self.t_project < 500_000_000 {
-            return Err(Error::protocol(
-                "t_project must be a unix locktime (>= 500000000)",
-            ));
-        }
-        let mut seen = std::collections::BTreeSet::new();
-        let mut last_plazo = 0u32;
-        for p in &self.partidas {
-            if p.description.trim().is_empty() {
-                return Err(Error::protocol(format!(
-                    "partida {} has empty description",
-                    p.id
-                )));
-            }
-            if p.amount_minor == 0 {
-                return Err(Error::protocol(format!("partida {} has zero amount", p.id)));
-            }
-            if p.plazo_unix < 500_000_000 {
-                return Err(Error::protocol(format!(
-                    "partida {} plazo must be unix locktime",
-                    p.id
-                )));
-            }
-            if p.plazo_unix > self.t_project {
-                return Err(Error::protocol(format!(
-                    "partida {} plazo is after t_project",
-                    p.id
-                )));
-            }
-            if p.plazo_unix < last_plazo {
-                return Err(Error::protocol(
-                    "partidas must be in non-decreasing plazo order",
-                ));
-            }
-            if !seen.insert(p.id) {
-                return Err(Error::protocol(format!("duplicate partida id {}", p.id)));
-            }
-            last_plazo = p.plazo_unix;
-        }
-        decode_compressed_pubkey(&self.mandante_pubkey)?;
-        if let Some(pk) = &self.contratista_pubkey {
-            decode_compressed_pubkey(pk)?;
-            if pk == &self.mandante_pubkey {
-                return Err(Error::protocol("mandante and contratista keys must differ"));
-            }
-        }
-        self.dispute.validate()?;
-        Ok(())
-    }
-
-    pub fn terms(&self) -> Terms {
-        Terms {
-            network: self.network,
-            unit: self.unit,
-            bond_bps: self.bond_bps,
-            t_project: self.t_project,
-            partidas: self.partidas.clone(),
-            mandante_pubkey: self.mandante_pubkey.clone(),
-            dispute: self.dispute.clone(),
-        }
-    }
-}
-
-/// Subset of the body that the mandante offered. The contratista may only add their key.
-#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Terms {
     pub network: Network,
-    pub unit: Unit,
-    pub bond_bps: u16,
-    pub t_project: u32,
-    pub partidas: Vec<PartidaSpec>,
-    pub mandante_pubkey: String,
-    pub dispute: DisputePolicy,
+    pub mode: Mode,
+    /// Each party locks this many sats. Escrow output = 2 × sats.
+    pub sats: u64,
+    /// Funding miner fee, split in half (each input pays `fee/2`).
+    pub fee: u64,
+    /// Address index on `m/48'/…/2'/0/i`.
+    #[serde(default)]
+    pub index: u32,
+    /// BIP48 account xpub or descriptor key (`[fpr/…]tpub…/0/*` or Zpub/Vpub/tpub).
+    pub mandante_xpub: String,
+    pub contratista_xpub: Option<String>,
+}
+
+impl Terms {
+    pub fn escrow_sats(&self) -> u64 {
+        self.sats.saturating_mul(2)
+    }
+
+    pub fn require_complete(&self) -> Result<(&str, &str)> {
+        let c = self
+            .contratista_xpub
+            .as_deref()
+            .ok_or_else(|| Error::protocol("contratista xpub missing; accept the offer first"))?;
+        if self.mandante_xpub.trim().is_empty() {
+            return Err(Error::protocol("mandante xpub missing"));
+        }
+        if self.sats == 0 {
+            return Err(Error::protocol("sats must be > 0"));
+        }
+        if self.fee == 0 {
+            return Err(Error::protocol("fee must be > 0"));
+        }
+        if let Mode::Burn { t_unix } = self.mode {
+            if t_unix < 500_000_000 {
+                return Err(Error::protocol(
+                    "burn t_unix must be a unix time (>= 500000000), not a block height",
+                ));
+            }
+        }
+        Ok((self.mandante_xpub.trim(), c.trim()))
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Offer {
-    pub body: ContractBody,
-    /// BIP340 schnorr, 64-byte hex, over `hbp-contract` tagged hash of the body.
-    pub mandante_sig: String,
+    pub terms: Terms,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct SignedContract {
-    pub body: ContractBody,
-    pub mandante_sig: String,
-    pub contratista_sig: String,
+pub fn canonical_json<T: Serialize>(v: &T) -> Result<Vec<u8>> {
+    let mut buf = Vec::new();
+    let mut ser = serde_json::Serializer::with_formatter(
+        &mut buf,
+        serde_json::ser::CompactFormatter,
+    );
+    v.serialize(&mut ser)?;
+    Ok(buf)
 }
 
-impl SignedContract {
-    pub fn id(&self) -> Result<ContractId> {
-        contract_id(&self.body)
-    }
-
-    pub fn require_both_keys(&self) -> Result<(&str, &str)> {
-        let c = self
-            .body
-            .contratista_pubkey
-            .as_deref()
-            .ok_or_else(|| Error::protocol("contratista pubkey missing"))?;
-        Ok((self.body.mandante_pubkey.as_str(), c))
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Quote {
-    pub contract_id: ContractId,
-    pub bond_sats: u64,
-    pub partidas: Vec<PartidaQuote>,
-    pub fx_note: String,
-    pub quoted_at_unix: u32,
-    pub mandante_sig: Option<String>,
-    pub contratista_sig: Option<String>,
-    /// Per-party MAD stake (sats). Output on-chain is `2 * mad_sats` if present.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub mad_sats: Option<u64>,
-}
-
-/// Joint naming of an arbiter. Not part of the offer hash; both must sign
-/// the same pubkey before addresses/funding. Either party can propose.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ArbiterNomination {
-    pub contract_id: ContractId,
-    pub pubkey: String,
-    pub mandante_sig: Option<String>,
-    pub contratista_sig: Option<String>,
-}
-
-impl ArbiterNomination {
-    pub fn fully_signed(&self) -> bool {
-        self.mandante_sig.is_some() && self.contratista_sig.is_some()
-    }
-
-    pub fn validate_against(&self, body: &ContractBody) -> Result<()> {
-        if !matches!(body.dispute, DisputePolicy::Arbiter { .. }) {
-            return Err(Error::protocol(
-                "arbiter nomination only valid if dispute policy is arbiter",
-            ));
-        }
-        decode_compressed_pubkey(&self.pubkey)?;
-        if self.pubkey == body.mandante_pubkey {
-            return Err(Error::protocol("arbiter must not be the mandante"));
-        }
-        if body.contratista_pubkey.as_ref() == Some(&self.pubkey) {
-            return Err(Error::protocol("arbiter must not be the contratista"));
-        }
-        Ok(())
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct PartidaQuote {
-    pub id: u32,
-    pub sats: u64,
-}
-
-impl Quote {
-    pub fn partida_sats(&self, id: u32) -> Result<u64> {
-        self.partidas
-            .iter()
-            .find(|p| p.id == id)
-            .map(|p| p.sats)
-            .ok_or_else(|| Error::protocol(format!("quote has no partida {id}")))
-    }
-
-    pub fn validate_against(&self, body: &ContractBody) -> Result<()> {
-        if self.bond_sats == 0 {
-            return Err(Error::protocol("bond_sats must be > 0"));
-        }
-        if self.partidas.len() != body.partidas.len() {
-            return Err(Error::protocol("quote must cover every partida"));
-        }
-        for spec in &body.partidas {
-            let q = self.partida_sats(spec.id)?;
-            if q < 546 {
-                return Err(Error::protocol(format!(
-                    "partida {} sats below dust",
-                    spec.id
-                )));
-            }
-        }
-        match &body.dispute {
-            DisputePolicy::Mad { mad_bps } => {
-                let Some(each) = self.mad_sats else {
-                    return Err(Error::protocol("mad policy requires quote.mad_sats"));
-                };
-                let p1 = self.partida_sats(body.partidas[0].id)?;
-                let expect = p1
-                    .checked_mul(u64::from(*mad_bps))
-                    .and_then(|v| v.checked_div(10_000))
-                    .ok_or_else(|| Error::protocol("mad_sats overflow"))?;
-                if each != expect || each < 546 {
-                    return Err(Error::protocol(format!(
-                        "mad_sats {each} != {expect} (partida1 * mad_bps / 10000)"
-                    )));
-                }
-            }
-            _ => {
-                if self.mad_sats.is_some() {
-                    return Err(Error::protocol("mad_sats set but dispute is not mad"));
-                }
-            }
-        }
-        Ok(())
-    }
-}
-
-pub fn decode_compressed_pubkey(hex_str: &str) -> Result<[u8; 33]> {
-    let bytes = hex::decode(hex_str.trim())?;
-    let arr: [u8; 33] = bytes
-        .try_into()
-        .map_err(|_| Error::protocol("pubkey must be 33-byte compressed hex"))?;
-    if arr[0] != 0x02 && arr[0] != 0x03 {
-        return Err(Error::protocol("pubkey must be compressed"));
-    }
-    Ok(arr)
-}
-
-pub fn canonical_json<T: Serialize>(value: &T) -> Result<Vec<u8>> {
-    // Struct field order is deterministic. We still go through serde_json::Value
-    // so maps (if any) sort by key.
-    let value = serde_json::to_value(value)?;
-    Ok(to_canonical(&value)?)
-}
-
-fn to_canonical(value: &serde_json::Value) -> Result<Vec<u8>> {
-    match value {
-        serde_json::Value::Null
-        | serde_json::Value::Bool(_)
-        | serde_json::Value::Number(_)
-        | serde_json::Value::String(_) => Ok(serde_json::to_vec(value)?),
-        serde_json::Value::Array(items) => {
-            let mut out = Vec::from(b"[");
-            for (i, item) in items.iter().enumerate() {
-                if i > 0 {
-                    out.push(b',');
-                }
-                out.extend(to_canonical(item)?);
-            }
-            out.push(b']');
-            Ok(out)
-        }
-        serde_json::Value::Object(map) => {
-            let mut keys: Vec<&String> = map.keys().collect();
-            keys.sort();
-            let mut out = Vec::from(b"{");
-            for (i, key) in keys.iter().enumerate() {
-                if i > 0 {
-                    out.push(b',');
-                }
-                out.extend(serde_json::to_vec(key)?);
-                out.push(b':');
-                out.extend(to_canonical(&map[*key])?);
-            }
-            out.push(b'}');
-            Ok(out)
-        }
-    }
-}
-
-pub fn sha256_bytes(data: &[u8]) -> [u8; 32] {
-    Sha256::digest(data).into()
-}
-
-pub fn contract_id(body: &ContractBody) -> Result<ContractId> {
-    body.validate()?;
-    if body.contratista_pubkey.is_none() {
-        return Err(Error::protocol(
-            "contract id requires both pubkeys (accepted contract)",
-        ));
-    }
-    Ok(hex::encode(sha256_bytes(&canonical_json(body)?)))
+pub fn contract_id(terms: &Terms) -> Result<String> {
+    let complete = terms.clone();
+    complete.require_complete()?;
+    let body = canonical_json(&complete)?;
+    let mut h = Sha256::new();
+    h.update(CONTRACT_ID_TAG);
+    h.update(&body);
+    Ok(hex::encode(h.finalize()))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn pk(n: u8) -> String {
-        let mut b = [0x02u8; 33];
-        b[32] = n;
-        hex::encode(b)
-    }
-
     #[test]
-    fn canonical_is_stable() {
-        let body = ContractBody {
-            network: Network::Regtest,
-            unit: Unit::Usd,
-            bond_bps: 1000,
-            t_project: 1_800_000_000,
-            partidas: vec![PartidaSpec {
-                id: 1,
-                description: "Radier".into(),
-                amount_minor: 150_000,
-                plazo_unix: 1_700_000_000,
-            }],
-            mandante_pubkey: pk(1),
-            contratista_pubkey: Some(pk(2)),
-            dispute: DisputePolicy::Unwind,
+    fn id_stable_and_needs_both_xpubs() {
+        let mut t = Terms {
+            network: Network::Signet,
+            mode: Mode::Hold,
+            sats: 5_000,
+            fee: 500,
+            index: 0,
+            mandante_xpub: "tpubM".into(),
+            contratista_xpub: None,
         };
-        let a = canonical_json(&body).unwrap();
-        let b = canonical_json(&body).unwrap();
+        assert!(contract_id(&t).is_err());
+        t.contratista_xpub = Some("tpubC".into());
+        let a = contract_id(&t).unwrap();
+        let b = contract_id(&t).unwrap();
         assert_eq!(a, b);
-        assert_eq!(contract_id(&body).unwrap().len(), 64);
-    }
-
-    #[test]
-    fn arbiter_policy_has_no_pubkey() {
-        let policy = DisputePolicy::Arbiter {
-            window_secs: DEFAULT_ARBITER_WINDOW_SECS,
-        };
-        policy.validate().unwrap();
-        let json = serde_json::to_value(&policy).unwrap();
-        assert_eq!(json["policy"], "arbiter");
-        assert!(json.get("pubkey").is_none());
-        assert_eq!(json["window_secs"], DEFAULT_ARBITER_WINDOW_SECS);
-    }
-
-    #[test]
-    fn nomination_is_outside_contract_id() {
-        let body = ContractBody {
-            network: Network::Regtest,
-            unit: Unit::Usd,
-            bond_bps: 1000,
-            t_project: 1_800_000_000,
-            partidas: vec![PartidaSpec {
-                id: 1,
-                description: "Muro".into(),
-                amount_minor: 150_000,
-                plazo_unix: 1_700_000_000,
-            }],
-            mandante_pubkey: pk(1),
-            contratista_pubkey: Some(pk(2)),
-            dispute: DisputePolicy::Arbiter { window_secs: 15 },
-        };
-        let id = contract_id(&body).unwrap();
-        let nom = ArbiterNomination {
-            contract_id: id.clone(),
-            pubkey: pk(9),
-            mandante_sig: None,
-            contratista_sig: None,
-        };
-        nom.validate_against(&body).unwrap();
-        assert_eq!(contract_id(&body).unwrap(), id);
-        assert!(!nom.fully_signed());
-    }
-
-    #[test]
-    fn nomination_rejects_parties_and_unwind() {
-        let mut body = ContractBody {
-            network: Network::Regtest,
-            unit: Unit::Usd,
-            bond_bps: 1000,
-            t_project: 1_800_000_000,
-            partidas: vec![PartidaSpec {
-                id: 1,
-                description: "Muro".into(),
-                amount_minor: 150_000,
-                plazo_unix: 1_700_000_000,
-            }],
-            mandante_pubkey: pk(1),
-            contratista_pubkey: Some(pk(2)),
-            dispute: DisputePolicy::Arbiter { window_secs: 15 },
-        };
-        let id = contract_id(&body).unwrap();
-        let as_m = ArbiterNomination {
-            contract_id: id.clone(),
-            pubkey: pk(1),
-            mandante_sig: None,
-            contratista_sig: None,
-        };
-        assert!(as_m
-            .validate_against(&body)
-            .unwrap_err()
-            .to_string()
-            .contains("mandante"));
-        let as_c = ArbiterNomination {
-            contract_id: id.clone(),
-            pubkey: pk(2),
-            mandante_sig: None,
-            contratista_sig: None,
-        };
-        assert!(as_c
-            .validate_against(&body)
-            .unwrap_err()
-            .to_string()
-            .contains("contratista"));
-        body.dispute = DisputePolicy::Unwind;
-        let ok_pk = ArbiterNomination {
-            contract_id: id,
-            pubkey: pk(9),
-            mandante_sig: None,
-            contratista_sig: None,
-        };
-        assert!(ok_pk
-            .validate_against(&body)
-            .unwrap_err()
-            .to_string()
-            .contains("only valid if dispute policy is arbiter"));
+        assert_eq!(a.len(), 64);
+        t.sats = 5_001;
+        assert_ne!(a, contract_id(&t).unwrap());
     }
 }

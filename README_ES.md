@@ -2,22 +2,24 @@
 
 [English](README.md)
 
-Custodia Bitcoin entre pares para **partidas de obra** más una **boleta de garantía**. Dos partes — el mandante y el contratista — bloquean fondos en un 2-de-2 Taproot (MuSig2). No hay servidor.
+Custodia Bitcoin entre pares para **partidas de obra** más una **boleta de garantía**. Dos partes — el mandante y el contratista — bloquean fondos en un 2-de-2 P2WSH. No hay servidor. `hbp` no guarda seeds: las firmas salen de Blue, Electrum, Sparrow, Ledger o Trezor.
 
-Esto es un MVP: CLI de escritorio, **regtest/signet**, archivos pasados a mano. Todavía no hay Tor ni DHT. El árbitro es opcional: una hoja Taproot que **ambos** nombran antes de fondear, no un amigo que el mandante pone en el aviso.
+Esto es un MVP: CLI de escritorio, **regtest/signet**, archivos y PSBT pasados a mano. Todavía no hay Tor ni DHT. El mandante elige **hold** (UTXO indefinido) o **burn** (quema a fee en T).
 
-Protocolo, arquitectura, hoja de ruta y **en qué quedó la última sesión**: [docs/PROJECT.md](docs/PROJECT.md) (empezar por la sección 0). Feliz minado en Signet: [docs/SIGNET_HAPPY_PATH.md](docs/SIGNET_HAPPY_PATH.md). Dos PCs (Sparrow): [docs/SIGNET_TWO_PCS.md](docs/SIGNET_TWO_PCS.md). Watch-only + PSBT atómico (Blue/Electrum): [docs/BLUE_FUNDING.md](docs/BLUE_FUNDING.md).
+Protocolo nuevo: [docs/P2WSH.md](docs/P2WSH.md). Checkpoint: [docs/PROJECT.md](docs/PROJECT.md) §0. Taproot/MuSig2 queda en la rama `musig-mode`.
 
 Hito actual: **MVP-0** más catálogo minado (**136 PASS / 6 humano**). La **política** de disputa (default unwind; MAD / slot de árbitro) la propone el oferente; a la *persona* la nombran después los dos: [docs/DISPUTE.md](docs/DISPUTE.md). Catálogo: [docs/SCENARIOS.md](docs/SCENARIOS.md). Correr todo: `scripts/run_catalog.sh`. Unwind 1–8: [docs/REGTEST_SCENARIOS.md](docs/REGTEST_SCENARIOS.md).
 
 ## Protocolo (resumen)
 
-Dos salidas Taproot, nunca mezcladas:
+Un UTXO P2WSH, partida = boleta:
 
 ```
-boleta   = tr(musig(M,C), pk(C) && after(T_proyecto))
-partida  = tr(musig(M,C), pk(M) && after(T_partida))
+wsh(sortedmulti(2, A/*, B/*))
 ```
+
+- **Hold:** 1 firma cada uno al fondear. Sin acuerdo el UTXO queda indefinido.
+- **Burn:** primero firman la quema (`nLockTime=T`, OP_RETURN + 100 % fee), después el funding.
 
 - Cierre cooperativo (recepción conforme): ambas partes firman con MuSig2. En cadena parece un pago normal.
 - Vencimiento de una partida: el mandante recupera **solo** ese pago.

@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1"/>
-<title>hbp — prueba</title>
+<title>hbp — prueba P2WSH</title>
 <style>
   :root { --bg:#f4f1ea; --ink:#1a1a1a; --muted:#5c5c5c; --card:#fff; --acc:#0b5; --req:#b00; --line:#ddd; }
   * { box-sizing: border-box; }
@@ -29,11 +29,11 @@
   label { display: block; font-size: .8rem; margin: .45rem 0 .15rem; }
   .req { color: var(--req); }
   input, select, textarea { width: 100%; padding: .45rem .5rem; font-size: 1rem; border: 1px solid var(--line); border-radius: 6px; }
+  textarea { font-family: ui-monospace, monospace; font-size: .8rem; }
   .go { background: var(--acc); color: #fff; border: 0; padding: .55rem 1rem; font-size: 1rem; border-radius: 6px; cursor: pointer; margin-top: .5rem; }
   .go:disabled { opacity: .4; }
   .sec { background: transparent; border: 1px solid var(--line); color: var(--ink); }
   pre { background: #1a1a1a; color: #ddd; padding: .6rem; border-radius: 6px; font-size: .75rem; white-space: pre-wrap; overflow: auto; }
-  #addr-box pre { max-height: 12rem; }
   .copy { font-family: ui-monospace, monospace; background: #f0f0f0; padding: .4rem .5rem; border-radius: 6px; word-break: break-all; font-size: .85rem; }
   #coin-box label { display: block; margin: .35rem 0; font-size: .9rem; }
   details { margin-top: .5rem; color: var(--muted); font-size: .9rem; }
@@ -50,31 +50,13 @@
     min-width: 0;
   }
   .log p { margin: 0 0 .35rem; color: var(--muted); font-size: .8rem; }
-  #out {
-    flex: 1;
-    margin: 0;
-    min-height: 0;
-    height: 100%;
-    font-size: .75rem;
-  }
+  #out { flex: 1; margin: 0; min-height: 0; height: 100%; font-size: .75rem; }
   #out.err { color: #f88; }
   @media (max-width: 56rem) {
-    main {
-      grid-template-columns: 1fr;
-      max-width: 36rem;
-      padding-bottom: 12rem;
-    }
+    main { grid-template-columns: 1fr; max-width: 36rem; padding-bottom: 12rem; }
     .log {
-      position: fixed;
-      top: auto;
-      right: 0;
-      left: 0;
-      bottom: 0;
-      height: 10.5rem;
-      z-index: 5;
-      padding: .5rem 1.25rem .75rem;
-      background: var(--bg);
-      box-shadow: 0 -6px 16px #0002;
+      position: fixed; top: auto; right: 0; left: 0; bottom: 0; height: 10.5rem;
+      z-index: 5; padding: .5rem 1.25rem .75rem; background: var(--bg); box-shadow: 0 -6px 16px #0002;
     }
   }
 </style>
@@ -83,14 +65,14 @@
 <main>
 <div class="steps">
   <h1>Pagar un trabajo con Bitcoin</h1>
-  <p class="lead">Como enviar bitcoin a alguien, pero el dinero queda <b>cerrado</b> hasta que los dos están de acuerdo — o hasta que vence el plazo.</p>
+  <p class="lead">2-de-2 P2WSH. <b>hbp no tiene seeds</b>: las firmas salen de Blue, Electrum, Sparrow, Ledger o Trezor.</p>
 
   <p>¿En qué red?</p>
   <div class="who">
     <button type="button" id="btn-signet" class="on">Signet</button>
     <button type="button" id="btn-regtest">Regtest</button>
   </div>
-  <p id="net-hint" class="lead">Electrum / Blue + faucet. Sin nodo. Ensayo 1 h: .msu y .csu (no uses .ms/.cs).</p>
+  <p id="net-hint" class="lead">Electrum / Blue / Sparrow. Carpetas .mh y .ch (no uses .ms/.cs del MuSig2).</p>
 
   <p>¿Quién sos?</p>
   <div class="who">
@@ -99,235 +81,200 @@
   </div>
 
   <div class="card">
-    <p>Esta punta escribe en <span class="copy" id="dir-show">.msu</span>. La otra usa <span class="copy" id="peer-show">.csu</span> — pegá esas rutas, no copies archivos.</p>
-    <input id="dir" type="hidden" value=".msu"/>
+    <p>Esta punta escribe en <span class="copy" id="dir-show">.mh</span>. La otra usa <span class="copy" id="peer-show">.ch</span>.</p>
+    <input id="dir" type="hidden" value=".mh"/>
     <details>
-      <summary>Opciones (casi nunca hace falta)</summary>
-      <label>Contraseña de tu clave hbp (opcional)</label>
-      <input id="pass" type="password" autocomplete="off"/>
-      <label>Carpeta (si no querés la default de la red)</label>
-      <input id="dir-override" placeholder=".msu"/>
+      <summary>Carpeta (si no querés la default)</summary>
+      <input id="dir-override" placeholder=".mh"/>
     </details>
   </div>
 
   <div class="card" id="s1">
-    <h2><span class="n">1</span> Crear tu clave</h2>
-    <p>Una sola vez. No es tu Blue: es la llave del contrato. El otro nunca la ve.</p>
-    <button class="go" data-step="init">Crear mi clave</button>
+    <h2><span class="n">1</span> Sesión (sin claves)</h2>
+    <p>Solo red y rol. Ningún secreto entra a hbp.</p>
+    <button class="go" data-step="init">Crear sesión</button>
   </div>
 
-  <div class="card hide" id="s2m">
-    <h2><span class="n">2</span> Armar el acuerdo</h2>
-    <p>Montos de prueba: un trabajo de 5 USD y boleta igual (5 000 + 5 000 sats). Fee de fondeo 500 (250 cada uno). P1 y boleta vencen juntas en <b>1 hora</b> desde que creás el acuerdo, no desde el fondeo.</p>
-    <button class="go" data-step="draft">Crear acuerdo y archivo para el otro</button>
-    <p id="offer-hint" class="ok hide">Mandale al otro (USB, Signal) el archivo <span class="copy" id="offer-path"></span></p>
-    <p id="plazos-hint" class="ok hide"></p>
-    <label><span class="req">*</span> Archivo que te devolvió (termina en pending.json)</label>
-    <input id="pending-file" placeholder="01-accepted.pending.json"/>
-    <button class="go sec" data-step="commit">Confirmar su aceptación</button>
+  <div class="card" id="s2">
+    <h2><span class="n">2</span> Tus dos xpubs</h2>
+    <p><b>m/48'</b> (Vault / 2-de-2) se la mandás al otro. <b>m/84'</b> (hot, Native SegWit) se queda acá.</p>
+    <label><span class="req">*</span> xpub BIP48 (Zpub / Vpub / tpub del 2-de-2)</label>
+    <textarea id="xpub48" rows="2" placeholder="Vpub… o tpub…  m/48'/1'/0'/2'"></textarea>
+    <button class="go sec" data-step="cosigner">Guardar m/48'</button>
+    <label><span class="req">*</span> xpub singlesig (zpub / vpub / tpub de la plata)</label>
+    <textarea id="xpub84" rows="2" placeholder="vpub…  m/84'/1'/0'"></textarea>
+    <button class="go sec" data-step="watch">Guardar m/84' (solo local)</button>
   </div>
 
-  <div class="card hide" id="s2c">
-    <h2><span class="n">2</span> Aceptar el acuerdo</h2>
-    <label><span class="req">*</span> Archivo que te mandó (00-offer.json)</label>
-    <input id="offer-file" placeholder="00-offer.json"/>
-    <button class="go" data-step="accept">Aceptar</button>
-    <p id="pending-hint" class="ok hide">Devolvéle el archivo pending. Cuando te mande el contrato firmado:</p>
-    <label>Archivo del contrato firmado (01-accepted.json)</label>
-    <input id="accepted-file" placeholder="01-accepted.json"/>
-    <button class="go sec" data-step="import">Guardar contrato</button>
+  <div class="card hide" id="s3m">
+    <h2><span class="n">3</span> Armar el acuerdo</h2>
+    <p>5000 + 5000 sats. El modo lo elegís vos; el otro acepta o no entra.</p>
+    <div class="who">
+      <button type="button" id="btn-hold" class="on">Hold (1 firma, UTXO indefinido)</button>
+      <button type="button" id="btn-burn">Burn (2 firmas, quema a fee)</button>
+    </div>
+    <p id="mode-hint" class="ok">Hold: si no hay acuerdo el dinero queda cerrado para siempre hasta que firmen los dos.</p>
+    <button class="go" data-step="draft">Crear offer</button>
+    <p id="offer-hint" class="ok hide">Mandale al otro el archivo <span class="copy" id="offer-path"></span></p>
+    <label>Archivo 01-accepted.json que te devolvió</label>
+    <input id="accepted-file" placeholder=".ch/01-accepted.json"/>
+    <button class="go sec" data-step="import">Importar aceptación</button>
   </div>
 
-  <div class="card" id="s3">
-    <h2><span class="n">3</span> Fijar los sats</h2>
-    <p>El precio de bitcoin se usa una vez. Después los montos no cambian.</p>
-    <button class="go" data-step="quote">Proponer montos en sats</button>
-    <label><span class="req">*</span> Archivo 02-quote.json del otro (cuando te lo pase)</label>
-    <input id="quote-file" placeholder="02-quote.json"/>
-    <button class="go sec" data-step="accept-quote">Aceptar montos</button>
+  <div class="card hide" id="s3c">
+    <h2><span class="n">3</span> Aceptar el acuerdo</h2>
+    <label><span class="req">*</span> Archivo 00-offer.json del que paga</label>
+    <input id="offer-file" placeholder=".mh/00-offer.json"/>
+    <button class="go" data-step="accept">Aceptar (pega tu m/48' en el paso 2 antes)</button>
+    <p id="accepted-hint" class="ok hide">Devolvé <span class="copy" id="accepted-path"></span></p>
   </div>
 
   <div class="card" id="s4">
-    <h2><span class="n">4</span> Encerrar el bitcoin (Blue Wallet, Signet)</h2>
-    <p>Una sola transacción, dos inputs: boleta 5 000 + partida 5 000. Fee 500 sats (250 cada uno). Nadie queda locked si el otro no firma. Blue <b>solo firma su input</b>. El xpub se queda en esta computadora.</p>
-    <label>Tu xpub de Blue (Wallet → details). Nunca se lo mandes al otro.</label>
-    <textarea id="xpub" rows="2" placeholder="vpub… / zpub… / tpub… o descriptor wpkh(tpub…/0/*)"></textarea>
-    <label>Tipo</label>
-    <select id="watch-kind"><option value="wpkh">Native SegWit (wpkh) — default Blue</option><option value="tr">Taproot (tr)</option></select>
-    <button class="go" data-step="watch-import">Guardar watch-only local</button>
-    <button class="go sec" data-step="coins" id="btn-coins">Buscar mis monedas en Signet</button>
-    <div id="coin-box"></div>
-    <button class="go" data-step="offer-coin">Usar la moneda elegida (05-coin.json)</button>
-    <p id="coin-hint" class="ok hide">Mandale al otro <span class="copy" id="coin-path"></span> — un UTXO, no el xpub.</p>
-    <label><span class="req">*</span> Archivo 05-coin.json del otro</label>
-    <input id="peer-coin" placeholder="05-coin.json que te pasó"/>
-    <button class="go" data-step="fund-coins">Armar PSBT atómico</button>
-    <p>En Blue: importar el <code>.psbt</code>, firmar, <b>no transmitir</b>, devolver el archivo. Las dos puntas hacen lo mismo.</p>
-    <label>PSBT firmado por vos</label>
-    <input id="psbt-mine" placeholder="05-funding.unsigned.psbt firmado en Blue"/>
-    <label>PSBT firmado por el otro</label>
-    <input id="psbt-peer" placeholder="el que te devolvió"/>
-    <button class="go" data-step="fund-combine">Juntar firmas y dar hex</button>
-    <label>Hex de la tx ya firmada (para comprobar; cualquiera transmite)</label>
-    <textarea id="txhex" rows="3" placeholder="sale de fund-combine; Blue: Settings → Tools → Broadcast"></textarea>
-    <button class="go" data-step="verify">Comprobar que cerró bien</button>
-    <button class="go sec" data-step="addresses">Mostrar direcciones del contrato</button>
+    <h2><span class="n">4</span> Encerrar el bitcoin</h2>
+    <p>Una tx, dos inputs, un output 2-de-2. En burn: primero firman la quema (m/48'), después el funding (m/84').</p>
+    <button class="go sec" data-step="addresses">Ver address de escrow</button>
     <div id="addr-box"></div>
-    <details>
-      <summary>Esplora (vacío = blockstream, si no mempool.space)</summary>
-      <input id="esplora" placeholder="https://blockstream.info/signet/api"/>
-    </details>
-    <details>
-      <summary>Pegar moneda a mano (sin Blue)</summary>
-      <p>Solo si no importaste el xpub. Hay que anotar outpoint, sats, address y vuelto.</p>
-      <label>Mi moneda (txid:vout)</label>
-      <input id="my-outpoint" placeholder="txid:vout"/>
-      <label>Sats de esa moneda</label>
-      <input id="my-coin-sats" placeholder="ej. 10000"/>
-      <label>Address de esa moneda</label>
-      <input id="my-coin-addr" placeholder="tb1… de ese UTXO"/>
-      <label>Address de vuelto</label>
-      <input id="my-coin-chg" placeholder="otra address tuya, no la del UTXO"/>
-    </details>
-    <details>
-      <summary>Avanzado: outpoints a mano (Core / scripts)</summary>
-      <label>Tu moneda (txid:vout)</label><input id="my-op"/>
-      <label>Sats de esa moneda</label><input id="my-sats"/>
-      <label>Address de esa moneda</label><input id="my-prev"/>
-      <label>Address de vuelto</label><input id="my-chg"/>
-      <label>Moneda del otro (txid:vout)</label><input id="peer-op"/>
-      <label>Sats del otro</label><input id="peer-sats"/>
-      <label>Address del otro</label><input id="peer-prev"/>
-      <label>Vuelto del otro</label><input id="peer-chg"/>
-      <button class="go sec" data-step="fund">Armar PSBT (flags)</button>
-    </details>
+    <button class="go sec" data-step="coins">Listar mis UTXO (m/84')</button>
+    <div id="coin-box"></div>
+    <button class="go sec" data-step="offer-coin">Armar mi 05-coin.json</button>
+    <p id="coin-path" class="copy hide"></p>
+    <label><span class="req">*</span> 05-coin.json del otro</label>
+    <input id="peer-coin" placeholder=".ch/05-coin.json"/>
+    <button class="go" data-step="fund">Armar PSBTs</button>
+    <div id="psbt-box"></div>
+  </div>
+
+  <div class="card hide" id="s4b">
+    <h2><span class="n">4b</span> Firmar la quema (solo burn)</h2>
+    <p>Copiá la PSBT, firmala en Sparrow/Electrum/Blue Vault/Ledger (m/48'). Pegá la firmada. Combiná las dos.</p>
+    <label>PSBT de quema (unsigned, copiá esto)</label>
+    <textarea id="burn-unsigned" rows="3" readonly></textarea>
+    <label>Tu PSBT de quema firmada (ruta o base64)</label>
+    <textarea id="burn-mine" rows="2" placeholder="burn.signed.psbt o base64"></textarea>
+    <button class="go sec" data-step="put-burn">Guardar mi firma de quema</button>
+    <label>PSBT de quema firmada del otro</label>
+    <input id="burn-peer" placeholder=".ch/burn.signed.psbt"/>
+    <button class="go" data-step="combine-burn">Combinar quema (obligatorio antes del funding)</button>
+  </div>
+
+  <div class="card" id="s4c">
+    <h2><span class="n">4c</span> Firmar el funding</h2>
+    <p>Firmá con la hot wallet (m/84', Blue/Electrum/Sparrow). Solo tu input.</p>
+    <label>PSBT de funding (unsigned)</label>
+    <textarea id="fund-unsigned" rows="3" readonly></textarea>
+    <label>Tu PSBT de funding firmada</label>
+    <textarea id="fund-mine" rows="2" placeholder="funding.signed.psbt o base64"></textarea>
+    <button class="go sec" data-step="put-fund">Guardar mi firma de funding</button>
+    <label>PSBT de funding firmada del otro</label>
+    <input id="fund-peer" placeholder=".ch/funding.signed.psbt"/>
+    <button class="go" data-step="combine-fund">Combinar y transmitir</button>
   </div>
 
   <div class="card" id="s5">
-    <h2><span class="n">5</span> Pagar el trabajo (los dos firman)</h2>
-    <p>El UTXO y la Receive nueva salen del contrato + tu xpub. No hace falta pegar address. <b>Proponer el pago</b> lo hace quien cobra (contratista): hbp elige su Receive.</p>
-    <button class="go sec" data-step="sync">Actualizar estado (chain)</button>
-    <button class="go sec" data-step="load-escrow">Cargar UTXO de la partida 1</button>
-    <button class="go sec" data-step="load-bond">Cargar UTXO de la boleta</button>
+    <h2><span class="n">5</span> Pagar (los dos firman m/48')</h2>
+    <button class="go sec" data-step="sync">Actualizar estado</button>
     <div id="status-box"></div>
-    <label>Dónde está el dinero cerrado (txid:vout) — vacío = lo saca hbp</label>
-    <input id="escrow-op" placeholder="opcional"/>
-    <label>Sats (partida o boleta)</label>
-    <input id="escrow-sats" placeholder="opcional"/>
-    <label>Address de cobro (vacío = Receive nueva de tu xpub)</label>
-    <input id="pay-dest" placeholder="(automático)"/>
-    <button class="go" data-step="propose">Proponer el pago</button>
-    <label><span class="req">*</span> Archivo 04-coop.json</label>
-    <input id="coop-file" placeholder="04-coop.json"/>
-    <button class="go" data-step="sign">Firmar el pago</button>
-    <button class="go" data-step="finish">Cerrar y dar el hex para transmitir</button>
+    <label>Address de cobro (Receive nueva de Electrum/Blue del que trabaja)</label>
+    <input id="pay-dest" placeholder="tb1q…"/>
+    <button class="go" data-step="coop">Armar PSBT de pago</button>
+    <label>PSBT coop unsigned</label>
+    <textarea id="coop-unsigned" rows="3" readonly></textarea>
+    <label>Tu PSBT coop firmada</label>
+    <textarea id="coop-mine" rows="2"></textarea>
+    <button class="go sec" data-step="put-coop">Guardar mi firma coop</button>
+    <label>PSBT coop firmada del otro</label>
+    <input id="coop-peer" placeholder=".ch/coop.signed.psbt"/>
+    <button class="go" data-step="combine-coop">Combinar y transmitir pago</button>
   </div>
 
   <details class="card">
-    <summary>Si no se ponen de acuerdo (plazo vencido)</summary>
-    <p>Un clic: hbp elige la Receive, firma, transmite y cierra el estado si ya está minado. No reemite si la chain ya gastó el UTXO.</p>
-    <button class="go sec" data-step="unwind-p">Recuperar el trabajo (quien pagó)</button>
-    <button class="go sec" data-step="unwind-b">Recuperar la boleta (quien trabajó)</button>
+    <summary>Si no se ponen de acuerdo (solo modo burn, pasado T)</summary>
+    <p>La quema ya está firmada. Un clic la transmite. 100 % a fee + OP_RETURN. Hold no tiene este botón: el UTXO queda indefinido.</p>
+    <button class="go sec" data-step="publish-burn">Publicar quema</button>
   </details>
 </div>
-<aside class="log" aria-label="Salida de hbp">
-  <p>Salida de hbp</p>
-  <pre id="out">Acá se ve lo que responde el programa.</pre>
-</aside>
+
+<div class="card log">
+  <p>Log</p>
+  <pre id="out"></pre>
+</div>
 </main>
 <script>
-const $ = (id) => document.getElementById(id);
 let role = localStorage.getItem('hbp-role') || 'mandante';
 let net = localStorage.getItem('hbp-net') || 'signet';
+let mode = localStorage.getItem('hbp-mode') || 'hold';
 
 function sessionDir() {
-  if (net === 'signet') return role === 'mandante' ? '.msu' : '.csu';
+  if (net === 'signet') return role === 'mandante' ? '.mh' : '.ch';
   return role === 'mandante' ? '.m' : '.c';
 }
 function peerDir() {
-  if (net === 'signet') return role === 'mandante' ? '.csu' : '.msu';
+  if (net === 'signet') return role === 'mandante' ? '.ch' : '.mh';
   return role === 'mandante' ? '.c' : '.m';
 }
+function $(id) { return document.getElementById(id); }
 
 function showSession() {
   $('btn-signet').classList.toggle('on', net === 'signet');
   $('btn-regtest').classList.toggle('on', net === 'regtest');
   $('btn-m').classList.toggle('on', role === 'mandante');
   $('btn-c').classList.toggle('on', role === 'contratista');
+  $('btn-hold').classList.toggle('on', mode === 'hold');
+  $('btn-burn').classList.toggle('on', mode === 'burn');
   $('net-hint').textContent = net === 'signet'
-    ? 'Electrum / Blue + faucet. Sin nodo. Ensayo 1 h: .msu (quien paga) y .csu (quien trabaja). No uses .ms/.cs.'
-    : 'Nodo bitcoind local. Carpetas viejas: .m y .c (no uses estas en Signet).';
-  const mine = sessionDir();
+    ? 'Electrum / Blue / Sparrow. Carpetas .mh (quien paga) y .ch (quien trabaja). No uses .ms/.cs.'
+    : 'Nodo bitcoind local. Carpetas .m y .c.';
+  $('mode-hint').textContent = mode === 'hold'
+    ? 'Hold: 1 firma al fondear. Si no hay acuerdo el UTXO queda indefinido.'
+    : 'Burn: 2 firmas. Primero quema m/48\', después funding m/84\'. Pasado T se quema a fee.';
+  $('s3m').classList.toggle('hide', role !== 'mandante');
+  $('s3c').classList.toggle('hide', role !== 'contratista');
+  $('s4b').classList.toggle('hide', mode !== 'burn');
+  const mine = $('dir-override').value.trim() || sessionDir();
   const peer = peerDir();
-  const over = $('dir-override').value.trim();
-  $('dir').value = over || mine;
-  $('dir-show').textContent = $('dir').value;
+  $('dir').value = mine;
+  $('dir-show').textContent = mine;
   $('peer-show').textContent = peer;
-  $('s2m').classList.toggle('hide', role !== 'mandante');
-  $('s2c').classList.toggle('hide', role !== 'contratista');
   $('offer-file').placeholder = peer + '/00-offer.json';
-  $('pending-file').placeholder = peer + '/01-accepted.pending.json';
-  $('accepted-file').placeholder = peer + '/contracts/<id>/01-accepted.json';
-  $('quote-file').placeholder = peer + '/contracts/<id>/02-quote.json';
-  $('peer-coin').placeholder = peer + '/contracts/<id>/05-coin.json';
-  $('btn-coins').textContent = net === 'signet' ? 'Buscar mis monedas en Signet' : 'Buscar mis monedas (regtest)';
-  localStorage.setItem('hbp-role', role);
-  localStorage.setItem('hbp-net', net);
+  $('accepted-file').placeholder = peer + '/01-accepted.json';
+  $('peer-coin').placeholder = peer + '/05-coin.json';
+  $('burn-peer').placeholder = peer + '/burn.signed.psbt';
+  $('fund-peer').placeholder = peer + '/funding.signed.psbt';
+  $('coop-peer').placeholder = peer + '/coop.signed.psbt';
 }
-$('btn-signet').onclick = () => { net = 'signet'; $('dir-override').value = ''; showSession(); };
-$('btn-regtest').onclick = () => { net = 'regtest'; $('dir-override').value = ''; showSession(); };
-$('btn-m').onclick = () => { role = 'mandante'; $('dir-override').value = ''; showSession(); };
-$('btn-c').onclick = () => { role = 'contratista'; $('dir-override').value = ''; showSession(); };
+
+$('btn-signet').onclick = () => { net = 'signet'; localStorage.setItem('hbp-net', net); $('dir-override').value = ''; showSession(); };
+$('btn-regtest').onclick = () => { net = 'regtest'; localStorage.setItem('hbp-net', net); $('dir-override').value = ''; showSession(); };
+$('btn-m').onclick = () => { role = 'mandante'; localStorage.setItem('hbp-role', role); $('dir-override').value = ''; showSession(); };
+$('btn-c').onclick = () => { role = 'contratista'; localStorage.setItem('hbp-role', role); $('dir-override').value = ''; showSession(); };
+$('btn-hold').onclick = () => { mode = 'hold'; localStorage.setItem('hbp-mode', mode); showSession(); };
+$('btn-burn').onclick = () => { mode = 'burn'; localStorage.setItem('hbp-mode', mode); showSession(); };
 $('dir-override').addEventListener('input', showSession);
 showSession();
-
-function unixHours(h) { return String(Math.floor(Date.now()/1000) + Math.round(h*3600)); }
-function fmtUnix(ts) { return new Date(Number(ts) * 1000).toLocaleString(); }
 
 async function hbp(args) {
   $('out').textContent = '… ' + args[0] + ' …';
   $('out').classList.remove('err');
-  const r = await fetch('/api/hbp', {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({
-      dir: $('dir').value,
-      passphrase: $('pass').value,
-      args
-    })
-  });
+  const body = { dir: $('dir').value, args };
+  const r = await fetch('/api/hbp', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
   const j = await r.json();
-  let text = (j.stderr || '') + (j.stdout || '') + (j.error ? '\nERROR ' + j.error : '');
-  if (!text.trim()) text = '(sin salida de hbp)';
-  $('out').textContent = text;
-  $('out').classList.toggle('err', !!j.error);
-  $('out').scrollTop = $('out').scrollHeight;
+  const text = [j.stderr, j.stdout, j.error].filter(Boolean).join('\n');
+  $('out').textContent = text || '(sin salida)';
+  if (j.error) { $('out').classList.add('err'); throw new Error(j.error + '\n' + text); }
   return { j, text };
 }
 
 function need(el, name) {
-  if (!el.value.trim()) { alert('Falta: ' + name); el.focus(); return false; }
+  if (!el.value.trim()) { alert('Falta ' + name); el.focus(); return false; }
   return true;
 }
 
 function showStatus(raw) {
   let p = null;
-  try { p = JSON.parse((raw || '').trim()); } catch (e) { p = null; }
-  if (!p) {
-    $('status-box').innerHTML = '';
-    return;
-  }
-  const bond = p.bond && p.bond.status;
-  const part = (p.partidas || []).find((x) => x.id === 1);
-  const ps = part && part.state && (part.state.status || part.state);
-  let html = '<p>Proyecto: <b>' + (p.status || '?') + '</b> · boleta: <b>' + (bond || '?') + '</b> · partida 1: <b>' + (ps || '?') + '</b></p>';
-  if (ps === 'unwound' || ps === 'paid') {
-    html += '<p class="ok">Partida 1 cerrada. No se reemite.</p>';
-  }
-  if (bond === 'unwound' || bond === 'released') {
-    html += '<p class="ok">Boleta cerrada. No se reemite.</p>';
-  }
-  $('status-box').innerHTML = html;
+  try { p = JSON.parse((raw || '').trim().split('\n').filter(l => l.startsWith('{')).pop() || raw); } catch (e) { p = null; }
+  if (!p || !p.status) { $('status-box').innerHTML = ''; return; }
+  const st = p.status.status || p.status;
+  $('status-box').innerHTML = '<p>Estado: <b>' + st + '</b> · modo: <b>' + ((p.terms && p.terms.mode && p.terms.mode.kind) || '?') + '</b></p>';
 }
 
 document.body.addEventListener('click', async (ev) => {
@@ -337,175 +284,92 @@ document.body.addEventListener('click', async (ev) => {
   try {
     if (s === 'init') {
       await hbp(['init', '--network', net, '--role', role]);
+    } else if (s === 'cosigner') {
+      if (!need($('xpub48'), 'xpub m/48')) return;
+      await hbp(['cosigner', $('xpub48').value.trim()]);
+    } else if (s === 'watch') {
+      if (!need($('xpub84'), 'xpub m/84')) return;
+      await hbp(['watch-import', '--xpub', $('xpub84').value.trim()]);
     } else if (s === 'draft') {
-      const t1 = unixHours(1), tp = t1;
-      await hbp(['new', '--unit', 'USD', '--bond-bps', '10000', '--t-project', tp, '--dispute', 'unwind']);
-      await hbp(['add-partida', '--desc', 'Trabajo 1', '--amount', '5', '--plazo', t1]);
-      const o = await hbp(['offer']);
-      const path = (o.j.stdout || '').trim().split('\n').pop();
+      const args = ['new', '--mode', mode, '--sats', '5000', '--fee', '500'];
+      if (mode === 'burn') args.push('--t-unix', String(Math.floor(Date.now()/1000) + 3600));
+      const o = await hbp(args);
+      const offer = await hbp(['offer']);
+      const path = (offer.j.stdout || '').trim().split('\n').pop();
       $('offer-path').textContent = path;
       $('offer-hint').classList.remove('hide');
-      $('plazos-hint').textContent = 'P1 y boleta unwind juntos a las ' + fmtUnix(t1) + ' (5 000 + 5 000 sats)';
-      $('plazos-hint').classList.remove('hide');
-    } else if (s === 'commit') {
-      if (!need($('pending-file'), 'archivo pending')) return;
-      await hbp(['commit', $('pending-file').value.trim()]);
-    } else if (s === 'accept') {
-      if (!need($('offer-file'), 'archivo de oferta')) return;
-      await hbp(['accept', $('offer-file').value.trim()]);
-      $('pending-hint').classList.remove('hide');
     } else if (s === 'import') {
-      if (!need($('accepted-file'), 'contrato firmado')) return;
+      if (!need($('accepted-file'), '01-accepted.json')) return;
       await hbp(['import', $('accepted-file').value.trim()]);
-    } else if (s === 'quote') {
-      await hbp(['quote', '--btc-price', '100000', '--bond-sats', '5000', '--fx-note', 'ui']);
-    } else if (s === 'accept-quote') {
-      if (!need($('quote-file'), 'archivo de quote')) return;
-      await hbp(['accept-quote', $('quote-file').value.trim()]);
-    } else if (s === 'watch-import') {
-      if (!need($('xpub'), 'xpub de Blue')) return;
-      const args = ['watch-import', '--kind', $('watch-kind').value];
-      const raw = $('xpub').value.trim();
-      if (raw.includes('(')) args.push('--descriptor', raw);
-      else args.push('--xpub', raw);
-      await hbp(args);
-    } else if (s === 'coins') {
-      const args = ['coins'];
-      if ($('esplora').value.trim()) args.push('--esplora', $('esplora').value.trim());
-      const o = await hbp(args);
-      let scan = null;
-      try { scan = JSON.parse((o.j.stdout || '').trim()); } catch (e) { scan = null; }
-      if (scan && scan.utxos) {
-        const rows = scan.utxos.map((u) => {
-          const tag = u.confirmed ? '' : ' (sin confirmar)';
-          return '<label><input type="radio" name="utxo" value="' + u.outpoint + '"/> '
-            + u.sats + ' sats · ' + u.outpoint + tag + '<br/><span class="copy">' + u.address + '</span></label>';
-        }).join('') || '<p>No hay UTXO en el gap. Pedí sats al faucet de Signet, esperá 1 confirmación y volvé a buscar.</p>';
-        $('coin-box').innerHTML = rows + (scan.change ? '<p>Vuelto: <span class="copy">' + scan.change + '</span></p>' : '');
-        document.querySelectorAll('input[name=utxo]').forEach((r) => {
-          r.onchange = () => { $('my-outpoint').value = r.value; };
-        });
-        const first = document.querySelector('input[name=utxo]');
-        if (first) { first.checked = true; $('my-outpoint').value = first.value; }
-      }
-    } else if (s === 'offer-coin') {
-      const picked = document.querySelector('input[name=utxo]:checked');
-      const outpoint = (picked && picked.value) || $('my-outpoint').value.trim();
-      if (!outpoint) { alert('Elegí una moneda de la lista (o pegala a mano abajo).'); return; }
-      $('my-outpoint').value = outpoint;
-      const args = ['offer-coin', '--outpoint', outpoint];
-      if ($('esplora').value.trim()) args.push('--esplora', $('esplora').value.trim());
-      const sats = $('my-coin-sats').value.trim();
-      const addr = $('my-coin-addr').value.trim();
-      const chg = $('my-coin-chg').value.trim();
-      if (sats && addr && chg) {
-        args.push('--sats', sats, '--address', addr, '--change', chg);
-      }
-      const o = await hbp(args);
-      if (o.j.error) return;
-      const lines = (o.j.stderr || '').trim().split('\n');
-      const path = lines.filter((l) => l.includes('05-coin.json')).pop() || '';
-      $('coin-path').textContent = path || 'contracts/…/05-coin.json';
-      $('coin-hint').classList.remove('hide');
-    } else if (s === 'fund-coins') {
-      const mine = $('coin-path').textContent.trim();
-      if (!mine || mine.indexOf('05-coin') < 0) { alert('Primero armá tu 05-coin.json'); return; }
-      if (!need($('peer-coin'), '05-coin.json del otro')) return;
-      await hbp(['fund', '--fee', '500', '--mine', mine, '--peer', $('peer-coin').value.trim()]);
-    } else if (s === 'fund-combine') {
-      if (!need($('psbt-mine'), 'tu PSBT firmado') || !need($('psbt-peer'), 'PSBT del otro')) return;
-      const o = await hbp(['fund-combine', $('psbt-mine').value.trim(), $('psbt-peer').value.trim()]);
-      const hex = (o.j.stdout || '').trim().split('\n').pop();
-      if (hex) $('txhex').value = hex;
-      await hbp(['sync']);
+    } else if (s === 'accept') {
+      if (!need($('offer-file'), '00-offer.json')) return;
+      const o = await hbp(['accept', $('offer-file').value.trim()]);
+      $('accepted-path').textContent = $('dir').value + '/01-accepted.json';
+      $('accepted-hint').classList.remove('hide');
     } else if (s === 'addresses') {
       const o = await hbp(['addresses']);
-      $('addr-box').innerHTML = '<pre class="copy">' + (o.j.stdout || '').replace(/</g,'') + '</pre>'
-        + '<p>Las addresses de escrow las fondea el PSBT. No hagas dos envíos sueltos a estas direcciones.</p>';
-    } else if (s === 'verify') {
-      if (!need($('txhex'), 'hex de la transacción')) return;
-      await hbp(['verify-funding', '--tx-hex', $('txhex').value.trim(), '--partida', '1']);
-      await hbp(['sync']);
+      $('addr-box').innerHTML = '<pre class="copy">' + (o.j.stdout || '').replace(/</g,'') + '</pre>';
+    } else if (s === 'coins') {
+      const o = await hbp(['coins']);
+      let scan = null;
+      try { scan = JSON.parse((o.j.stdout || '').trim()); } catch (e) { scan = null; }
+      if (!scan || !scan.utxos) { alert('No pude leer UTXOs'); return; }
+      let html = '';
+      scan.utxos.forEach((u, i) => {
+        html += '<label><input type="radio" name="utxo" value="' + u.outpoint + '"' + (i===0?' checked':'') + '/> ' + u.sats + ' sats · ' + u.outpoint + '</label>';
+      });
+      $('coin-box').innerHTML = html || '<p>No hay UTXO en el xpub m/84.</p>';
+    } else if (s === 'offer-coin') {
+      const picked = document.querySelector('input[name=utxo]:checked');
+      if (!picked) { alert('Listá UTXO y elegí uno'); return; }
+      const o = await hbp(['offer-coin', '--outpoint', picked.value]);
+      const path = (o.j.stderr || '').trim().split('\n').filter(l => l.indexOf('05-coin') >= 0).pop()
+        || ($('dir').value + '/05-coin.json');
+      $('coin-path').textContent = path;
+      $('coin-path').classList.remove('hide');
     } else if (s === 'fund') {
-      if (!need($('my-op'), 'tu txid:vout') || !need($('my-sats'), 'tus sats')) return;
-      const args = ['fund', '--fee', '500',
-        '--m-outpoint', $('my-op').value, '--m-sats', $('my-sats').value,
-        '--m-prev', $('my-prev').value, '--m-change', $('my-chg').value];
-      if (!need($('peer-op'), 'txid:vout del otro')) return;
-      args.push('--c-outpoint', $('peer-op').value, '--c-sats', $('peer-sats').value,
-        '--c-prev', $('peer-prev').value, '--c-change', $('peer-chg').value);
-      await hbp(args);
-    } else if (s === 'load-escrow') {
-      const o = await hbp(['status']);
-      let p = null;
-      try { p = JSON.parse((o.j.stdout || '').trim()); } catch (e) { p = null; }
-      const part = p && (p.partidas || []).find((x) => x.id === 1);
-      const st = part && part.state;
-      if (!st || st.txid == null || st.vout == null) {
-        alert('No hay partida 1 fondeada en esta carpeta. Primero Comprobar que cerró bien (paso 4) en Chrome y Firefox.');
-        return;
-      }
-      $('escrow-op').value = st.txid + ':' + st.vout;
-      $('escrow-sats').value = String(st.sats);
-    } else if (s === 'load-bond') {
-      const o = await hbp(['status']);
-      let p = null;
-      try { p = JSON.parse((o.j.stdout || '').trim()); } catch (e) { p = null; }
-      const b = p && p.bond;
-      if (!b || b.txid == null || b.vout == null) {
-        alert('No hay boleta fondeada en esta carpeta. Primero Comprobar que cerró bien (paso 4).');
-        return;
-      }
-      $('escrow-op').value = b.txid + ':' + b.vout;
-      $('escrow-sats').value = String(b.sats);
+      const mine = $('coin-path').textContent.trim() || ($('dir').value + '/05-coin.json');
+      if (!need($('peer-coin'), '05-coin del otro')) return;
+      const o = await hbp(['fund', '--mine', mine, '--peer', $('peer-coin').value.trim(), '--fee', '500']);
+      let j = null;
+      try { j = JSON.parse((o.j.stdout || '').trim()); } catch (e) { j = null; }
+      if (!j) { alert('fund no devolvió JSON'); return; }
+      $('fund-unsigned').value = j.funding_psbt || '';
+      $('burn-unsigned').value = j.burn_psbt || '';
+      $('psbt-box').innerHTML = '<p class="ok">Escrow ' + (j.address || '') + ' · ' + (j.escrow_sats || '') + ' sats · modo ' + (j.mode || '') + '</p>';
+      if (j.mode === 'burn') $('s4b').classList.remove('hide');
+    } else if (s === 'put-burn') {
+      if (!need($('burn-mine'), 'tu PSBT de quema')) return;
+      await hbp(['put-psbt', '--kind', 'burn', $('burn-mine').value.trim()]);
+    } else if (s === 'combine-burn') {
+      if (!need($('burn-peer'), 'quema firmada del otro')) return;
+      const mine = $('dir').value + '/burn.signed.psbt';
+      await hbp(['combine-burn', mine, $('burn-peer').value.trim()]);
+    } else if (s === 'put-fund') {
+      if (!need($('fund-mine'), 'tu PSBT de funding')) return;
+      await hbp(['put-psbt', '--kind', 'funding', $('fund-mine').value.trim()]);
+    } else if (s === 'combine-fund') {
+      if (!need($('fund-peer'), 'funding firmado del otro')) return;
+      const mine = $('dir').value + '/funding.signed.psbt';
+      await hbp(['combine-fund', mine, $('fund-peer').value.trim()]);
     } else if (s === 'sync') {
       const o = await hbp(['sync']);
       showStatus(o.j.stdout);
-    } else if (s === 'propose') {
-      if (!$('escrow-op').value.trim()) {
-        const o = await hbp(['status']);
-        let p = null;
-        try { p = JSON.parse((o.j.stdout || '').trim()); } catch (e) { p = null; }
-        const part = p && (p.partidas || []).find((x) => x.id === 1);
-        const st = part && part.state;
-        if (st && st.txid != null) {
-          $('escrow-op').value = st.txid + ':' + st.vout;
-          $('escrow-sats').value = String(st.sats);
-        }
-      }
-      if (!need($('escrow-op'), 'UTXO de la partida (Cargar UTXO, o Comprobar en el paso 4)') ) return;
-      if (!need($('escrow-sats'), 'sats')) return;
-      const dest = $('pay-dest').value.trim();
-      if (!confirm('¿Proponer el pago de ' + $('escrow-sats').value + ' sats' + (dest ? (' a\n' + dest) : ' (Receive de tu xpub)') + '?')) return;
-      const args = ['coop-propose', '--kind', 'partida', '--partida', '1',
-        '--outpoint', $('escrow-op').value.trim(), '--sats', $('escrow-sats').value.trim(),
-        '--fee', '200'];
-      if (dest) args.push('--dest', dest);
-      await hbp(args);
-    } else if (s === 'sign') {
-      if (!need($('coop-file'), '04-coop.json')) return;
-      if (!confirm('¿Firmar este pago?')) return;
-      await hbp(['coop-sign', $('coop-file').value.trim()]);
-    } else if (s === 'finish') {
-      if (!need($('coop-file'), '04-coop.json')) return;
-      if (!confirm('¿Cerrar, transmitir y actualizar estado?')) return;
-      await hbp(['coop-finish', $('coop-file').value.trim()]);
-      const syn = await hbp(['sync']);
-      showStatus(syn.j.stdout);
-    } else if (s === 'unwind-p' || s === 'unwind-b') {
-      const kind = s === 'unwind-p' ? 'partida' : 'bond';
-      if (!confirm('¿Recuperar ' + kind + '? hbp elige tu Receive, transmite y cierra el estado.')) return;
-      const args = ['unwind', '--kind', kind, '--fee', '200'];
-      if (kind === 'partida') args.push('--partida', '1');
-      const op = $('escrow-op').value.trim();
-      const sats = $('escrow-sats').value.trim();
-      const dest = $('pay-dest').value.trim();
-      if (op) args.push('--outpoint', op);
-      if (sats) args.push('--sats', sats);
-      if (dest) args.push('--dest', dest);
-      await hbp(args);
-      const syn = await hbp(['sync']);
-      showStatus(syn.j.stdout);
+    } else if (s === 'coop') {
+      if (!need($('pay-dest'), 'address de cobro')) return;
+      const o = await hbp(['coop', '--dest', $('pay-dest').value.trim(), '--fee', '200']);
+      let j = null;
+      try { j = JSON.parse((o.j.stdout || '').trim()); } catch (e) { j = null; }
+      if (j && j.coop_psbt) $('coop-unsigned').value = j.coop_psbt;
+    } else if (s === 'put-coop') {
+      if (!need($('coop-mine'), 'tu PSBT coop')) return;
+      await hbp(['put-psbt', '--kind', 'coop', $('coop-mine').value.trim()]);
+    } else if (s === 'combine-coop') {
+      if (!need($('coop-peer'), 'coop del otro')) return;
+      await hbp(['combine-coop', $('dir').value + '/coop.signed.psbt', $('coop-peer').value.trim()]);
+    } else if (s === 'publish-burn') {
+      if (!confirm('¿Publicar la quema? 100% a fee, no hay vuelta.')) return;
+      await hbp(['publish-burn']);
     }
   } catch (e) {
     $('out').textContent = String(e);

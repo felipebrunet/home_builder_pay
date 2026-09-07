@@ -12,8 +12,8 @@ use miniscript::Descriptor;
 use miniscript::DescriptorPublicKey;
 use serde::{Deserialize, Serialize};
 
+use crate::convert::to_btc_network;
 use crate::fund::FundingCoin;
-use crate::taproot::to_btc_network;
 use crate::Error;
 
 const DEFAULT_GAP: u32 = 20;
@@ -288,6 +288,8 @@ pub fn slip132_to_xpub(s: &str) -> Result<(String, Option<WatchKind>), Error> {
         0x0488_B21E | 0x0435_87CF => return Ok((s.trim().to_string(), None)), // xpub / tpub
         0x04B2_4746 => (0x0488_B21E, Some(WatchKind::Wpkh)),                  // zpub
         0x045F_1CF6 => (0x0435_87CF, Some(WatchKind::Wpkh)),                  // vpub
+        0x02AA_7ED3 => (0x0488_B21E, None),                                  // Zpub (P2WSH)
+        0x0257_5483 => (0x0435_87CF, None),                                  // Vpub (P2WSH)
         0x049D_7CB2 | 0x044A_5262 => {
             return Err(Error::msg(
                 "ypub/upub (nested SegWit) not supported; export Native SegWit (zpub/vpub) or Taproot from Blue",
@@ -316,7 +318,7 @@ fn check_xpub_network(xpub_str: &str, network: Network) -> Result<(), Error> {
     };
     if !ok {
         return Err(Error::msg(format!(
-            "xpub network {:?} does not match identity network {network:?}",
+            "xpub network {:?} does not match session network {network:?}",
             xpub.network
         )));
     }
