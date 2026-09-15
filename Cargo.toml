@@ -1,0 +1,19 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/xmr-joint",
+    "crates/konstruado-core",
+    "crates/konstruado-net",
+    "crates/konstruado",
+]
+default-members = ["crates/konstruado"]
+
+[workspace.package]
+edition = "2021"
+license = "MIT"
+repository = "https://github.com/felipebrunet/home_builder_pay"
+
+[workspace.dependencies]
+xmr-joint = { path = "crates/xmr-joint" }
+konstruado-core = { path = "crates/konstruado-core" }
+konstruado-net = { path = "crates/konstruado-net" }
