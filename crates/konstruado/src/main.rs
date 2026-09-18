@@ -75,9 +75,9 @@ fn App() -> Element {
     use_future(move || async move {
         match Nodo::arrancar().await {
             Ok(n) => {
-                tor.set(n.estado_tor());
                 red.set(Some(n.clone()));
                 loop {
+                    tor.set(n.estado_tor());
                     if let Some(p) = yo() {
                         n.anunciar(p);
                     }
@@ -284,7 +284,7 @@ fn linea_red(tor: EstadoTor, peers: usize, otros: &[String]) -> String {
             let corto = onion.get(..8).unwrap_or(onion.as_str());
             format!("Tor {corto}…")
         }
-        EstadoTor::Arrancando => "Tor arrancando".into(),
+        EstadoTor::Arrancando { paso } => format!("Tor {paso}"),
         EstadoTor::Fallo(s) => format!("Tor: {s}"),
         EstadoTor::Ausente => "Red local".into(),
     };
@@ -408,7 +408,7 @@ fn Tablero(
             if peers() == 0 {
                 p { class: "hint",
                     match tor() {
-                        EstadoTor::Arrancando => "Tor está arrancando. El otro Konstruado aparece cuando ambos están en la misma red (esta máquina o el onion horneado).",
+                        EstadoTor::Arrancando { .. } => "Tor está subiendo. En dos PCs puede tardar un minuto. Uno abre la sala, el otro entra.",
                         _ => "Nadie más todavía. En la misma PC, un segundo cargo run se engancha solo. En otra máquina, los dos entran por Tor al mismo swarm.",
                     }
                 }

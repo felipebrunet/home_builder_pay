@@ -16,6 +16,7 @@ use crate::rendezvous::{RENDEZVOUS_KEY, RENDEZVOUS_ONION, VIRT_PORT};
 #[derive(Clone)]
 pub struct Tor {
     snap: Arc<Mutex<Snap>>,
+    ctl: Arc<tokio::sync::Mutex<Option<Control>>>,
 }
 
 #[derive(Clone)]
@@ -28,7 +29,7 @@ struct Snap {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum EstadoTor {
     Ausente,
-    Arrancando,
+    Arrancando { paso: String },
     Listo { onion: String },
     Fallo(String),
 }
@@ -41,15 +42,23 @@ impl Tor {
                 socks: None,
                 onion: None,
             })),
+            ctl: Arc::new(tokio::sync::Mutex::new(None)),
         }
     }
 
-    pub fn marcar_arrancando(&self) {
-        self.snap.lock().unwrap().estado = EstadoTor::Arrancando;
+    pub fn marcar_arrancando(&self, paso: impl Into<String>) {
+        self.snap.lock().unwrap().estado = EstadoTor::Arrancando { paso: paso.into() };
     }
 
     pub fn marcar_fallo(&self, s: impl Into<String>) {
         self.snap.lock().unwrap().estado = EstadoTor::Fallo(s.into());
+    }
+
+    pub fn marcar_listo(&self) {
+        let mut g = self.snap.lock().unwrap();
+        if let Some(onion) = g.onion.clone() {
+            g.estado = EstadoTor::Listo { onion };
+        }
     }
 
     pub fn estado(&self) -> EstadoTor {
@@ -79,14 +88,17 @@ impl Tor {
         }
     }
 
-    /// Own Tor process, personal onion, baked rendezvous onion.
-    pub async fn arrancar(local_port: u16) -> std::io::Result<Self> {
+    /// Own Tor process and a personal onion. Does not host the swarm
+    /// onion: that is a later election so two nodes do not talk to themselves.
+    pub async fn subir(&self, local_port: u16) -> std::io::Result<()> {
+        self.marcar_arrancando("buscando tor");
         let bin = tor_bin().ok_or_else(|| std::io::Error::other("no está el binario tor"))?;
         let dir = std::env::temp_dir().join(format!("konstruado-tor-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir)?;
         let ctrl_file = dir.join("control-port");
         let log = dir.join("notice.log");
+        self.marcar_arrancando("lanzando tor");
         let mut child = tokio::process::Command::new(&bin)
             .arg("--ignore-missing-torrc")
             .arg("--SocksPort")
@@ -113,29 +125,43 @@ impl Tor {
             .stderr(std::process::Stdio::null())
             .spawn()?;
 
+        self.marcar_arrancando("control");
         let addr = wait_control_file(&ctrl_file).await?;
         let cookie = wait_cookie(&dir.join("control_auth_cookie")).await?;
         let mut ctl = Control::conectar(addr, &cookie).await?;
-        wait_bootstrap(&mut ctl).await?;
+        wait_bootstrap(&mut ctl, self).await?;
         let socks = parse_socks(&ctl.getinfo("net/listeners/socks").await?)?;
+        self.marcar_arrancando("onion personal");
         let onion = ctl.add_onion("NEW", VIRT_PORT, local_port).await?;
-        let _ = ctl.add_onion(RENDEZVOUS_KEY, VIRT_PORT, local_port).await;
-        drop(ctl);
-        let t = Self {
-            snap: Arc::new(Mutex::new(Snap {
-                estado: EstadoTor::Listo {
-                    onion: onion.clone(),
-                },
-                socks: Some(socks),
-                onion: Some(onion),
-            })),
-        };
-        // Keep the child with the Control lifetime: drop of last Tor
-        // clone is process end. Park it so kill_on_drop still applies.
+        *self.ctl.lock().await = Some(ctl);
+        {
+            let mut g = self.snap.lock().unwrap();
+            g.socks = Some(socks);
+            g.onion = Some(onion.clone());
+            g.estado = EstadoTor::Listo { onion };
+        }
         tokio::spawn(async move {
             let _ = child.wait().await;
         });
-        Ok(t)
+        Ok(())
+    }
+
+    pub async fn hospedar_sala(&self, local_port: u16) -> std::io::Result<()> {
+        let mut g = self.ctl.lock().await;
+        let ctl = g.as_mut().ok_or_else(|| std::io::Error::other("sin control"))?;
+        let onion = ctl.add_onion(RENDEZVOUS_KEY, VIRT_PORT, local_port).await?;
+        if onion != RENDEZVOUS_ONION {
+            return Err(std::io::Error::other(format!(
+                "sala inesperada: {onion}"
+            )));
+        }
+        Ok(())
+    }
+
+    pub async fn dejar_sala(&self) -> std::io::Result<()> {
+        let mut g = self.ctl.lock().await;
+        let ctl = g.as_mut().ok_or_else(|| std::io::Error::other("sin control"))?;
+        ctl.del_onion(RENDEZVOUS_ONION).await
     }
 }
 
@@ -200,11 +226,13 @@ async fn wait_cookie(path: &PathBuf) -> std::io::Result<Vec<u8>> {
     }
 }
 
-async fn wait_bootstrap(ctl: &mut Control) -> std::io::Result<()> {
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(90);
+async fn wait_bootstrap(ctl: &mut Control, tor: &Tor) -> std::io::Result<()> {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(120);
     loop {
         let phase = ctl.getinfo("status/bootstrap-phase").await.unwrap_or_default();
-        if crate::ctl::parse_progress(&phase).unwrap_or(0) >= 100 {
+        let n = crate::ctl::parse_progress(&phase).unwrap_or(0);
+        tor.marcar_arrancando(format!("bootstrap {n}%"));
+        if n >= 100 {
             return Ok(());
         }
         if tokio::time::Instant::now() > deadline {
@@ -226,7 +254,7 @@ fn parse_socks(s: &str) -> std::io::Result<SocketAddr> {
 
 pub async fn dial_rendezvous(tor: &Tor) -> std::io::Result<TcpStream> {
     timeout(
-        Duration::from_secs(25),
+        Duration::from_secs(8),
         tor.conectar(RENDEZVOUS_ONION, VIRT_PORT),
     )
     .await

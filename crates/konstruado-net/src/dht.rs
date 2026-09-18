@@ -124,7 +124,11 @@ impl Nodo {
         if !crate::tor::hay_tor() {
             return;
         }
-        self.inner.lock().unwrap().tor.marcar_arrancando();
+        self.inner
+            .lock()
+            .unwrap()
+            .tor
+            .marcar_arrancando("tor…");
         let n = self.clone();
         let port = n.inner.lock().unwrap().local_port;
         self.handle.spawn(async move {
@@ -133,32 +137,72 @@ impl Nodo {
     }
 
     async fn unirse_tor(&self, local_port: u16) {
-        match Tor::arrancar(local_port).await {
-            Ok(t) => {
-                let addr = t.onion_addr();
-                {
-                    let mut g = self.inner.lock().unwrap();
-                    g.tor = t;
-                    if let Some(a) = addr {
-                        g.addr = a;
-                    }
-                }
-                loop {
-                    if *self.inner.lock().unwrap().halt.subscribe().borrow() {
-                        break;
-                    }
-                    let tor = self.inner.lock().unwrap().tor.clone();
-                    match crate::tor::dial_rendezvous(&tor).await {
-                        Ok(stream) => {
-                            let _ = self.sesion_out(stream).await;
-                        }
-                        Err(_) => {
-                            tokio::time::sleep(Duration::from_secs(8)).await;
-                        }
-                    }
-                }
+        let tor = self.inner.lock().unwrap().tor.clone();
+        if let Err(e) = tor.subir(local_port).await {
+            tor.marcar_fallo(e.to_string());
+            return;
+        }
+        if let Some(a) = tor.onion_addr() {
+            self.inner.lock().unwrap().addr = a;
+        }
+        for i in 1..=5 {
+            if self.n_peers() > 0 {
+                tor.marcar_listo();
+                return;
             }
-            Err(e) => self.inner.lock().unwrap().tor.marcar_fallo(e.to_string()),
+            tor.marcar_arrancando(format!("buscando sala ({i}/5)"));
+            match crate::tor::dial_rendezvous(&tor).await {
+                Ok(stream) => {
+                    tor.marcar_listo();
+                    let _ = self.sesion_out(stream).await;
+                    if self.n_peers() > 0 {
+                        tor.marcar_listo();
+                        return;
+                    }
+                }
+                Err(_) => tokio::time::sleep(Duration::from_secs(2)).await,
+            }
+        }
+        let jitter = {
+            let id = self.inner.lock().unwrap().id.clone();
+            id.as_bytes()
+                .iter()
+                .fold(0u64, |h, b| h.wrapping_mul(33).wrapping_add(u64::from(*b)))
+                % 12
+        };
+        tor.marcar_arrancando(format!("abriendo sala (+{jitter}s)"));
+        tokio::time::sleep(Duration::from_secs(jitter)).await;
+        if self.n_peers() > 0 {
+            tor.marcar_listo();
+            return;
+        }
+        if let Err(e) = tor.hospedar_sala(local_port).await {
+            tor.marcar_fallo(format!("sala: {e}"));
+            return;
+        }
+        let espera = 18 + jitter;
+        for s in 0..espera {
+            if self.n_peers() > 0 {
+                tor.marcar_listo();
+                return;
+            }
+            tor.marcar_arrancando(format!("sala abierta ({s}s)"));
+            tokio::time::sleep(Duration::from_secs(1)).await;
+        }
+        let _ = tor.dejar_sala().await;
+        loop {
+            if self.n_peers() > 0 {
+                tor.marcar_listo();
+                return;
+            }
+            tor.marcar_arrancando("entrando a la sala");
+            match crate::tor::dial_rendezvous(&tor).await {
+                Ok(stream) => {
+                    tor.marcar_listo();
+                    let _ = self.sesion_out(stream).await;
+                }
+                Err(_) => tokio::time::sleep(Duration::from_secs(4)).await,
+            }
         }
     }
 

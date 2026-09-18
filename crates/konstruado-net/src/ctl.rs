@@ -23,6 +23,12 @@ impl Control {
     }
 
     pub async fn cmd(&mut self, line: &str) -> std::io::Result<(u16, Vec<String>)> {
+        timeout(Duration::from_secs(15), self.cmd_inner(line))
+            .await
+            .map_err(|_| std::io::Error::other("control timeout"))?
+    }
+
+    async fn cmd_inner(&mut self, line: &str) -> std::io::Result<(u16, Vec<String>)> {
         self.stream.write_all(line.as_bytes()).await?;
         self.stream.write_all(b"\r\n").await?;
         self.stream.flush().await?;
@@ -88,6 +94,18 @@ impl Control {
             }
         }
         Err(std::io::Error::other("ADD_ONION without ServiceID"))
+    }
+
+    pub async fn del_onion(&mut self, onion: &str) -> std::io::Result<()> {
+        let id = onion.strip_suffix(".onion").unwrap_or(onion);
+        let (code, lines) = self.cmd(&format!("DEL_ONION {id}")).await?;
+        if code != 250 {
+            return Err(std::io::Error::other(format!(
+                "DEL_ONION {code}: {}",
+                lines.join(" / ")
+            )));
+        }
+        Ok(())
     }
 }
 
