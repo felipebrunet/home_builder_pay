@@ -2,12 +2,15 @@
 //! keyed by the hardcoded network code so two copies of the app meet
 //! without exchanging addresses first.
 
+mod ctl;
 mod dht;
 mod proto;
+mod rendezvous;
 mod tor;
 
 pub use dht::Nodo;
 pub use proto::{Msg, PeerAddr};
+pub use rendezvous::RENDEZVOUS_ONION;
 pub use tor::{EstadoTor, Tor};
 
 /// Hardcoded rendezvous. Every build joins this swarm.
@@ -34,5 +37,13 @@ pub fn clave_obras() -> [u8; 32] {
     let mut h = Sha256::new();
     h.update(swarm_id());
     h.update(b"obras");
+    h.finalize().into()
+}
+
+pub fn clave_presentes() -> [u8; 32] {
+    use sha2::{Digest, Sha256};
+    let mut h = Sha256::new();
+    h.update(swarm_id());
+    h.update(b"presentes");
     h.finalize().into()
 }

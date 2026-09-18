@@ -4,9 +4,13 @@ mod acuerdo;
 mod error;
 mod partida;
 
-pub use acuerdo::{Aceptacion, EstadoObra, Oferta, Obra, PartidaEstado, Persona, Rol};
+pub use acuerdo::{
+    Aceptacion, EstadoObra, NotaPartida, Oferta, Obra, Partida, PartidaEstado, Persona, Rol,
+};
 pub use error::Error;
-pub use partida::{capital_por_lado, n_partidas, monto};
+pub use partida::{
+    ajusta_detalles, capital_por_lado, monto, monto_pct, n_partidas, titulo_partida, MAX_NOTA,
+};
 
 #[cfg(test)]
 mod tests;

@@ -2,13 +2,25 @@
 
 Peer-to-peer construction escrow on Monero (crypto still a stub). Desktop is Dioxus.
 
-Mandante publishes a job. Contratista accepts, or proposes another guarantee. Guarantee must divide the job amount exactly: 10 000 / 2 000 → 5 installments, 10 000 / 1 000 → 10. Each installment both sides lock the same amount.
+The two people do not see each other like a chat. Roles:
 
-Rendezvous is hardcoded (`konstruado-red-1`). Nodes gossip a DHT. Tor is used when a local SOCKS proxy is on 9050 or 9150; otherwise two copies on the same machine still find each other on port 17432.
+1. **Mandante** (pays) publishes a job: name, work amount, suggested guarantee.
+2. **Contratista** (builds) sees that offer on the board and accepts, or proposes another guarantee.
+
+Guarantee must divide the job amount exactly: 10 000 / 2 000 → 5 installments, 10 000 / 1 000 → 10. Each installment both sides lock the same amount.
+
+Rendezvous is hardcoded (`konstruado-red-1` plus a baked Tor v3 onion). Each node starts its own `tor` process, publishes a personal hidden service, and also hosts/dials that shared onion so two machines meet without exchanging addresses. Two copies on one PC still find each other on port 17432 without waiting for Tor.
 
 ```bash
 cargo test --workspace
 cargo run
 ```
 
-Two users on one PC: run `cargo run` twice (second window binds another port and joins the first).
+Two users on one PC:
+
+```bash
+cargo run    # window 1
+cargo run    # window 2, another terminal
+```
+
+Window 1: José, **Pago la obra**, Publicar. Window 2: Juan, **La construyo** — the job appears on his board.

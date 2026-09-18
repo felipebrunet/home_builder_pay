@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use konstruado_core::{Oferta, Obra};
+use konstruado_core::{Oferta, Obra, Persona};
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum PeerAddr {
@@ -55,6 +55,14 @@ pub fn encode_obras(obras: &[Obra]) -> Vec<u8> {
 }
 
 pub fn decode_obras(b: &[u8]) -> Vec<Obra> {
+    serde_json::from_slice(b).unwrap_or_default()
+}
+
+pub fn encode_presentes(p: &[Persona]) -> Vec<u8> {
+    serde_json::to_vec(p).unwrap_or_default()
+}
+
+pub fn decode_presentes(b: &[u8]) -> Vec<Persona> {
     serde_json::from_slice(b).unwrap_or_default()
 }
 

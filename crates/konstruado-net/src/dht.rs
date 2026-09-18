@@ -1,23 +1,25 @@
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::Mutex;
 use uuid::Uuid;
 
-use konstruado_core::{Oferta, Obra};
+use konstruado_core::{Oferta, Obra, Persona};
 
 use crate::proto::{
-    decode_obras, decode_tablero, encode_obras, encode_tablero, key_hex, Msg, PeerAddr,
+    decode_obras, decode_presentes, decode_tablero, encode_obras, encode_presentes, encode_tablero,
+    key_hex, Msg, PeerAddr,
 };
 use crate::tor::{EstadoTor, Tor};
-use crate::{clave_obras, clave_tablero, PUERTO_LOCAL, RED};
+use crate::{clave_obras, clave_presentes, clave_tablero, PUERTO_LOCAL, RED};
 
 struct Inner {
     id: String,
     addr: PeerAddr,
+    local_port: u16,
+    bootstrap: u16,
     peers: HashMap<String, PeerAddr>,
     store: HashMap<String, Vec<u8>>,
     tor: Tor,
@@ -27,13 +29,27 @@ struct Inner {
 #[derive(Clone)]
 pub struct Nodo {
     inner: Arc<Mutex<Inner>>,
+    handle: tokio::runtime::Handle,
 }
 
 impl Nodo {
     pub async fn arrancar() -> std::io::Result<Self> {
-        let tor = Tor::detectar().await;
+        let n = Self::arrancar_en(PUERTO_LOCAL).await?;
+        n.lanzar_tor();
+        Ok(n)
+    }
+
+    pub async fn arrancar_en(bootstrap: u16) -> std::io::Result<Self> {
+        Self::montar(tokio::runtime::Handle::current(), bootstrap).await
+    }
+
+    async fn montar(
+        handle: tokio::runtime::Handle,
+        bootstrap: u16,
+    ) -> std::io::Result<Self> {
+        let tor = Tor::ausente();
         let id = Uuid::new_v4().to_string();
-        let (listener, port) = bind_local().await?;
+        let (listener, port) = bind_local(bootstrap).await?;
         let addr = PeerAddr::Tcp {
             host: "127.0.0.1".into(),
             port,
@@ -43,15 +59,18 @@ impl Nodo {
             inner: Arc::new(Mutex::new(Inner {
                 id: id.clone(),
                 addr: addr.clone(),
+                local_port: port,
+                bootstrap,
                 peers: HashMap::new(),
                 store: HashMap::new(),
                 tor,
                 halt: halt.clone(),
             })),
+            handle: handle.clone(),
         };
         let accept = nodo.clone();
         let halt_accept = halt.clone();
-        tokio::spawn(async move {
+        handle.spawn(async move {
             let mut rx = halt_accept.subscribe();
             loop {
                 tokio::select! {
@@ -64,23 +83,26 @@ impl Nodo {
                         let Ok((stream, _)) = acc else { break };
                         let n = accept.clone();
                         tokio::spawn(async move {
-                            let _ = n.sesion(stream).await;
+                            let _ = n.sesion_in(stream).await;
                         });
                     }
                 }
             }
         });
-        if port != PUERTO_LOCAL {
-            let _ = nodo
-                .dial(PeerAddr::Tcp {
-                    host: "127.0.0.1".into(),
-                    port: PUERTO_LOCAL,
-                })
-                .await;
+        if port != bootstrap {
+            let n = nodo.clone();
+            handle.spawn(async move {
+                let _ = n
+                    .dial(PeerAddr::Tcp {
+                        host: "127.0.0.1".into(),
+                        port: bootstrap,
+                    })
+                    .await;
+            });
         }
         let tick = nodo.clone();
         let halt_g = halt;
-        tokio::spawn(async move {
+        handle.spawn(async move {
             let mut rx = halt_g.subscribe();
             loop {
                 tokio::select! {
@@ -89,7 +111,7 @@ impl Nodo {
                             break;
                         }
                     }
-                    _ = tokio::time::sleep(Duration::from_secs(3)) => {
+                    _ = tokio::time::sleep(Duration::from_secs(1)) => {
                         tick.gossip().await;
                     }
                 }
@@ -98,91 +120,183 @@ impl Nodo {
         Ok(nodo)
     }
 
-    pub async fn parar(&self) {
-        let _ = self.inner.lock().await.halt.send(true);
+    fn lanzar_tor(&self) {
+        if !crate::tor::hay_tor() {
+            return;
+        }
+        self.inner.lock().unwrap().tor.marcar_arrancando();
+        let n = self.clone();
+        let port = n.inner.lock().unwrap().local_port;
+        self.handle.spawn(async move {
+            n.unirse_tor(port).await;
+        });
     }
 
-    pub async fn estado_tor(&self) -> EstadoTor {
-        self.inner.lock().await.tor.estado()
+    async fn unirse_tor(&self, local_port: u16) {
+        match Tor::arrancar(local_port).await {
+            Ok(t) => {
+                let addr = t.onion_addr();
+                {
+                    let mut g = self.inner.lock().unwrap();
+                    g.tor = t;
+                    if let Some(a) = addr {
+                        g.addr = a;
+                    }
+                }
+                loop {
+                    if *self.inner.lock().unwrap().halt.subscribe().borrow() {
+                        break;
+                    }
+                    let tor = self.inner.lock().unwrap().tor.clone();
+                    match crate::tor::dial_rendezvous(&tor).await {
+                        Ok(stream) => {
+                            let _ = self.sesion_out(stream).await;
+                        }
+                        Err(_) => {
+                            tokio::time::sleep(Duration::from_secs(8)).await;
+                        }
+                    }
+                }
+            }
+            Err(e) => self.inner.lock().unwrap().tor.marcar_fallo(e.to_string()),
+        }
     }
 
-    pub async fn addr(&self) -> PeerAddr {
-        self.inner.lock().await.addr.clone()
+    pub fn parar(&self) {
+        let _ = self.inner.lock().unwrap().halt.send(true);
     }
 
-    pub async fn id(&self) -> String {
-        self.inner.lock().await.id.clone()
+    pub fn estado_tor(&self) -> EstadoTor {
+        self.inner.lock().unwrap().tor.estado()
     }
 
-    pub async fn n_peers(&self) -> usize {
-        self.inner.lock().await.peers.len()
+    pub fn n_peers(&self) -> usize {
+        self.inner.lock().unwrap().peers.len()
     }
 
-    pub async fn publicar(&self, oferta: Oferta) {
+    pub fn publicar(&self, oferta: Oferta) {
         let key = key_hex(&clave_tablero());
-        let mut g = self.inner.lock().await;
-        let mut list = g
-            .store
-            .get(&key)
-            .map(|b| decode_tablero(b))
-            .unwrap_or_default();
-        list.retain(|o| o.id != oferta.id);
-        list.insert(0, oferta);
-        g.store.insert(key, encode_tablero(&list));
-        drop(g);
-        self.gossip().await;
+        {
+            let mut g = self.inner.lock().unwrap();
+            let mut list = g
+                .store
+                .get(&key)
+                .map(|b| decode_tablero(b))
+                .unwrap_or_default();
+            list.retain(|o| o.id != oferta.id);
+            list.insert(0, oferta);
+            g.store.insert(key, encode_tablero(&list));
+        }
+        self.spawn_gossip();
     }
 
-    pub async fn tablero(&self) -> Vec<Oferta> {
+    pub fn tablero(&self) -> Vec<Oferta> {
         let key = key_hex(&clave_tablero());
-        let g = self.inner.lock().await;
+        let g = self.inner.lock().unwrap();
         g.store
             .get(&key)
             .map(|b| decode_tablero(b))
             .unwrap_or_default()
     }
 
-    pub async fn quitar(&self, oferta_id: &str) {
+    pub fn quitar(&self, oferta_id: &str) {
         let key = key_hex(&clave_tablero());
-        let mut g = self.inner.lock().await;
-        let mut list = g
-            .store
-            .get(&key)
-            .map(|b| decode_tablero(b))
-            .unwrap_or_default();
-        list.retain(|o| o.id != oferta_id);
-        g.store.insert(key, encode_tablero(&list));
-        drop(g);
-        self.gossip().await;
+        {
+            let mut g = self.inner.lock().unwrap();
+            let mut list = g
+                .store
+                .get(&key)
+                .map(|b| decode_tablero(b))
+                .unwrap_or_default();
+            list.retain(|o| o.id != oferta_id);
+            g.store.insert(key, encode_tablero(&list));
+        }
+        self.spawn_gossip();
     }
 
-    pub async fn publicar_obra(&self, obra: Obra) {
+    pub fn publicar_obra(&self, obra: Obra) {
         let key = key_hex(&clave_obras());
-        let mut g = self.inner.lock().await;
-        let mut list = g
-            .store
-            .get(&key)
-            .map(|b| decode_obras(b))
-            .unwrap_or_default();
-        list.retain(|o| o.id != obra.id);
-        list.insert(0, obra);
-        g.store.insert(key, encode_obras(&list));
-        drop(g);
-        self.gossip().await;
+        {
+            let mut g = self.inner.lock().unwrap();
+            let mut list = g
+                .store
+                .get(&key)
+                .map(|b| decode_obras(b))
+                .unwrap_or_default();
+            list.retain(|o| o.id != obra.id);
+            list.insert(0, obra);
+            g.store.insert(key, encode_obras(&list));
+        }
+        self.spawn_gossip();
     }
 
-    pub async fn obras(&self) -> Vec<Obra> {
+    pub fn obras(&self) -> Vec<Obra> {
         let key = key_hex(&clave_obras());
-        let g = self.inner.lock().await;
+        let g = self.inner.lock().unwrap();
         g.store
             .get(&key)
             .map(|b| decode_obras(b))
             .unwrap_or_default()
+    }
+
+    pub fn anunciar(&self, persona: Persona) {
+        let key = key_hex(&clave_presentes());
+        {
+            let mut g = self.inner.lock().unwrap();
+            let mut list = g
+                .store
+                .get(&key)
+                .map(|b| decode_presentes(b))
+                .unwrap_or_default();
+            list.retain(|p| p.id != persona.id);
+            list.push(persona);
+            g.store.insert(key, encode_presentes(&list));
+        }
+        self.spawn_gossip();
+    }
+
+    pub fn presentes(&self) -> Vec<Persona> {
+        let key = key_hex(&clave_presentes());
+        let g = self.inner.lock().unwrap();
+        g.store
+            .get(&key)
+            .map(|b| decode_presentes(b))
+            .unwrap_or_default()
+    }
+
+    pub async fn esperar(&self, d: Duration) {
+        let (tx, rx) = tokio::sync::oneshot::channel::<()>();
+        self.handle.spawn(async move {
+            tokio::time::sleep(d).await;
+            let _ = tx.send(());
+        });
+        let _ = rx.await;
+    }
+
+    fn spawn_gossip(&self) {
+        let n = self.clone();
+        self.handle.spawn(async move {
+            n.gossip().await;
+        });
+    }
+
+    fn puts(&self) -> Vec<Msg> {
+        let g = self.inner.lock().unwrap();
+        g.store
+            .iter()
+            .map(|(k, v)| Msg::Put {
+                key: k.clone(),
+                val: v.clone(),
+            })
+            .collect()
     }
 
     async fn gossip(&self) {
-        let (peers, puts) = {
-            let g = self.inner.lock().await;
+        let (peers, puts, port, bootstrap) = {
+            let g = self.inner.lock().unwrap();
+            let port = match &g.addr {
+                PeerAddr::Tcp { port, .. } | PeerAddr::Onion { port, .. } => *port,
+            };
             let peers: Vec<_> = g.peers.values().cloned().collect();
             let puts: Vec<_> = g
                 .store
@@ -192,8 +306,19 @@ impl Nodo {
                     val: v.clone(),
                 })
                 .collect();
-            (peers, puts)
+            (peers, puts, port, g.bootstrap)
         };
+        if peers.is_empty() && port != bootstrap {
+            let n = self.clone();
+            self.handle.spawn(async move {
+                let _ = n
+                    .dial(PeerAddr::Tcp {
+                        host: "127.0.0.1".into(),
+                        port: bootstrap,
+                    })
+                    .await;
+            });
+        }
         for addr in peers {
             for msg in &puts {
                 let _ = self.send(&addr, msg).await;
@@ -203,11 +328,11 @@ impl Nodo {
 
     async fn dial(&self, addr: PeerAddr) -> std::io::Result<()> {
         let stream = self.connect(&addr).await?;
-        self.sesion(stream).await
+        self.sesion_out(stream).await
     }
 
     async fn connect(&self, addr: &PeerAddr) -> std::io::Result<TcpStream> {
-        let tor = self.inner.lock().await.tor.clone();
+        let tor = self.inner.lock().unwrap().tor.clone();
         match addr {
             PeerAddr::Tcp { host, port } => TcpStream::connect((host.as_str(), *port)).await,
             PeerAddr::Onion { host, port } => tor.conectar(host, *port).await,
@@ -219,9 +344,9 @@ impl Nodo {
         write_msg(&mut s, msg).await
     }
 
-    async fn sesion(&self, mut stream: TcpStream) -> std::io::Result<()> {
+    async fn sesion_out(&self, mut stream: TcpStream) -> std::io::Result<()> {
         let (id, addr) = {
-            let g = self.inner.lock().await;
+            let g = self.inner.lock().unwrap();
             (g.id.clone(), g.addr.clone())
         };
         write_msg(
@@ -233,25 +358,38 @@ impl Nodo {
             },
         )
         .await?;
+        for put in self.puts() {
+            write_msg(&mut stream, &put).await?;
+        }
+        self.leer_loop(&mut stream).await
+    }
+
+    async fn sesion_in(&self, mut stream: TcpStream) -> std::io::Result<()> {
+        self.leer_loop(&mut stream).await
+    }
+
+    async fn leer_loop(&self, stream: &mut TcpStream) -> std::io::Result<()> {
         loop {
-            let msg = match read_msg(&mut stream).await {
+            let msg = match read_msg(stream).await {
                 Ok(m) => m,
                 Err(_) => break,
             };
-            if let Some(reply) = self.handle(msg).await {
-                let _ = write_msg(&mut stream, &reply).await;
+            for reply in self.handle(msg) {
+                if write_msg(stream, &reply).await.is_err() {
+                    return Ok(());
+                }
             }
         }
         Ok(())
     }
 
-    async fn handle(&self, msg: Msg) -> Option<Msg> {
+    fn handle(&self, msg: Msg) -> Vec<Msg> {
         match msg {
             Msg::Hola { node, addr, swarm } => {
                 if swarm != RED {
-                    return None;
+                    return Vec::new();
                 }
-                let mut g = self.inner.lock().await;
+                let mut g = self.inner.lock().unwrap();
                 if node != g.id {
                     g.peers.insert(node, addr);
                 }
@@ -261,46 +399,60 @@ impl Nodo {
                     .map(|(k, v)| (k.clone(), v.clone()))
                     .chain(std::iter::once((g.id.clone(), g.addr.clone())))
                     .collect();
-                Some(Msg::Peers { list })
+                let puts: Vec<Msg> = g
+                    .store
+                    .iter()
+                    .map(|(k, v)| Msg::Put {
+                        key: k.clone(),
+                        val: v.clone(),
+                    })
+                    .collect();
+                drop(g);
+                let mut out = vec![Msg::Peers { list }];
+                out.extend(puts);
+                out
             }
             Msg::Peers { list } => {
-                let mut g = self.inner.lock().await;
+                let mut g = self.inner.lock().unwrap();
                 let me = g.id.clone();
                 for (id, addr) in list {
                     if id != me {
                         g.peers.insert(id, addr);
                     }
                 }
-                None
+                Vec::new()
             }
             Msg::Put { key, val } => {
-                let mut g = self.inner.lock().await;
+                let mut g = self.inner.lock().unwrap();
                 merge_store(&mut g.store, key, val);
-                None
+                Vec::new()
             }
             Msg::Get { key } => {
-                let g = self.inner.lock().await;
-                Some(Msg::Got {
+                let g = self.inner.lock().unwrap();
+                vec![Msg::Got {
                     val: g.store.get(&key).cloned(),
                     key,
-                })
+                }]
             }
             Msg::Got { key, val } => {
                 if let Some(val) = val {
-                    let mut g = self.inner.lock().await;
+                    let mut g = self.inner.lock().unwrap();
                     merge_store(&mut g.store, key, val);
                 }
-                None
+                Vec::new()
             }
-            Msg::Ping => Some(Msg::Pong),
-            Msg::Pong => None,
+            Msg::Ping => vec![Msg::Pong],
+            Msg::Pong => Vec::new(),
         }
     }
 }
 
 fn merge_store(store: &mut HashMap<String, Vec<u8>>, key: String, val: Vec<u8>) {
     if key == key_hex(&crate::clave_tablero()) {
-        let mut a = store.get(&key).map(|b| decode_tablero(b)).unwrap_or_default();
+        let mut a = store
+            .get(&key)
+            .map(|b| decode_tablero(b))
+            .unwrap_or_default();
         let b = decode_tablero(&val);
         for o in b {
             if !a.iter().any(|x| x.id == o.id) {
@@ -316,14 +468,25 @@ fn merge_store(store: &mut HashMap<String, Vec<u8>>, key: String, val: Vec<u8>) 
             a.push(o);
         }
         store.insert(key, encode_obras(&a));
+    } else if key == key_hex(&crate::clave_presentes()) {
+        let mut a = store
+            .get(&key)
+            .map(|b| decode_presentes(b))
+            .unwrap_or_default();
+        let b = decode_presentes(&val);
+        for p in b {
+            a.retain(|x| x.id != p.id);
+            a.push(p);
+        }
+        store.insert(key, encode_presentes(&a));
     } else {
         store.entry(key).or_insert(val);
     }
 }
 
-async fn bind_local() -> std::io::Result<(TcpListener, u16)> {
-    match TcpListener::bind(("127.0.0.1", PUERTO_LOCAL)).await {
-        Ok(l) => Ok((l, PUERTO_LOCAL)),
+async fn bind_local(bootstrap: u16) -> std::io::Result<(TcpListener, u16)> {
+    match TcpListener::bind(("127.0.0.1", bootstrap)).await {
+        Ok(l) => Ok((l, bootstrap)),
         Err(_) => {
             let l = TcpListener::bind(("127.0.0.1", 0)).await?;
             let port = l.local_addr()?.port();
@@ -361,12 +524,58 @@ mod tests {
     fn merge_une_tableros() {
         let mut store = HashMap::new();
         let m = Persona::nueva("Felipe").unwrap();
-        let o = Oferta::publicar(m, "Casa", 10_000, 2_000).unwrap();
+        let o = Oferta::publicar(m, "Casa", 10_000, 2_000, vec![]).unwrap();
         let id = o.id.clone();
         let key = key_hex(&crate::clave_tablero());
         merge_store(&mut store, key.clone(), encode_tablero(&[o]));
         let tab = decode_tablero(store.get(&key).unwrap());
         assert_eq!(tab[0].id, id);
         assert_eq!(tab[0].n_partidas_sugeridas, 5);
+    }
+
+    fn puerto_libre() -> u16 {
+        std::net::TcpListener::bind("127.0.0.1:0")
+            .unwrap()
+            .local_addr()
+            .unwrap()
+            .port()
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn dos_nodos_ven_oferta_y_nombre() {
+        let bootstrap = puerto_libre();
+        let a = Nodo::arrancar_en(bootstrap).await.unwrap();
+        tokio::time::sleep(Duration::from_millis(80)).await;
+        let b = Nodo::arrancar_en(bootstrap).await.unwrap();
+
+        let jose = Persona::nueva("José").unwrap();
+        let juan = Persona::nueva("Juan").unwrap();
+        a.anunciar(jose.clone());
+        b.anunciar(juan.clone());
+        a.publicar(Oferta::publicar(jose.clone(), "Casa El Quisco", 10_000, 2_000, vec![]).unwrap());
+
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(4);
+        loop {
+            let a_peers = a.n_peers();
+            let b_peers = b.n_peers();
+            let tab = b.tablero();
+            let nombres: Vec<_> = b.presentes().into_iter().map(|p| p.nombre).collect();
+            if a_peers >= 1
+                && b_peers >= 1
+                && tab.iter().any(|o| o.nombre == "Casa El Quisco")
+                && nombres.iter().any(|n| n == "José")
+            {
+                break;
+            }
+            if tokio::time::Instant::now() > deadline {
+                panic!(
+                    "no se vieron: a_peers={a_peers} b_peers={b_peers} tab={} presentes={nombres:?}",
+                    tab.len()
+                );
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        a.parar();
+        b.parar();
     }
 }

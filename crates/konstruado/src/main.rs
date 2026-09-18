@@ -2,19 +2,43 @@ use std::time::Duration;
 
 use dioxus::prelude::*;
 use konstruado_core::{
-    monto, n_partidas, Aceptacion, EstadoObra, Oferta, Obra, PartidaEstado, Persona,
+    monto, monto_pct, n_partidas, titulo_partida, Aceptacion, EstadoObra, Oferta, Obra, Partida,
+    PartidaEstado, Persona, Rol, MAX_NOTA,
 };
 use konstruado_net::{EstadoTor, Nodo, RED};
 
 const CSS: &str = include_str!("ui.css");
 
 fn main() {
+    preparar_grafica();
     let window = dioxus::desktop::WindowBuilder::new()
         .with_title("Konstruado")
         .with_inner_size(dioxus::desktop::LogicalSize::new(1100.0, 760.0))
         .with_min_inner_size(dioxus::desktop::LogicalSize::new(420.0, 560.0));
     let cfg = dioxus::desktop::Config::new().with_window(window);
     dioxus::LaunchBuilder::desktop().with_cfg(cfg).launch(App);
+}
+
+/// WSL has no real GPU. Mesa tries Zink, prints EGL noise, the window
+/// still opens. Force software GL before WebKit starts.
+fn preparar_grafica() {
+    let wsl = std::fs::read_to_string("/proc/version")
+        .map(|v| v.to_ascii_lowercase().contains("microsoft"))
+        .unwrap_or(false);
+    if !wsl {
+        return;
+    }
+    for (k, v) in [
+        ("WEBKIT_DISABLE_DMABUF_RENDERER", "1"),
+        ("LIBGL_ALWAYS_SOFTWARE", "1"),
+        ("GALLIUM_DRIVER", "llvmpipe"),
+        ("EGL_LOG_LEVEL", "fatal"),
+    ] {
+        if std::env::var_os(k).is_none() {
+            // Called from main before any other thread exists.
+            unsafe { std::env::set_var(k, v) };
+        }
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -24,36 +48,44 @@ enum Screen {
     Nueva,
     Oferta,
     Detalle,
+    VerPartida,
 }
 
 #[component]
 fn App() -> Element {
     let mut screen = use_signal(|| Screen::Bienvenida);
-    let mut nombre = use_signal(String::new);
-    let mut yo = use_signal(|| None::<Persona>);
+    let nombre = use_signal(String::new);
+    let rol = use_signal(|| None::<Rol>);
+    let yo = use_signal(|| None::<Persona>);
     let mut red = use_signal(|| None::<Nodo>);
     let mut tor = use_signal(|| EstadoTor::Ausente);
     let mut peers = use_signal(|| 0usize);
+    let mut presentes = use_signal(Vec::<Persona>::new);
     let mut ofertas = use_signal(Vec::<Oferta>::new);
     let mut obras = use_signal(Vec::<Obra>::new);
-    let mut sel_oferta = use_signal(|| None::<Oferta>);
+    let sel_oferta = use_signal(|| None::<Oferta>);
     let mut sel_obra = use_signal(|| None::<String>);
+    let sel_partida = use_signal(|| None::<usize>);
     let mut err = use_signal(|| None::<String>);
-    let mut trabajo = use_signal(|| "10000".to_string());
-    let mut garantia = use_signal(|| "2000".to_string());
-    let mut obra_nom = use_signal(|| "Casa El Quisco".to_string());
-    let mut garantia_acc = use_signal(|| "2000".to_string());
+    let trabajo = use_signal(|| "10000".to_string());
+    let garantia = use_signal(|| "2000".to_string());
+    let obra_nom = use_signal(|| "Casa El Quisco".to_string());
+    let garantia_acc = use_signal(|| "2000".to_string());
 
     use_future(move || async move {
         match Nodo::arrancar().await {
             Ok(n) => {
-                tor.set(n.estado_tor().await);
+                tor.set(n.estado_tor());
                 red.set(Some(n.clone()));
                 loop {
-                    peers.set(n.n_peers().await);
-                    ofertas.set(n.tablero().await);
-                    obras.set(n.obras().await);
-                    tokio::time::sleep(Duration::from_secs(2)).await;
+                    if let Some(p) = yo() {
+                        n.anunciar(p);
+                    }
+                    peers.set(n.n_peers());
+                    presentes.set(n.presentes());
+                    ofertas.set(n.tablero());
+                    obras.set(n.obras());
+                    n.esperar(Duration::from_secs(1)).await;
                 }
             }
             Err(e) => err.set(Some(format!("Red: {e}"))),
@@ -62,6 +94,12 @@ fn App() -> Element {
 
     let adentro = screen() != Screen::Bienvenida;
     let quien = yo().map(|p| p.nombre).unwrap_or_default();
+    let rol_txt = rol().map(Rol::etiqueta).unwrap_or("");
+    let mid = yo().map(|p| p.id).unwrap_or_default();
+    let mis_obras: Vec<Obra> = obras()
+        .into_iter()
+        .filter(|o| o.mandante.id == mid || o.contratista.id == mid)
+        .collect();
 
     rsx! {
         style { {CSS} }
@@ -77,14 +115,14 @@ fn App() -> Element {
                     "Konstruado"
                 }
                 if adentro {
-                    span { class: "quien", "{quien}" }
+                    span { class: "quien", "{quien} · {rol_txt}" }
                 }
             }
             div { class: "shell",
                 if adentro {
                     aside { class: "side",
                         h2 { "Obras" }
-                        for o in obras() {
+                        for o in mis_obras {
                             button {
                                 class: "side-item",
                                 onclick: move |_| {
@@ -95,10 +133,12 @@ fn App() -> Element {
                                 span { class: chip_estado(o.estado), "{label_estado(o.estado)}" }
                             }
                         }
-                        button {
-                            class: "btn btn-primary",
-                            onclick: move |_| screen.set(Screen::Nueva),
-                            "Publicar obra"
+                        if rol() == Some(Rol::Mandante) {
+                            button {
+                                class: "btn btn-primary",
+                                onclick: move |_| screen.set(Screen::Nueva),
+                                "Publicar obra"
+                            }
                         }
                     }
                 }
@@ -108,11 +148,11 @@ fn App() -> Element {
                     }
                     match screen() {
                         Screen::Bienvenida => rsx! {
-                            Bienvenida { nombre, yo, screen, err }
+                            Bienvenida { nombre, rol, yo, screen, err }
                         },
                         Screen::Tablero => rsx! {
                             Tablero {
-                                yo, ofertas, obras, screen, sel_oferta, sel_obra,
+                                yo, rol, ofertas, obras, presentes, screen, sel_oferta, sel_obra,
                                 tor, peers, garantia_acc
                             }
                         },
@@ -127,7 +167,10 @@ fn App() -> Element {
                             }
                         },
                         Screen::Detalle => rsx! {
-                            Detalle { yo, red, obras, sel_obra, screen, err }
+                            Detalle { yo, red, obras, sel_obra, sel_partida, screen, err }
+                        },
+                        Screen::VerPartida => rsx! {
+                            VerPartida { yo, red, obras, sel_obra, sel_partida, screen, err }
                         },
                     }
                 }
@@ -156,9 +199,111 @@ fn label_estado(e: EstadoObra) -> &'static str {
     }
 }
 
+fn chip_partida(e: PartidaEstado) -> &'static str {
+    match e {
+        PartidaEstado::Pendiente => "chip chip-off",
+        PartidaEstado::Encerrada | PartidaEstado::EnTrato => "chip chip-wait",
+        PartidaEstado::Pagada => "chip chip-ok",
+    }
+}
+
+fn label_partida(p: &Partida) -> String {
+    match p.estado {
+        PartidaEstado::Pendiente => "Pendiente".into(),
+        PartidaEstado::Encerrada => "En obra".into(),
+        PartidaEstado::EnTrato => match p.propuesto {
+            Some(n) => format!("Trato {n}%"),
+            None => "En trato".into(),
+        },
+        PartidaEstado::Pagada => match p.pago {
+            Some(n) => format!("Pagada {n}%"),
+            None => "Pagada".into(),
+        },
+    }
+}
+
+fn parse_pct(s: &str) -> u32 {
+    s.chars()
+        .filter(|c| c.is_ascii_digit())
+        .collect::<String>()
+        .parse()
+        .unwrap_or(0)
+}
+
+fn recorta_nota(s: String) -> String {
+    if s.chars().count() <= MAX_NOTA {
+        s
+    } else {
+        s.chars().take(MAX_NOTA).collect()
+    }
+}
+
+fn otros_nombres(yo: Option<Persona>, presentes: Vec<Persona>) -> Vec<String> {
+    let mid = yo.map(|p| p.id).unwrap_or_default();
+    let mut names: Vec<String> = presentes
+        .into_iter()
+        .filter(|p| p.id != mid)
+        .map(|p| p.nombre)
+        .collect();
+    names.sort();
+    names.dedup();
+    names
+}
+
+fn resumen_detalles(detalles: &[String]) -> Option<String> {
+    let bits: Vec<&str> = detalles
+        .iter()
+        .filter(|d| !d.is_empty())
+        .map(|d| d.as_str())
+        .collect();
+    if bits.is_empty() {
+        None
+    } else {
+        Some(bits.join(" · "))
+    }
+}
+
+fn placeholder_partida(i: usize, n: u32) -> &'static str {
+    const CINCO: [&str; 5] = [
+        "Cimientos",
+        "Muros",
+        "Techumbre",
+        "Instalaciones",
+        "Terminaciones",
+    ];
+    if n == 5 && i < 5 {
+        CINCO[i]
+    } else {
+        "Qué se hace en esta partida"
+    }
+}
+
+fn linea_red(tor: EstadoTor, peers: usize, otros: &[String]) -> String {
+    let tor_txt = match tor {
+        EstadoTor::Listo { onion } => {
+            let corto = onion.get(..8).unwrap_or(onion.as_str());
+            format!("Tor {corto}…")
+        }
+        EstadoTor::Arrancando => "Tor arrancando".into(),
+        EstadoTor::Fallo(s) => format!("Tor: {s}"),
+        EstadoTor::Ausente => "Red local".into(),
+    };
+    let gente = if otros.is_empty() {
+        if peers == 0 {
+            "nadie más en la red".into()
+        } else {
+            format!("{peers} par(es), todavía sin nombre")
+        }
+    } else {
+        otros.join(", ")
+    };
+    format!("{tor_txt} · {gente}")
+}
+
 #[component]
 fn Bienvenida(
     nombre: Signal<String>,
+    rol: Signal<Option<Rol>>,
     yo: Signal<Option<Persona>>,
     screen: Signal<Screen>,
     err: Signal<Option<String>>,
@@ -167,7 +312,7 @@ fn Bienvenida(
         div { class: "pane narrow",
             h1 { "La obra, con el dinero encerrado." }
             p { class: "lead",
-                "El mandante publica. El contratista acepta (o propone otra garantía). El capital en juego es siempre igual."
+                "No te ves con la otra persona como en un chat. El mandante publica una obra. El contratista la ve en el tablero y acepta (o propone otra garantía)."
             }
             div { class: "paso", b { "1" } "Tu nombre" }
             input {
@@ -176,10 +321,28 @@ fn Bienvenida(
                 value: "{nombre}",
                 oninput: move |e| nombre.set(e.value()),
             }
-            div { style: "height: 20px;" }
+            div { class: "paso", b { "2" } "¿Qué vas a hacer?" }
+            div { class: "roles",
+                button {
+                    class: if rol() == Some(Rol::Mandante) { "rol on" } else { "rol" },
+                    onclick: move |_| rol.set(Some(Rol::Mandante)),
+                    strong { "Pago la obra" }
+                    span { "Mandante. Publicás el trabajo y la garantía. El otro la ve." }
+                }
+                button {
+                    class: if rol() == Some(Rol::Contratista) { "rol on" } else { "rol" },
+                    onclick: move |_| rol.set(Some(Rol::Contratista)),
+                    strong { "La construyo" }
+                    span { "Contratista. Ves lo publicado y aceptás, o proponés otra garantía." }
+                }
+            }
             button {
                 class: "btn btn-primary",
                 onclick: move |_| {
+                    let Some(_) = rol() else {
+                        err.set(Some("Elegí si pagás la obra o la construís.".into()));
+                        return;
+                    };
                     match Persona::nueva(nombre()) {
                         Ok(p) => {
                             yo.set(Some(p));
@@ -189,7 +352,7 @@ fn Bienvenida(
                         Err(e) => err.set(Some(e.to_string())),
                     }
                 },
-                "Entrar a la red"
+                "Entrar"
             }
         }
     }
@@ -198,8 +361,10 @@ fn Bienvenida(
 #[component]
 fn Tablero(
     yo: Signal<Option<Persona>>,
+    rol: Signal<Option<Rol>>,
     ofertas: Signal<Vec<Oferta>>,
     obras: Signal<Vec<Obra>>,
+    presentes: Signal<Vec<Persona>>,
     screen: Signal<Screen>,
     sel_oferta: Signal<Option<Oferta>>,
     sel_obra: Signal<Option<String>>,
@@ -209,50 +374,69 @@ fn Tablero(
 ) -> Element {
     let mid = yo().map(|p| p.id).unwrap_or_default();
     let ocupadas: Vec<String> = obras().into_iter().map(|o| o.id).collect();
-    let abiertas: Vec<Oferta> = ofertas()
+    let mias: Vec<Oferta> = ofertas()
         .into_iter()
-        .filter(|o| !ocupadas.contains(&o.id))
+        .filter(|o| o.mandante.id == mid && !ocupadas.contains(&o.id))
         .collect();
-    let sin_ofertas = abiertas.is_empty();
-    let tor_txt = match tor() {
-        EstadoTor::Listo { socks } => format!("Tor listo ({socks})"),
-        EstadoTor::Ausente => "Tor no encontrado (red local)".into(),
+    let ajenas: Vec<Oferta> = ofertas()
+        .into_iter()
+        .filter(|o| o.mandante.id != mid && !ocupadas.contains(&o.id))
+        .collect();
+    let mis_obras: Vec<Obra> = obras()
+        .into_iter()
+        .filter(|o| o.mandante.id == mid || o.contratista.id == mid)
+        .collect();
+    let otros = otros_nombres(yo(), presentes());
+    let status = linea_red(tor(), peers(), &otros);
+    let soy_m = rol() == Some(Rol::Mandante);
+    let sin_ajenas = ajenas.is_empty();
+    let sin_mias = mias.is_empty() && mis_obras.is_empty();
+    let hint_contratista = if otros.is_empty() {
+        "Nadie publicó todavía. En la otra ventana alguien tiene que entrar como mandante y publicar.".to_string()
+    } else {
+        format!(
+            "{} está en la red. Cuando publique, aparece acá.",
+            otros.join(", ")
+        )
     };
     rsx! {
         div { class: "pane",
-            h1 { "Tablero" }
+            h1 { if soy_m { "Tus obras" } else { "Tablero" } }
             p { class: "status",
-                "Red " code { "{RED}" } " · {tor_txt} · {peers} pares"
+                "Red " code { "{RED}" } " · {status}"
             }
-            p { class: "lead", "Ofertas publicadas. El contratista entra sin que le pasen un archivo." }
-            div { class: "stack",
-                for o in abiertas {
-                    button {
-                        class: "card",
-                        onclick: move |_| {
-                            garantia_acc.set(o.garantia_sugerida.to_string());
-                            sel_oferta.set(Some(o.clone()));
-                            screen.set(Screen::Oferta);
-                        },
-                        div { class: "card-h",
-                            strong { "{o.nombre}" }
-                            span { class: "chip chip-off", "{o.n_partidas_sugeridas} partidas" }
-                        }
-                        p { class: "meta", "Mandante: {o.mandante.nombre}" }
-                        p { class: "meta",
-                            "Trabajo {monto(o.trabajo)} · garantía sugerida {monto(o.garantia_sugerida)}"
-                        }
+            if peers() == 0 {
+                p { class: "hint",
+                    match tor() {
+                        EstadoTor::Arrancando => "Tor está arrancando. El otro Konstruado aparece cuando ambos están en la misma red (esta máquina o el onion horneado).",
+                        _ => "Nadie más todavía. En la misma PC, un segundo cargo run se engancha solo. En otra máquina, los dos entran por Tor al mismo swarm.",
                     }
                 }
             }
-            if sin_ofertas {
-                p { class: "hint", "Nadie publicó todavía. Si sos mandante, publicá una obra." }
-            }
-            div { style: "height: 24px;" }
-            h1 { "Mis obras" }
-            div { class: "stack",
-                for o in obras() {
-                    if o.mandante.id == mid || o.contratista.id == mid {
+
+            if soy_m {
+                p { class: "lead",
+                    "Publicá. El contratista no te ve a vos: ve el aviso en su tablero."
+                }
+                if sin_mias {
+                    p { class: "hint", "Todavía no publicaste nada." }
+                }
+                div { class: "stack",
+                    for o in mias {
+                        div { class: "card static",
+                            div { class: "card-h",
+                                strong { "{o.nombre}" }
+                                span { class: "chip chip-off", "Esperando contratista" }
+                            }
+                            p { class: "meta",
+                                "Trabajo {monto(o.trabajo)} · garantía {monto(o.garantia_sugerida)} · {o.n_partidas_sugeridas} partidas"
+                            }
+                            if let Some(r) = resumen_detalles(&o.detalles) {
+                                p { class: "meta", "{r}" }
+                            }
+                        }
+                    }
+                    for o in mis_obras {
                         button {
                             class: "card",
                             onclick: move |_| {
@@ -264,17 +448,69 @@ fn Tablero(
                                 span { class: chip_estado(o.estado), "{label_estado(o.estado)}" }
                             }
                             p { class: "meta",
-                                "{o.n_partidas} partidas · {monto(o.garantia)} por lado"
+                                "Contratista {o.contratista.nombre} · {o.n_partidas} partidas · {monto(o.garantia)} por lado"
                             }
                         }
                     }
                 }
-            }
-            div { style: "height: 24px;" }
-            button {
-                class: "btn btn-primary",
-                onclick: move |_| screen.set(Screen::Nueva),
-                "Publicar obra"
+                div { style: "height: 24px;" }
+                button {
+                    class: "btn btn-primary",
+                    onclick: move |_| screen.set(Screen::Nueva),
+                    "Publicar obra"
+                }
+            } else {
+                p { class: "lead",
+                    "Ofertas del mandante. Aceptás las condiciones o proponés otra garantía."
+                }
+                div { class: "stack",
+                    for o in ajenas {
+                        button {
+                            class: "card",
+                            onclick: move |_| {
+                                garantia_acc.set(o.garantia_sugerida.to_string());
+                                sel_oferta.set(Some(o.clone()));
+                                screen.set(Screen::Oferta);
+                            },
+                            div { class: "card-h",
+                                strong { "{o.nombre}" }
+                                span { class: "chip chip-off", "{o.n_partidas_sugeridas} partidas" }
+                            }
+                            p { class: "meta", "Mandante: {o.mandante.nombre}" }
+                            p { class: "meta",
+                                "Trabajo {monto(o.trabajo)} · garantía sugerida {monto(o.garantia_sugerida)}"
+                            }
+                            if let Some(r) = resumen_detalles(&o.detalles) {
+                                p { class: "meta", "{r}" }
+                            }
+                        }
+                    }
+                }
+                if sin_ajenas {
+                    p { class: "hint", "{hint_contratista}" }
+                }
+                if !mis_obras.is_empty() {
+                    div { style: "height: 24px;" }
+                    h1 { "Mis obras" }
+                    div { class: "stack",
+                        for o in mis_obras {
+                            button {
+                                class: "card",
+                                onclick: move |_| {
+                                    sel_obra.set(Some(o.id.clone()));
+                                    screen.set(Screen::Detalle);
+                                },
+                                div { class: "card-h",
+                                    strong { "{o.nombre}" }
+                                    span { class: chip_estado(o.estado), "{label_estado(o.estado)}" }
+                                }
+                                p { class: "meta",
+                                    "Mandante {o.mandante.nombre} · {o.n_partidas} partidas · {monto(o.garantia)} por lado"
+                                }
+                            }
+                        }
+                    }
+                }
             }
         }
     }
@@ -293,6 +529,17 @@ fn Nueva(
     let t: u64 = trabajo().chars().filter(|c| c.is_ascii_digit()).collect::<String>().parse().unwrap_or(0);
     let g: u64 = garantia().chars().filter(|c| c.is_ascii_digit()).collect::<String>().parse().unwrap_or(0);
     let preview = n_partidas(t, g);
+    let mut detalles = use_signal(|| vec![String::new(); 5]);
+    use_effect(move || {
+        if let Ok(n) = n_partidas(t, g) {
+            let n = n as usize;
+            let mut d = detalles();
+            if d.len() != n {
+                d.resize(n, String::new());
+                detalles.set(d);
+            }
+        }
+    });
     rsx! {
         div { class: "pane narrow",
             h1 { "Publicar obra" }
@@ -316,9 +563,28 @@ fn Nueva(
                 oninput: move |e| garantia.set(e.value()),
             }
             p { class: "hint",
-                match preview {
+                match preview.clone() {
                     Ok(n) => format!("{n} partidas. En cada una los dos encierran {g}."),
                     Err(e) => e.to_string(),
+                }
+            }
+            if let Ok(n) = preview {
+                div { class: "paso", b { "3" } "Qué entra en cada partida" }
+                p { class: "hint", "Como en un presupuesto: cimientos, muros, techumbre. El texto es opcional." }
+                for (i, d) in detalles().into_iter().enumerate() {
+                    label { class: "et", "PARTIDA {i + 1}" }
+                    input {
+                        r#type: "text",
+                        placeholder: "{placeholder_partida(i, n)}",
+                        value: "{d}",
+                        oninput: move |e| {
+                            let mut v = detalles();
+                            if i < v.len() {
+                                v[i] = e.value();
+                                detalles.set(v);
+                            }
+                        },
+                    }
                 }
             }
             div { style: "height: 24px;" }
@@ -330,12 +596,10 @@ fn Nueva(
                         err.set(Some("La red todavía no arrancó.".into()));
                         return;
                     };
-                    match Oferta::publicar(m, obra_nom(), t, g) {
+                    match Oferta::publicar(m, obra_nom(), t, g, detalles()) {
                         Ok(o) => {
                             err.set(None);
-                            spawn(async move {
-                                nodo.publicar(o).await;
-                            });
+                            nodo.publicar(o);
                             screen.set(Screen::Tablero);
                         }
                         Err(e) => err.set(Some(e.to_string())),
@@ -356,6 +620,28 @@ fn VerOferta(
     screen: Signal<Screen>,
     err: Signal<Option<String>>,
 ) -> Element {
+    let mut detalles = use_signal(|| {
+        sel_oferta()
+            .map(|o| o.detalles.clone())
+            .unwrap_or_default()
+    });
+    use_effect(move || {
+        let Some(of) = sel_oferta() else { return };
+        let g: u64 = garantia_acc()
+            .chars()
+            .filter(|c| c.is_ascii_digit())
+            .collect::<String>()
+            .parse()
+            .unwrap_or(0);
+        if let Ok(n) = n_partidas(of.trabajo, g) {
+            let n = n as usize;
+            let mut d = detalles();
+            if d.len() != n {
+                d.resize(n, String::new());
+                detalles.set(d);
+            }
+        }
+    });
     let Some(o) = sel_oferta() else {
         return rsx! { p { "No hay oferta." } };
     };
@@ -375,10 +661,40 @@ fn VerOferta(
                 oninput: move |e| garantia_acc.set(e.value()),
             }
             p { class: "hint",
-                match preview {
+                match preview.clone() {
                     Ok(n) if contra => format!("Contra: {n} partidas de {g}. El mandante tiene que confirmar."),
                     Ok(n) => format!("Aceptás {n} partidas. Los dos encierran {g} en cada una."),
                     Err(e) => e.to_string(),
+                }
+            }
+            if let Ok(n) = preview {
+                label { class: "et", "PARTIDAS" }
+                if contra {
+                    p { class: "hint", "Al cambiar la garantía, el número de partidas cambia. Completá o ajustá los textos." }
+                    for (i, d) in detalles().into_iter().enumerate() {
+                        label { class: "et", "PARTIDA {i + 1}" }
+                        input {
+                            r#type: "text",
+                            placeholder: "{placeholder_partida(i, n)}",
+                            value: "{d}",
+                            oninput: move |e| {
+                                let mut v = detalles();
+                                if i < v.len() {
+                                    v[i] = e.value();
+                                    detalles.set(v);
+                                }
+                            },
+                        }
+                    }
+                } else {
+                    div { class: "lista-part",
+                        for (i, d) in o.detalles.iter().enumerate() {
+                            div { class: "lista-part-item",
+                                b { "{i + 1}" }
+                                span { "{titulo_partida(i, d)}" }
+                            }
+                        }
+                    }
                 }
             }
             div { style: "height: 24px;" }
@@ -388,14 +704,13 @@ fn VerOferta(
                     let Some(c) = yo() else { return };
                     let Some(nodo) = red() else { return };
                     let oferta = o.clone();
-                    match Aceptacion::de(&oferta, c, g) {
+                    let dets = if contra { detalles() } else { oferta.detalles.clone() };
+                    match Aceptacion::de_con(&oferta, c, g, dets) {
                         Ok(acc) => match Obra::desde_oferta(oferta, acc) {
                             Ok(obra) => {
                                 err.set(None);
-                                spawn(async move {
-                                    nodo.quitar(&obra.id).await;
-                                    nodo.publicar_obra(obra).await;
-                                });
+                                nodo.quitar(&obra.id);
+                                nodo.publicar_obra(obra);
                                 screen.set(Screen::Tablero);
                             }
                             Err(e) => err.set(Some(e.to_string())),
@@ -415,12 +730,13 @@ fn Detalle(
     red: Signal<Option<Nodo>>,
     obras: Signal<Vec<Obra>>,
     sel_obra: Signal<Option<String>>,
+    sel_partida: Signal<Option<usize>>,
     screen: Signal<Screen>,
     err: Signal<Option<String>>,
 ) -> Element {
     let id = sel_obra().unwrap_or_default();
     let Some(obra) = obras().into_iter().find(|o| o.id == id) else {
-        return rsx! { p { "No está esa obra." } };
+        return rsx! { p { "La obra todavía no llegó. Si la acabás de publicar, esperá al contratista." } };
     };
     let mid = yo().map(|p| p.id).unwrap_or_default();
     let soy_m = obra.mandante.id == mid;
@@ -456,8 +772,7 @@ fn Detalle(
                                 let Some(nodo) = red() else { return };
                                 match obra.confirmar_contra(&mid) {
                                     Ok(()) => {
-                                        let o = obra.clone();
-                                        spawn(async move { nodo.publicar_obra(o).await; });
+                                        nodo.publicar_obra(obra.clone());
                                     }
                                     Err(e) => err.set(Some(e.to_string())),
                                 }
@@ -467,24 +782,23 @@ fn Detalle(
                     }
                 }
             }
+            p { class: "hint", "Entrá a cada partida para avisar que terminó, tratar el porcentaje y ver el hilo." }
             div { style: "height: 16px;" }
-            for (i, st) in partidas.iter().enumerate() {
+            for (i, p) in partidas.iter().enumerate() {
                 {
                     let on = activa == Some(i);
-                    let label = match st {
-                        PartidaEstado::Pendiente => "Pendiente",
-                        PartidaEstado::Encerrada => "Encerrada",
-                        PartidaEstado::Pagada => "Pagada",
-                    };
-                    let kind = match st {
-                        PartidaEstado::Pendiente => "chip chip-off",
-                        PartidaEstado::Encerrada => "chip chip-wait",
-                        PartidaEstado::Pagada => "chip chip-ok",
-                    };
+                    let titulo = titulo_partida(i, &p.detalle);
+                    let label = label_partida(p);
+                    let kind = chip_partida(p.estado);
                     rsx! {
-                        div { class: if on { "partida on" } else { "partida" },
+                        button {
+                            class: if on { "partida on" } else { "partida" },
+                            onclick: move |_| {
+                                sel_partida.set(Some(i));
+                                screen.set(Screen::VerPartida);
+                            },
                             div { class: "txt",
-                                strong { "{i + 1}  Partida" }
+                                strong { "{i + 1}  {titulo}" }
                                 span { "{monto(garantia)} por lado" }
                             }
                             span { class: kind, "{label}" }
@@ -492,9 +806,95 @@ fn Detalle(
                     }
                 }
             }
-            div { style: "height: 24px;" }
-            if let Some(i) = activa {
-                if partidas[i] == PartidaEstado::Pendiente && !contra {
+        }
+    }
+}
+
+#[component]
+fn VerPartida(
+    yo: Signal<Option<Persona>>,
+    red: Signal<Option<Nodo>>,
+    obras: Signal<Vec<Obra>>,
+    sel_obra: Signal<Option<String>>,
+    sel_partida: Signal<Option<usize>>,
+    screen: Signal<Screen>,
+    err: Signal<Option<String>>,
+) -> Element {
+    let mut pct = use_signal(|| "100".to_string());
+    let mut nota = use_signal(String::new);
+    use_effect(move || {
+        let _ = sel_partida();
+        pct.set("100".into());
+        nota.set(String::new());
+    });
+    let id = sel_obra().unwrap_or_default();
+    let Some(obra) = obras().into_iter().find(|o| o.id == id) else {
+        return rsx! { p { "No está esa obra." } };
+    };
+    let Some(i) = sel_partida() else {
+        return rsx! { p { "Elegí una partida." } };
+    };
+    let Some(p) = obra.partidas.get(i).cloned() else {
+        return rsx! { p { "No está esa partida." } };
+    };
+    let mid = yo().map(|x| x.id).unwrap_or_default();
+    let soy_m = obra.mandante.id == mid;
+    let soy_c = obra.contratista.id == mid;
+    let mi_turno = p.turno.map(|r| match r {
+        Rol::Mandante => soy_m,
+        Rol::Contratista => soy_c,
+    });
+    let espera_nom = match p.turno {
+        Some(Rol::Mandante) => obra.mandante.nombre.clone(),
+        Some(Rol::Contratista) => obra.contratista.nombre.clone(),
+        None => String::new(),
+    };
+    let titulo = titulo_partida(i, &p.detalle);
+    let label = label_partida(&p);
+    let activa = obra.activa() == Some(i);
+    let contra = obra.estado == EstadoObra::Contra;
+    let garantia = obra.garantia;
+    let propuesto = p.propuesto;
+    let cerrado = p.estado == PartidaEstado::Pagada;
+    let n_nota = nota().chars().count();
+    rsx! {
+        div { class: "pane narrow",
+            button {
+                class: "btn btn-ghost",
+                onclick: move |_| screen.set(Screen::Detalle),
+                "Volver a la obra"
+            }
+            div { class: "card-h",
+                h1 { "{i + 1}  {titulo}" }
+                span { class: chip_partida(p.estado), "{label}" }
+            }
+            p { class: "lead",
+                "{monto(garantia)} por lado. Mandante {obra.mandante.nombre} · contratista {obra.contratista.nombre}"
+            }
+            if cerrado {
+                p { class: "hint",
+                    "Cerró al {p.pago.unwrap_or(0)}% ({monto(monto_pct(garantia, p.pago.unwrap_or(0)))}). El hilo quedó guardado."
+                }
+            }
+            if !p.notas.is_empty() {
+                div { class: "notas",
+                    for n in p.notas.iter() {
+                        div { class: "nota",
+                            strong { "{n.autor_nombre} · {n.porcentaje}%" }
+                            if !n.texto.is_empty() {
+                                p { "{n.texto}" }
+                            }
+                        }
+                    }
+                }
+            }
+            if p.estado == PartidaEstado::Pendiente {
+                if contra {
+                    p { class: "hint", "Primero hay que confirmar la contra de la obra." }
+                } else if !activa {
+                    p { class: "hint", "Todavía no toca. Cerrá la partida que está en curso." }
+                } else {
+                    div { style: "height: 16px;" }
                     button {
                         class: "btn btn-primary",
                         onclick: {
@@ -503,33 +903,111 @@ fn Detalle(
                                 let Some(nodo) = red() else { return };
                                 match obra.encerrar_partida(i) {
                                     Ok(()) => {
-                                        let o = obra.clone();
-                                        spawn(async move { nodo.publicar_obra(o).await; });
+                                        err.set(None);
+                                        nodo.publicar_obra(obra.clone());
                                     }
                                     Err(e) => err.set(Some(e.to_string())),
                                 }
                             }
                         },
-                        "Encerrar partida {i + 1} (stub XMR)"
+                        "Encerrar esta partida (stub XMR)"
                     }
                 }
-                if partidas[i] == PartidaEstado::Encerrada && soy_m {
+            }
+            if p.estado == PartidaEstado::Encerrada && soy_c {
+                label { class: "et", "PORCENTAJE A COBRAR" }
+                input {
+                    r#type: "text",
+                    value: "{pct}",
+                    oninput: move |e| pct.set(e.value()),
+                }
+                label { class: "et", "NOTA ({n_nota}/{MAX_NOTA})" }
+                input {
+                    r#type: "text",
+                    placeholder: "Terminé las fundaciones",
+                    value: "{nota}",
+                    oninput: move |e| nota.set(recorta_nota(e.value())),
+                }
+                div { style: "height: 16px;" }
+                button {
+                    class: "btn btn-primary",
+                    onclick: {
+                        let mut obra = obra.clone();
+                        move |_| {
+                            let Some(quien) = yo() else { return };
+                            let Some(nodo) = red() else { return };
+                            match obra.avisar_termino(i, &quien, parse_pct(&pct()), nota()) {
+                                Ok(()) => {
+                                    err.set(None);
+                                    nodo.publicar_obra(obra.clone());
+                                }
+                                Err(e) => err.set(Some(e.to_string())),
+                            }
+                        }
+                    },
+                    "Avisar que terminé"
+                }
+            }
+            if p.estado == PartidaEstado::Encerrada && soy_m {
+                p { class: "hint", "El contratista avisa cuando termina y propone cuánto se paga." }
+            }
+            if p.estado == PartidaEstado::EnTrato {
+                if let Some(n) = propuesto {
+                    p { class: "lead", "Sobre la mesa: {n}% ({monto(monto_pct(garantia, n))})." }
+                }
+                if mi_turno == Some(false) {
+                    p { class: "hint", "Esperando a {espera_nom}." }
+                }
+                if mi_turno == Some(true) {
+                    div { style: "height: 12px;" }
                     button {
                         class: "btn btn-primary",
                         onclick: {
                             let mut obra = obra.clone();
                             move |_| {
+                                let Some(quien) = yo() else { return };
                                 let Some(nodo) = red() else { return };
-                                match obra.pagar_partida(i) {
+                                match obra.aceptar_pago(i, &quien) {
                                     Ok(()) => {
-                                        let o = obra.clone();
-                                        spawn(async move { nodo.publicar_obra(o).await; });
+                                        err.set(None);
+                                        nodo.publicar_obra(obra.clone());
                                     }
                                     Err(e) => err.set(Some(e.to_string())),
                                 }
                             }
                         },
-                        "Pagar partida {i + 1}"
+                        "Aceptar {propuesto.unwrap_or(0)}%"
+                    }
+                    label { class: "et", "OTRO PORCENTAJE" }
+                    input {
+                        r#type: "text",
+                        value: "{pct}",
+                        oninput: move |e| pct.set(e.value()),
+                    }
+                    label { class: "et", "NOTA ({n_nota}/{MAX_NOTA})" }
+                    input {
+                        r#type: "text",
+                        placeholder: "Falta la entrada de auto",
+                        value: "{nota}",
+                        oninput: move |e| nota.set(recorta_nota(e.value())),
+                    }
+                    button {
+                        class: "btn btn-ghost",
+                        onclick: {
+                            let mut obra = obra.clone();
+                            move |_| {
+                                let Some(quien) = yo() else { return };
+                                let Some(nodo) = red() else { return };
+                                match obra.contra_pago(i, &quien, parse_pct(&pct()), nota()) {
+                                    Ok(()) => {
+                                        err.set(None);
+                                        nodo.publicar_obra(obra.clone());
+                                    }
+                                    Err(e) => err.set(Some(e.to_string())),
+                                }
+                            }
+                        },
+                        "Proponer este porcentaje"
                     }
                 }
             }

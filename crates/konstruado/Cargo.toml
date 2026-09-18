@@ -11,4 +11,4 @@ xmr-joint.workspace = true
 konstruado-core.workspace = true
 konstruado-net.workspace = true
 dioxus = { version = "0.7", features = ["desktop"] }
-tokio = { version = "1", features = ["time", "rt"] }
+tokio = { version = "1", features = ["time", "rt", "rt-multi-thread"] }
