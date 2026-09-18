@@ -7,9 +7,11 @@
 /// Virtual port on both the rendezvous onion and each personal onion.
 pub const VIRT_PORT: u16 = 17432;
 
-/// Ed25519 seed (32 bytes, base64) for the swarm hidden service.
-pub const RENDEZVOUS_KEY: &str = "wTJ9MZmRCqOQVmSM9MKDQ3dMUH0JU4h1e55QMD9fWz0=";
+/// Expanded ed25519 secret (64 bytes, SHA-512 of the seed) as Tor's
+/// ADD_ONION wants it. A 32-byte seed is rejected with 512.
+pub const RENDEZVOUS_KEY: &str =
+    "MnLG3eCj6Vrkx1Zz+Kd4ihD6WdVyaxrdi6lbyEyPOy+d2uZEHibtp18L2366t/3FELrsumKRi1m3T3oYTVdAmg==";
 
-/// Onion v3 matching [`RENDEZVOUS_KEY`].
+/// Onion v3 for [`RENDEZVOUS_KEY`] as returned by Tor ADD_ONION.
 pub const RENDEZVOUS_ONION: &str =
-    "e5czeiobcupe344mgi5nf4wlpera5bzs3fh425o53qvobs7hez4melqd.onion";
+    "vhirdvyvk6vj3fzbtoahqwa5kzaxk26n4qmxfpogos5cufnmgjdjagqd.onion";

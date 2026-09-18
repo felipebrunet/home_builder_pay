@@ -96,41 +96,47 @@ impl Tor {
         let dir = std::env::temp_dir().join(format!("konstruado-tor-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir)?;
-        let ctrl_file = dir.join("control-port");
+        let socks_port = puerto_libre()?;
+        let ctrl_port = puerto_libre()?;
+        let torrc = dir.join("torrc");
         let log = dir.join("notice.log");
+        let stderr_log = dir.join("stderr.log");
+        let cookie_path = dir.join("control_auth_cookie");
+        std::fs::write(
+            &torrc,
+            format!(
+                "SocksPort 127.0.0.1:{socks_port}\n\
+                 ControlPort 127.0.0.1:{ctrl_port}\n\
+                 CookieAuthentication 1\n\
+                 DataDirectory {}\n\
+                 Log notice file {}\n\
+                 AvoidDiskWrites 1\n\
+                 DormantCanceledByStartup 1\n\
+                 __OwningControllerProcess {}\n",
+                dir.display(),
+                log.display(),
+                std::process::id()
+            ),
+        )?;
         self.marcar_arrancando("lanzando tor");
         let mut child = tokio::process::Command::new(&bin)
-            .arg("--ignore-missing-torrc")
-            .arg("--SocksPort")
-            .arg("auto")
-            .arg("--ControlPort")
-            .arg("auto")
-            .arg("--ControlPortWriteToFile")
-            .arg(&ctrl_file)
-            .arg("--CookieAuthentication")
-            .arg("1")
-            .arg("--DataDirectory")
-            .arg(&dir)
-            .arg("--Log")
-            .arg(format!("notice file {}", log.display()))
-            .arg("--__OwningControllerProcess")
-            .arg(std::process::id().to_string())
-            .arg("--AvoidDiskWrites")
-            .arg("1")
-            .arg("--DormantCanceledByStartup")
-            .arg("1")
+            .arg("-f")
+            .arg(&torrc)
+            .arg("--defaults-torrc")
+            .arg("/dev/null")
             .kill_on_drop(true)
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
+            .stderr(std::fs::File::create(&stderr_log)?)
             .spawn()?;
 
         self.marcar_arrancando("control");
-        let addr = wait_control_file(&ctrl_file).await?;
-        let cookie = wait_cookie(&dir.join("control_auth_cookie")).await?;
-        let mut ctl = Control::conectar(addr, &cookie).await?;
+        let ctrl_addr = std::net::SocketAddr::from(([127, 0, 0, 1], ctrl_port));
+        wait_cookie(&mut child, &cookie_path, &log, &stderr_log).await?;
+        let cookie = std::fs::read(&cookie_path)?;
+        let mut ctl = Control::conectar(ctrl_addr, &cookie).await?;
         wait_bootstrap(&mut ctl, self).await?;
-        let socks = parse_socks(&ctl.getinfo("net/listeners/socks").await?)?;
+        let socks = std::net::SocketAddr::from(([127, 0, 0, 1], socks_port));
         self.marcar_arrancando("onion personal");
         let onion = ctl.add_onion("NEW", VIRT_PORT, local_port).await?;
         *self.ctl.lock().await = Some(ctl);
@@ -190,37 +196,51 @@ fn tor_bin() -> Option<PathBuf> {
     None
 }
 
-async fn wait_control_file(path: &PathBuf) -> std::io::Result<SocketAddr> {
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
-    loop {
-        if let Ok(s) = std::fs::read_to_string(path) {
-            if let Some(addr) = parse_control_port(&s) {
-                return Ok(addr);
-            }
-        }
-        if tokio::time::Instant::now() > deadline {
-            return Err(std::io::Error::other("tor no escribió ControlPort"));
-        }
-        sleep(Duration::from_millis(80)).await;
-    }
+fn puerto_libre() -> std::io::Result<u16> {
+    let l = std::net::TcpListener::bind("127.0.0.1:0")?;
+    Ok(l.local_addr()?.port())
 }
 
-fn parse_control_port(s: &str) -> Option<SocketAddr> {
-    let line = s.lines().next()?.trim();
-    let rest = line.strip_prefix("PORT=").unwrap_or(line);
-    rest.parse().ok()
+fn cola_log(path: &PathBuf, n: usize) -> String {
+    std::fs::read_to_string(path).map(|s| {
+        s.lines()
+            .rev()
+            .take(n)
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .collect::<Vec<_>>()
+            .join(" | ")
+    }).unwrap_or_default()
 }
 
-async fn wait_cookie(path: &PathBuf) -> std::io::Result<Vec<u8>> {
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
+async fn wait_cookie(
+    child: &mut tokio::process::Child,
+    path: &PathBuf,
+    log: &PathBuf,
+    stderr: &PathBuf,
+) -> std::io::Result<()> {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(25);
     loop {
+        if let Ok(Some(st)) = child.try_wait() {
+            let msg = format!(
+                "tor salió ({st}). {} {}",
+                cola_log(stderr, 4),
+                cola_log(log, 4)
+            );
+            return Err(std::io::Error::other(msg));
+        }
         if let Ok(b) = std::fs::read(path) {
             if b.len() == 32 {
-                return Ok(b);
+                return Ok(());
             }
         }
         if tokio::time::Instant::now() > deadline {
-            return Err(std::io::Error::other("tor cookie ausente"));
+            return Err(std::io::Error::other(format!(
+                "tor cookie ausente. {} {}",
+                cola_log(stderr, 4),
+                cola_log(log, 4)
+            )));
         }
         sleep(Duration::from_millis(80)).await;
     }
@@ -242,16 +262,6 @@ async fn wait_bootstrap(ctl: &mut Control, tor: &Tor) -> std::io::Result<()> {
     }
 }
 
-fn parse_socks(s: &str) -> std::io::Result<SocketAddr> {
-    for part in s.split_whitespace() {
-        let t = part.trim_matches('"');
-        if let Ok(a) = t.parse() {
-            return Ok(a);
-        }
-    }
-    Err(std::io::Error::other(format!("socks raro: {s}")))
-}
-
 pub async fn dial_rendezvous(tor: &Tor) -> std::io::Result<TcpStream> {
     timeout(
         Duration::from_secs(8),
@@ -266,16 +276,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn parsea_control_port() {
-        assert_eq!(
-            parse_control_port("PORT=127.0.0.1:45921\n").unwrap(),
-            "127.0.0.1:45921".parse().unwrap()
-        );
-    }
-
-    #[test]
     fn onion_rendezvous_parece_v3() {
         assert!(RENDEZVOUS_ONION.ends_with(".onion"));
         assert_eq!(RENDEZVOUS_ONION.len(), 56 + 6);
+        assert_eq!(RENDEZVOUS_KEY.len(), 88);
     }
 }
