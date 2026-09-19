@@ -152,7 +152,7 @@ fn App() -> Element {
                         },
                         Screen::Tablero => rsx! {
                             Tablero {
-                                yo, rol, ofertas, obras, presentes, screen, sel_oferta, sel_obra,
+                                yo, rol, red, ofertas, obras, presentes, screen, sel_oferta, sel_obra,
                                 tor, peers, garantia_acc
                             }
                         },
@@ -362,6 +362,7 @@ fn Bienvenida(
 fn Tablero(
     yo: Signal<Option<Persona>>,
     rol: Signal<Option<Rol>>,
+    red: Signal<Option<Nodo>>,
     ofertas: Signal<Vec<Oferta>>,
     obras: Signal<Vec<Obra>>,
     presentes: Signal<Vec<Persona>>,
@@ -372,6 +373,7 @@ fn Tablero(
     peers: Signal<usize>,
     garantia_acc: Signal<String>,
 ) -> Element {
+    let mut buscando = use_signal(|| false);
     let mid = yo().map(|p| p.id).unwrap_or_default();
     let ocupadas: Vec<String> = obras().into_iter().map(|o| o.id).collect();
     let mias: Vec<Oferta> = ofertas()
@@ -392,10 +394,10 @@ fn Tablero(
     let sin_ajenas = ajenas.is_empty();
     let sin_mias = mias.is_empty() && mis_obras.is_empty();
     let hint_contratista = if otros.is_empty() {
-        "Nadie publicó todavía. En la otra ventana alguien tiene que entrar como mandante y publicar.".to_string()
+        "No hay avisos. Don Dinero tiene que publicar, y vos podés tocar Buscar ofertas.".to_string()
     } else {
         format!(
-            "{} está en la red. Cuando publique, aparece acá.",
+            "{} está en la red. Si no ves el aviso, tocá Buscar ofertas.",
             otros.join(", ")
         )
     };
@@ -463,6 +465,21 @@ fn Tablero(
                 p { class: "lead",
                     "Ofertas del mandante. Aceptás las condiciones o proponés otra garantía."
                 }
+                button {
+                    class: "btn btn-primary",
+                    disabled: buscando(),
+                    onclick: move |_| {
+                        let Some(nodo) = red() else { return };
+                        buscando.set(true);
+                        nodo.buscar();
+                        spawn(async move {
+                            nodo.esperar(Duration::from_secs(4)).await;
+                            buscando.set(false);
+                        });
+                    },
+                    if buscando() { "Buscando…" } else { "Buscar ofertas" }
+                }
+                div { style: "height: 16px;" }
                 div { class: "stack",
                     for o in ajenas {
                         button {

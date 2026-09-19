@@ -232,6 +232,22 @@ impl Nodo {
         self.inner.lock().unwrap().peers.len()
     }
 
+    /// Contractor "Buscar ofertas": gossip plus a dial to the baked room
+    /// if we are not the porter (dialing our own onion is a no-op).
+    pub fn buscar(&self) {
+        self.spawn_gossip();
+        let tor = self.inner.lock().unwrap().tor.clone();
+        if tor.hospeda_sala() || tor.socks().is_none() {
+            return;
+        }
+        let n = self.clone();
+        self.handle.spawn(async move {
+            if let Ok(stream) = crate::tor::dial_rendezvous(&tor).await {
+                let _ = n.sesion_out(stream).await;
+            }
+        });
+    }
+
     pub fn publicar(&self, oferta: Oferta) {
         let key = key_hex(&clave_tablero());
         {

@@ -24,6 +24,7 @@ struct Snap {
     estado: EstadoTor,
     socks: Option<SocketAddr>,
     onion: Option<String>,
+    hospeda: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -41,6 +42,7 @@ impl Tor {
                 estado: EstadoTor::Ausente,
                 socks: None,
                 onion: None,
+                hospeda: false,
             })),
             ctl: Arc::new(tokio::sync::Mutex::new(None)),
         }
@@ -75,6 +77,10 @@ impl Tor {
 
     pub fn socks(&self) -> Option<SocketAddr> {
         self.snap.lock().unwrap().socks
+    }
+
+    pub fn hospeda_sala(&self) -> bool {
+        self.snap.lock().unwrap().hospeda
     }
 
     pub async fn conectar(&self, host: &str, port: u16) -> std::io::Result<TcpStream> {
@@ -161,10 +167,12 @@ impl Tor {
                 "sala inesperada: {onion}"
             )));
         }
+        self.snap.lock().unwrap().hospeda = true;
         Ok(())
     }
 
     pub async fn dejar_sala(&self) -> std::io::Result<()> {
+        self.snap.lock().unwrap().hospeda = false;
         let mut g = self.ctl.lock().await;
         let ctl = g.as_mut().ok_or_else(|| std::io::Error::other("sin control"))?;
         ctl.del_onion(RENDEZVOUS_ONION).await
