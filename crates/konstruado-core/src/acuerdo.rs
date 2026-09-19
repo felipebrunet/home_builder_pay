@@ -84,6 +84,17 @@ pub struct Partida {
     pub notas: Vec<NotaPartida>,
 }
 
+impl PartidaEstado {
+    fn rango(self) -> u8 {
+        match self {
+            PartidaEstado::Pendiente => 0,
+            PartidaEstado::Encerrada => 1,
+            PartidaEstado::EnTrato => 2,
+            PartidaEstado::Pagada => 3,
+        }
+    }
+}
+
 impl Partida {
     pub fn pendiente(detalle: impl Into<String>) -> Self {
         Self {
@@ -93,6 +104,47 @@ impl Partida {
             pago: None,
             turno: None,
             notas: Vec::new(),
+        }
+    }
+
+    pub fn fusionar(&mut self, otra: Partida) {
+        if self.detalle.is_empty() && !otra.detalle.is_empty() {
+            self.detalle = otra.detalle.clone();
+        }
+        if otra.estado.rango() > self.estado.rango() {
+            self.estado = otra.estado;
+            self.propuesto = otra.propuesto;
+            self.pago = otra.pago;
+            self.turno = otra.turno;
+            if otra.notas.len() >= self.notas.len() {
+                self.notas = otra.notas;
+            }
+            return;
+        }
+        if otra.estado == self.estado {
+            if otra.notas.len() > self.notas.len() {
+                self.notas = otra.notas;
+                self.propuesto = otra.propuesto;
+                self.turno = otra.turno;
+            }
+            if self.pago.is_none() {
+                self.pago = otra.pago;
+            }
+        }
+        if self.estado == PartidaEstado::Pagada {
+            self.turno = None;
+        }
+    }
+}
+
+impl EstadoObra {
+    fn rango(self) -> u8 {
+        match self {
+            EstadoObra::Publicada => 0,
+            EstadoObra::Contra => 1,
+            EstadoObra::Acordada => 2,
+            EstadoObra::EnMarcha => 3,
+            EstadoObra::Cerrada => 4,
         }
     }
 }
@@ -350,6 +402,40 @@ impl Obra {
             Ok(Rol::Contratista)
         } else {
             Err(Error::NoToca)
+        }
+    }
+
+    /// Gossip must not roll a job backwards. Encerrar/pagar on one
+    /// node wins over a stale copy on the other.
+    pub fn fusionar(&mut self, mut otra: Obra) {
+        if otra.estado.rango() > self.estado.rango() {
+            self.estado = otra.estado;
+            self.garantia = otra.garantia;
+            self.n_partidas = otra.n_partidas;
+            self.contra = otra.contra.take();
+        } else if otra.estado == self.estado && self.contra.is_none() {
+            self.contra = otra.contra.take();
+        }
+        let n = self.partidas.len().max(otra.partidas.len());
+        self.partidas
+            .resize(n, Partida::pendiente(String::new()));
+        otra.partidas
+            .resize(n, Partida::pendiente(String::new()));
+        for (a, b) in self.partidas.iter_mut().zip(otra.partidas) {
+            a.fusionar(b);
+        }
+        if self.partidas.iter().any(|p| p.estado.rango() >= PartidaEstado::Encerrada.rango())
+            && self.estado.rango() < EstadoObra::EnMarcha.rango()
+        {
+            self.estado = EstadoObra::EnMarcha;
+        }
+        if self
+            .partidas
+            .iter()
+            .all(|p| p.estado == PartidaEstado::Pagada)
+            && !self.partidas.is_empty()
+        {
+            self.estado = EstadoObra::Cerrada;
         }
     }
 }

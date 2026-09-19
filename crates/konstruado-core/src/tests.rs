@@ -65,6 +65,25 @@ fn encerrar_y_pagar_usa_stub_xmr() {
 }
 
 #[test]
+fn fusionar_no_vuelve_encerrar_atras() {
+    let m = Persona::nueva("Dinero").unwrap();
+    let c = Persona::nueva("Chasquilla").unwrap();
+    let o = Oferta::publicar(m, "Casa", 100, 50, vec![]).unwrap();
+    let a = Aceptacion::de(&o, c, 50).unwrap();
+    let mut vieja = Obra::desde_oferta(o, a).unwrap();
+    let mut nueva = vieja.clone();
+    nueva.encerrar_partida(0).unwrap();
+    vieja.fusionar(nueva.clone());
+    assert_eq!(vieja.partidas[0].estado, PartidaEstado::Encerrada);
+    let mut stale = nueva.clone();
+    stale.partidas[0].estado = PartidaEstado::Pendiente;
+    stale.estado = EstadoObra::Acordada;
+    nueva.fusionar(stale);
+    assert_eq!(nueva.partidas[0].estado, PartidaEstado::Encerrada);
+    assert_eq!(nueva.estado, EstadoObra::EnMarcha);
+}
+
+#[test]
 fn partidas_llevan_detalle() {
     let m = Persona::nueva("José").unwrap();
     let c = Persona::nueva("Juan").unwrap();

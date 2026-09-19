@@ -541,8 +541,11 @@ fn merge_store(store: &mut HashMap<String, Vec<u8>>, key: String, val: Vec<u8>) 
         let mut a = store.get(&key).map(|b| decode_obras(b)).unwrap_or_default();
         let b = decode_obras(&val);
         for o in b {
-            a.retain(|x| x.id != o.id);
-            a.push(o);
+            if let Some(ex) = a.iter_mut().find(|x| x.id == o.id) {
+                ex.fusionar(o);
+            } else {
+                a.push(o);
+            }
         }
         store.insert(key, encode_obras(&a));
     } else if key == key_hex(&crate::clave_presentes()) {
