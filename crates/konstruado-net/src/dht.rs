@@ -4,6 +4,7 @@ use std::time::Duration;
 
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
+use tokio::time::timeout;
 use uuid::Uuid;
 
 use konstruado_core::{Oferta, Obra, Persona};
@@ -187,20 +188,21 @@ impl Nodo {
         loop {
             if self.n_peers() > 0 {
                 tor.marcar_listo();
-                return;
+            } else {
+                tor.marcar_arrancando(format!("buscando sala ({n})"));
             }
-            tor.marcar_arrancando(format!("buscando sala ({n})"));
             match crate::tor::dial_rendezvous(tor).await {
                 Ok(stream) => {
                     tor.marcar_listo();
-                    let _ = self.sesion_out(stream).await;
-                    if self.n_peers() > 0 {
-                        tor.marcar_listo();
-                        return;
-                    }
+                    // Drop and redial so a later Put (2nd job) is pulled
+                    // via a fresh Hola dump, not only onion-to-onion gossip.
+                    let _ = timeout(Duration::from_secs(12), self.sesion_out(stream)).await;
+                    tokio::time::sleep(Duration::from_secs(4)).await;
                 }
                 Err(e) => {
-                    tor.marcar_arrancando(format!("buscando sala ({})", Self::corto_err(&e)));
+                    if self.n_peers() == 0 {
+                        tor.marcar_arrancando(format!("buscando sala ({})", Self::corto_err(&e)));
+                    }
                     tokio::time::sleep(Duration::from_secs(2)).await;
                 }
             }

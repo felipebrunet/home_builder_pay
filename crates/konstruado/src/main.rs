@@ -100,7 +100,13 @@ fn App() -> Element {
     use_future(move || {
         let ofertas0 = guardado.ofertas.clone();
         let obras0 = guardado.obras.clone();
-        let presentes0 = guardado.presentes.clone();
+        let yo_id = guardado.yo.as_ref().map(|p| p.id.clone());
+        let presentes0: Vec<Persona> = guardado
+            .presentes
+            .iter()
+            .filter(|p| Some(&p.id) == yo_id.as_ref())
+            .cloned()
+            .collect();
         async move {
         match Nodo::arrancar().await {
             Ok(n) => {
@@ -276,7 +282,10 @@ fn recorta_nota(s: String) -> String {
     }
 }
 
-fn otros_nombres(yo: Option<Persona>, presentes: Vec<Persona>) -> Vec<String> {
+fn otros_nombres(yo: Option<Persona>, presentes: Vec<Persona>, peers: usize) -> Vec<String> {
+    if peers == 0 {
+        return Vec::new();
+    }
     let mid = yo.map(|p| p.id).unwrap_or_default();
     let mut names: Vec<String> = presentes
         .into_iter()
@@ -435,7 +444,7 @@ fn Tablero(
         .filter(|o| o.estado != EstadoObra::Rechazada)
         .filter(|o| o.mandante.id == mid || o.contratista.id == mid)
         .collect();
-    let otros = otros_nombres(yo(), presentes());
+    let otros = otros_nombres(yo(), presentes(), peers());
     let status = linea_red(tor(), peers(), &otros);
     let soy_m = rol() == Some(Rol::Mandante);
     let sin_ajenas = ajenas.is_empty();
