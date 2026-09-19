@@ -179,27 +179,43 @@ impl Nodo {
         tor.marcar_arrancando("abriendo sala");
         if let Err(e) = tor.hospedar_sala(local_port).await {
             tor.marcar_arrancando(format!("no pude abrir, sigo buscando ({e})"));
-            loop {
-                if self.n_peers() > 0 {
-                    tor.marcar_listo();
-                    return;
-                }
-                match crate::tor::dial_rendezvous(&tor).await {
-                    Ok(stream) => {
-                        tor.marcar_listo();
-                        let _ = self.sesion_out(stream).await;
-                    }
-                    Err(_) => tokio::time::sleep(Duration::from_secs(4)).await,
-                }
-            }
+            self.marcar_sala(&tor).await;
+            return;
         }
+        // Two hosts of the same onion never call each other. Wait for a
+        // visitor; if nobody comes, drop the service (staggered) and dial.
+        let paciencia = 45 + (hash % 20);
+        for s in 0..paciencia {
+            if self.n_peers() > 0 {
+                tor.marcar_listo();
+                return;
+            }
+            tor.marcar_arrancando(format!("sala abierta ({s}/{paciencia}s)"));
+            tokio::time::sleep(Duration::from_secs(1)).await;
+        }
+        tor.marcar_arrancando("suelto la sala, marco");
+        let _ = tor.dejar_sala().await;
+        self.marcar_sala(&tor).await;
+    }
+
+    async fn marcar_sala(&self, tor: &Tor) {
         loop {
             if self.n_peers() > 0 {
                 tor.marcar_listo();
-            } else {
-                tor.marcar_arrancando("sala abierta, esperando");
+                return;
             }
-            tokio::time::sleep(Duration::from_secs(2)).await;
+            tor.marcar_arrancando("buscando sala");
+            match crate::tor::dial_rendezvous(tor).await {
+                Ok(stream) => {
+                    tor.marcar_listo();
+                    let _ = self.sesion_out(stream).await;
+                    if self.n_peers() > 0 {
+                        tor.marcar_listo();
+                        return;
+                    }
+                }
+                Err(_) => tokio::time::sleep(Duration::from_secs(3)).await,
+            }
         }
     }
 
