@@ -46,7 +46,14 @@ pub fn cargar() -> EstadoDisco {
     let Ok(raw) = std::fs::read_to_string(&path) else {
         return EstadoDisco::default();
     };
-    serde_json::from_str(&raw).unwrap_or_default()
+    match serde_json::from_str(&raw) {
+        Ok(e) => e,
+        Err(_) => {
+            let bak = path.with_extension("json.bak");
+            let _ = std::fs::copy(&path, &bak);
+            EstadoDisco::default()
+        }
+    }
 }
 
 pub fn guardar(e: &EstadoDisco) {

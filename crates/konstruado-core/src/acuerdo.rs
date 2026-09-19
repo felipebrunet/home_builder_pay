@@ -323,6 +323,7 @@ pub struct Obra {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ExtraPartida {
     pub detalle: String,
+    #[serde(default)]
     pub monto: u64,
     pub por: Persona,
 }
