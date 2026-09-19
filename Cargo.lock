@@ -2203,6 +2203,8 @@ dependencies = [
  "dioxus",
  "konstruado-core",
  "konstruado-net",
+ "serde",
+ "serde_json",
  "tokio",
  "xmr-joint",
 ]
