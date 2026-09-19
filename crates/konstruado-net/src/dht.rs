@@ -145,12 +145,21 @@ impl Nodo {
         if let Some(a) = tor.onion_addr() {
             self.inner.lock().unwrap().addr = a;
         }
-        for i in 1..=5 {
+        let hash = {
+            let id = self.inner.lock().unwrap().id.clone();
+            id.as_bytes()
+                .iter()
+                .fold(0u64, |h, b| h.wrapping_mul(33).wrapping_add(u64::from(*b)))
+        };
+        // One node searches longer so the other can open the room and
+        // publish the descriptor (~30s) before this one gives up.
+        let intentos = 5 + (hash % 12);
+        for i in 1..=intentos {
             if self.n_peers() > 0 {
                 tor.marcar_listo();
                 return;
             }
-            tor.marcar_arrancando(format!("buscando sala ({i}/5)"));
+            tor.marcar_arrancando(format!("buscando sala ({i}/{intentos})"));
             match crate::tor::dial_rendezvous(&tor).await {
                 Ok(stream) => {
                     tor.marcar_listo();
@@ -163,46 +172,34 @@ impl Nodo {
                 Err(_) => tokio::time::sleep(Duration::from_secs(2)).await,
             }
         }
-        let jitter = {
-            let id = self.inner.lock().unwrap().id.clone();
-            id.as_bytes()
-                .iter()
-                .fold(0u64, |h, b| h.wrapping_mul(33).wrapping_add(u64::from(*b)))
-                % 12
-        };
-        tor.marcar_arrancando(format!("abriendo sala (+{jitter}s)"));
-        tokio::time::sleep(Duration::from_secs(jitter)).await;
         if self.n_peers() > 0 {
             tor.marcar_listo();
             return;
         }
+        tor.marcar_arrancando("abriendo sala");
         if let Err(e) = tor.hospedar_sala(local_port).await {
-            tor.marcar_fallo(format!("sala: {e}"));
-            return;
-        }
-        let espera = 18 + jitter;
-        for s in 0..espera {
-            if self.n_peers() > 0 {
-                tor.marcar_listo();
-                return;
+            tor.marcar_arrancando(format!("no pude abrir, sigo buscando ({e})"));
+            loop {
+                if self.n_peers() > 0 {
+                    tor.marcar_listo();
+                    return;
+                }
+                match crate::tor::dial_rendezvous(&tor).await {
+                    Ok(stream) => {
+                        tor.marcar_listo();
+                        let _ = self.sesion_out(stream).await;
+                    }
+                    Err(_) => tokio::time::sleep(Duration::from_secs(4)).await,
+                }
             }
-            tor.marcar_arrancando(format!("sala abierta ({s}s)"));
-            tokio::time::sleep(Duration::from_secs(1)).await;
         }
-        let _ = tor.dejar_sala().await;
         loop {
             if self.n_peers() > 0 {
                 tor.marcar_listo();
-                return;
+            } else {
+                tor.marcar_arrancando("sala abierta, esperando");
             }
-            tor.marcar_arrancando("entrando a la sala");
-            match crate::tor::dial_rendezvous(&tor).await {
-                Ok(stream) => {
-                    tor.marcar_listo();
-                    let _ = self.sesion_out(stream).await;
-                }
-                Err(_) => tokio::time::sleep(Duration::from_secs(4)).await,
-            }
+            tokio::time::sleep(Duration::from_secs(2)).await;
         }
     }
 
