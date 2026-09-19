@@ -151,9 +151,10 @@ impl Nodo {
                 .iter()
                 .fold(0u64, |h, b| h.wrapping_mul(33).wrapping_add(u64::from(*b)))
         };
-        // One node searches longer so the other can open the room and
-        // publish the descriptor (~30s) before this one gives up.
-        let intentos = 5 + (hash % 12);
+        // Half the nodes open the room after two misses; the rest keep
+        // dialing so they can walk in once the descriptor is public.
+        let anfitrion = hash % 2 == 0;
+        let intentos = if anfitrion { 2 } else { 16 };
         for i in 1..=intentos {
             if self.n_peers() > 0 {
                 tor.marcar_listo();
