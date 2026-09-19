@@ -11,7 +11,7 @@ pub const LICENSE: &str = env!("CARGO_PKG_LICENSE");
 pub const DESCRIPCION: &str = env!("CARGO_PKG_DESCRIPTION");
 pub const ID_ABOUT: &str = "konstruado-about";
 pub const ID_README: &str = "konstruado-readme";
-const README: &str = include_str!("../../../README.md");
+const README: &str = include_str!("../HELP.md");
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Vista {
@@ -146,8 +146,10 @@ mod tests {
     fn about_trae_repo_y_readme() {
         assert_eq!(VERSION, "0.1.0-dev");
         assert!(REPO.contains("felipebrunet/home_builder_pay"));
-        assert!(README.contains("Konstruado"));
+        assert!(README.contains("Not a chat"));
         assert!(README.contains("ES / EN"));
+        assert!(!README.contains("cargo run"));
+        assert!(!README.contains("CONTEXTO"));
         let _ = menu();
     }
 }

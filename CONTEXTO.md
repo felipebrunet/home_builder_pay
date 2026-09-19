@@ -43,12 +43,12 @@ No son un chat de usuarios: se ven **obras y avisos**, no una lista tipo WhatsAp
 - `~/.konstruado/estado.json` (override `KONSTRUADO_DATOS`). Dos ventanas en un PC: **dos dirs**.
 - Campos nuevos en JSON llevan `#[serde(default)]` (`tema` → vivo, `idioma` → es). Si el parse falla, se copia a `estado.json.bak` y no se debe entrar como usuario nuevo hasta revisar.
 - Click en el nombre → cuenta: cambiar nombre/rol (el **id** no cambia), tema **Vivo** (default) / **Calma**, idioma **Español** (default) / **English**. ES/EN también está en la barra de arriba (incluso en la bienvenida).
-- Menú nativo de la ventana **Help** (siempre en inglés): **About Konstruado** (versión, licencia, URL del repo) y **README** embebido. Window y Edit siguen igual.
+- Menú nativo **Help** (siempre en inglés): **About Konstruado** y **README**. El README de la app es `crates/konstruado/HELP.md` (cómo se usa). El `README.md` de GitHub es clonar, dependencias y binario.
 - Tablero central = solo **activas** (avisos sin tomar + obras en curso). Sidebar **Mis obras** = historial en las que participás, más reciente arriba (`actualizado`).
 - **Te toca** = interacción de un trato abierto (contra, %, extra), no “alguien publicó”.
 - Exportar constancia: `.txt` y `.pdf` desde el detalle de la obra.
 
-Binario Linux de prueba: `cargo build -p konstruado --release` y copiar `target/release/konstruado` como `konstruado-0.1.0-linux-x86_64-dev`. No es productivo (versión `0.1.0-dev`). El tester necesita `tor`, GTK3, WebKitGTK 4.1 y `libxdo`. No commitear `dist/`.
+Binario Linux de prueba: ver `README.md`. No commitear `dist/`. Versión `0.1.0-dev`.
 
 ## Cómo probar dos máquinas
 
