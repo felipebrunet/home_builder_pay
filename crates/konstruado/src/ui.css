@@ -235,6 +235,10 @@ input[type="text"]:focus {
 .card.static { cursor: default; }
 .card.static:hover { border-color: var(--linea); }
 
+.card.aviso {
+  border: 2px solid var(--tinta);
+}
+
 .card {
   display: block;
   width: 100%;

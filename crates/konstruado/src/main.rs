@@ -195,7 +195,7 @@ fn App() -> Element {
                         Screen::Tablero => rsx! {
                             Tablero {
                                 yo, rol, red, ofertas, obras, presentes, screen, sel_oferta, sel_obra,
-                                tor, peers, garantia_acc
+                                sel_partida, tor, peers, garantia_acc
                             }
                         },
                         Screen::Nueva => rsx! {
@@ -291,6 +291,88 @@ fn recorta_nota(s: String) -> String {
     } else {
         s.chars().take(MAX_NOTA).collect()
     }
+}
+
+#[derive(Clone)]
+struct Aviso {
+    texto: String,
+    obra_id: String,
+    es_oferta: bool,
+    partida: Option<usize>,
+}
+
+fn avisos_para(mid: &str, soy_m: bool, obras: &[Obra], ofertas: &[Oferta]) -> Vec<Aviso> {
+    let mut out = Vec::new();
+    if !soy_m {
+        for o in ofertas {
+            if o.mandante.id != mid {
+                out.push(Aviso {
+                    texto: format!("{}: {} publicó, podés aceptar", o.nombre, o.mandante.nombre),
+                    obra_id: o.id.clone(),
+                    es_oferta: true,
+                    partida: None,
+                });
+            }
+        }
+    }
+    for obra in obras {
+        if obra.mandante.id != mid && obra.contratista.id != mid {
+            continue;
+        }
+        if matches!(
+            obra.estado,
+            EstadoObra::Rechazada | EstadoObra::Abandonada | EstadoObra::Cerrada
+        ) {
+            continue;
+        }
+        if obra.estado == EstadoObra::Contra && obra.mandante.id == mid {
+            out.push(Aviso {
+                texto: format!(
+                    "{}: {} propone garantía {}",
+                    obra.nombre,
+                    obra.contratista.nombre,
+                    monto(obra.garantia)
+                ),
+                obra_id: obra.id.clone(),
+                es_oferta: false,
+                partida: None,
+            });
+        }
+        let mi_rol = if obra.mandante.id == mid {
+            Rol::Mandante
+        } else {
+            Rol::Contratista
+        };
+        for (i, p) in obra.partidas.iter().enumerate() {
+            let titulo = titulo_partida(i, &p.detalle);
+            if p.estado == PartidaEstado::EnTrato && p.turno == Some(mi_rol) {
+                let pct = p.propuesto.unwrap_or(0);
+                out.push(Aviso {
+                    texto: format!("{} · {}: te toca responder ({pct}%)", obra.nombre, titulo),
+                    obra_id: obra.id.clone(),
+                    es_oferta: false,
+                    partida: Some(i),
+                });
+            }
+            if p.estado == PartidaEstado::Encerrada && mi_rol == Rol::Contratista {
+                let quien = p
+                    .encerrado_por
+                    .as_ref()
+                    .map(|q| q.nombre.as_str())
+                    .unwrap_or("el mandante");
+                out.push(Aviso {
+                    texto: format!(
+                        "{} · {}: {quien} encerró, avisá cuando termines",
+                        obra.nombre, titulo
+                    ),
+                    obra_id: obra.id.clone(),
+                    es_oferta: false,
+                    partida: Some(i),
+                });
+            }
+        }
+    }
+    out
 }
 
 fn otros_nombres(yo: Option<Persona>, presentes: Vec<Persona>, peers: usize) -> Vec<String> {
@@ -431,6 +513,7 @@ fn Tablero(
     screen: Signal<Screen>,
     sel_oferta: Signal<Option<Oferta>>,
     sel_obra: Signal<Option<String>>,
+    sel_partida: Signal<Option<usize>>,
     tor: Signal<EstadoTor>,
     peers: Signal<usize>,
     garantia_acc: Signal<String>,
@@ -460,6 +543,7 @@ fn Tablero(
     let soy_m = rol() == Some(Rol::Mandante);
     let sin_ajenas = ajenas.is_empty();
     let sin_mias = mias.is_empty() && mis_obras.is_empty();
+    let avisos = avisos_para(&mid, soy_m, &mis_obras, &ajenas);
     let hint_contratista = if otros.is_empty() {
         "No hay avisos. Don Dinero tiene que publicar, y vos podés tocar Buscar ofertas.".to_string()
     } else {
@@ -481,6 +565,38 @@ fn Tablero(
                         _ => "Nadie más todavía. En la misma PC, un segundo cargo run se engancha solo. En otra máquina, Don Dinero abre la sala y Chasquilla busca.",
                     }
                 }
+            }
+
+            if !avisos.is_empty() {
+                p { class: "lead", "Te toca" }
+                div { class: "stack",
+                    for a in avisos {
+                        button {
+                            class: "card aviso",
+                            onclick: move |_| {
+                                if a.es_oferta {
+                                    if let Some(o) = ofertas().into_iter().find(|o| o.id == a.obra_id) {
+                                        garantia_acc.set(o.garantia_sugerida.to_string());
+                                        sel_oferta.set(Some(o));
+                                        screen.set(Screen::Oferta);
+                                    }
+                                } else if let Some(i) = a.partida {
+                                    sel_obra.set(Some(a.obra_id.clone()));
+                                    sel_partida.set(Some(i));
+                                    screen.set(Screen::VerPartida);
+                                } else {
+                                    sel_obra.set(Some(a.obra_id.clone()));
+                                    screen.set(Screen::Detalle);
+                                }
+                            },
+                            div { class: "card-h",
+                                strong { "{a.texto}" }
+                                span { class: "chip chip-wait", "Te toca" }
+                            }
+                        }
+                    }
+                }
+                div { style: "height: 24px;" }
             }
 
             if soy_m {
@@ -518,6 +634,9 @@ fn Tablero(
                             }
                             p { class: "meta",
                                 "Contratista {o.contratista.nombre} · {o.n_partidas} partidas · {monto(o.garantia)} por lado"
+                            }
+                            if o.estado == EstadoObra::Contra {
+                                p { class: "meta", "Te toca: contra de garantía" }
                             }
                         }
                     }
