@@ -18,7 +18,9 @@ cargo test --workspace
 cargo run
 ```
 
-State is saved in `~/.konstruado/estado.json` (override with `KONSTRUADO_DATOS`). Closing the app keeps name, role, and jobs.
+The UI is Spanish by default. Switch to English with **ES / EN** in the top bar (or in the account screen). The deal itself does not change.
+
+State is saved in `~/.konstruado/estado.json` (override with `KONSTRUADO_DATOS`). Closing the app keeps name, role, language, and jobs.
 
 Two users on one PC need two data dirs:
 
