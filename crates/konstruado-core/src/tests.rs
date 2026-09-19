@@ -47,6 +47,21 @@ fn contra_garantia_mil() {
 }
 
 #[test]
+fn rechazar_contra_vuelve_el_aviso() {
+    let m = Persona::nueva("Dinero").unwrap();
+    let mid = m.id.clone();
+    let c = Persona::nueva("Chasquilla").unwrap();
+    let o = Oferta::publicar(m, "Casa", 10_000, 2_000, vec![]).unwrap();
+    let a = Aceptacion::de(&o, c, 1_000).unwrap();
+    let mut obra = Obra::desde_oferta(o, a).unwrap();
+    assert_eq!(obra.estado, EstadoObra::Contra);
+    assert_eq!(obra.garantia_publicada, 2_000);
+    obra.rechazar_contra(&mid).unwrap();
+    assert_eq!(obra.estado, EstadoObra::Rechazada);
+    assert!(obra.contra.is_none());
+}
+
+#[test]
 fn encerrar_y_pagar_usa_stub_xmr() {
     let m = Persona::nueva("Felipe").unwrap();
     let c = Persona::nueva("Juan").unwrap();

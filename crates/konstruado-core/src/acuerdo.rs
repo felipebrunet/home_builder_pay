@@ -48,6 +48,7 @@ impl Rol {
 pub enum EstadoObra {
     Publicada,
     Contra,
+    Rechazada,
     Acordada,
     EnMarcha,
     Cerrada,
@@ -142,9 +143,10 @@ impl EstadoObra {
         match self {
             EstadoObra::Publicada => 0,
             EstadoObra::Contra => 1,
-            EstadoObra::Acordada => 2,
-            EstadoObra::EnMarcha => 3,
-            EstadoObra::Cerrada => 4,
+            EstadoObra::Rechazada => 2,
+            EstadoObra::Acordada => 3,
+            EstadoObra::EnMarcha => 4,
+            EstadoObra::Cerrada => 5,
         }
     }
 }
@@ -225,6 +227,9 @@ pub struct Obra {
     pub nombre: String,
     pub trabajo: u64,
     pub garantia: u64,
+    /// Bond the mandante published, before any counter.
+    #[serde(default)]
+    pub garantia_publicada: u64,
     pub n_partidas: u32,
     pub mandante: Persona,
     pub contratista: Persona,
@@ -255,6 +260,7 @@ impl Obra {
             nombre: oferta.nombre,
             trabajo: oferta.trabajo,
             garantia: acc.garantia,
+            garantia_publicada: oferta.garantia_sugerida,
             n_partidas: n,
             mandante: oferta.mandante,
             contratista: acc.contratista,
@@ -291,6 +297,7 @@ impl Obra {
         if self.contra.take().is_none() {
             return Err(Error::NoEsta);
         }
+        self.estado = EstadoObra::Rechazada;
         Ok(())
     }
 
@@ -424,7 +431,8 @@ impl Obra {
         for (a, b) in self.partidas.iter_mut().zip(otra.partidas) {
             a.fusionar(b);
         }
-        if self.partidas.iter().any(|p| p.estado.rango() >= PartidaEstado::Encerrada.rango())
+        if self.estado != EstadoObra::Rechazada
+            && self.partidas.iter().any(|p| p.estado.rango() >= PartidaEstado::Encerrada.rango())
             && self.estado.rango() < EstadoObra::EnMarcha.rango()
         {
             self.estado = EstadoObra::EnMarcha;

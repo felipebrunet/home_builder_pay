@@ -133,6 +133,7 @@ fn App() -> Element {
     let mid = yo().map(|p| p.id).unwrap_or_default();
     let mis_obras: Vec<Obra> = obras()
         .into_iter()
+        .filter(|o| o.estado != EstadoObra::Rechazada)
         .filter(|o| o.mandante.id == mid || o.contratista.id == mid)
         .collect();
 
@@ -218,6 +219,7 @@ fn chip_estado(e: EstadoObra) -> &'static str {
     match e {
         EstadoObra::Publicada => "chip chip-off",
         EstadoObra::Contra => "chip chip-wait",
+        EstadoObra::Rechazada => "chip chip-off",
         EstadoObra::Acordada => "chip chip-off",
         EstadoObra::EnMarcha => "chip chip-wait",
         EstadoObra::Cerrada => "chip chip-ok",
@@ -228,6 +230,7 @@ fn label_estado(e: EstadoObra) -> &'static str {
     match e {
         EstadoObra::Publicada => "Publicada",
         EstadoObra::Contra => "Contra",
+        EstadoObra::Rechazada => "Rechazada",
         EstadoObra::Acordada => "Acordada",
         EstadoObra::EnMarcha => "En marcha",
         EstadoObra::Cerrada => "Cerrada",
@@ -414,7 +417,11 @@ fn Tablero(
 ) -> Element {
     let mut buscando = use_signal(|| false);
     let mid = yo().map(|p| p.id).unwrap_or_default();
-    let ocupadas: Vec<String> = obras().into_iter().map(|o| o.id).collect();
+    let ocupadas: Vec<String> = obras()
+        .into_iter()
+        .filter(|o| o.estado != EstadoObra::Rechazada)
+        .map(|o| o.id)
+        .collect();
     let mias: Vec<Oferta> = ofertas()
         .into_iter()
         .filter(|o| o.mandante.id == mid && !ocupadas.contains(&o.id))
@@ -425,6 +432,7 @@ fn Tablero(
         .collect();
     let mis_obras: Vec<Obra> = obras()
         .into_iter()
+        .filter(|o| o.estado != EstadoObra::Rechazada)
         .filter(|o| o.mandante.id == mid || o.contratista.id == mid)
         .collect();
     let otros = otros_nombres(yo(), presentes());
@@ -835,6 +843,43 @@ fn Detalle(
                             }
                         },
                         "Confirmar contra"
+                    }
+                    button {
+                        class: "btn btn-ghost",
+                        onclick: {
+                            let mut obra = obra.clone();
+                            let mid = mid.clone();
+                            move |_| {
+                                let Some(nodo) = red() else { return };
+                                let gpub = if obra.garantia_publicada > 0 {
+                                    obra.garantia_publicada
+                                } else {
+                                    obra.garantia
+                                };
+                                let dets: Vec<String> =
+                                    obra.partidas.iter().map(|p| p.detalle.clone()).collect();
+                                match obra.rechazar_contra(&mid) {
+                                    Ok(()) => match Oferta::publicar(
+                                        obra.mandante.clone(),
+                                        obra.nombre.clone(),
+                                        obra.trabajo,
+                                        gpub,
+                                        dets,
+                                    ) {
+                                        Ok(mut oferta) => {
+                                            oferta.id = obra.id.clone();
+                                            err.set(None);
+                                            nodo.publicar_obra(obra.clone());
+                                            nodo.publicar(oferta);
+                                            screen.set(Screen::Tablero);
+                                        }
+                                        Err(e) => err.set(Some(e.to_string())),
+                                    },
+                                    Err(e) => err.set(Some(e.to_string())),
+                                }
+                            }
+                        },
+                        "No aceptar esta garantía"
                     }
                 }
             }
