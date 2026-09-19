@@ -21,7 +21,9 @@ fn main() {
         .with_title("Konstruado")
         .with_inner_size(dioxus::desktop::LogicalSize::new(1100.0, 760.0))
         .with_min_inner_size(dioxus::desktop::LogicalSize::new(420.0, 560.0));
-    let cfg = dioxus::desktop::Config::new().with_window(window);
+    let cfg = dioxus::desktop::Config::new()
+        .with_window(window)
+        .with_menu(help::menu());
     dioxus::LaunchBuilder::desktop().with_cfg(cfg).launch(App);
 }
 
@@ -116,6 +118,18 @@ fn App() -> Element {
         }
     });
     let idioma = use_context_provider(|| Signal::new(Idioma::parse(&guardado.idioma)));
+    let mut help_vista = use_signal(|| help::Vista::About);
+    dioxus::desktop::use_muda_event_handler(move |evt| match evt.id().0.as_str() {
+        help::ID_ABOUT => {
+            help_vista.set(help::Vista::About);
+            screen.set(Screen::Help);
+        }
+        help::ID_README => {
+            help_vista.set(help::Vista::Readme);
+            screen.set(Screen::Help);
+        }
+        _ => {}
+    });
 
     use_future(move || {
         let ofertas0 = guardado.ofertas.clone();
@@ -179,11 +193,6 @@ fn App() -> Element {
                     "Konstruado"
                 }
                 LangSwitch {}
-                button {
-                    class: "quien",
-                    onclick: move |_| screen.set(Screen::Help),
-                    "Help"
-                }
                 if adentro {
                     button {
                         class: "quien",
@@ -252,7 +261,7 @@ fn App() -> Element {
                             Cuenta { nombre, rol, yo, red, screen, err, tema }
                         },
                         Screen::Help => rsx! {
-                            help::Help { yo, screen }
+                            help::Help { yo, screen, vista: help_vista() }
                         },
                     }
                 }
