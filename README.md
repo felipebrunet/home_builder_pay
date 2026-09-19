@@ -1,5 +1,7 @@
 # Konstruado
 
+For a new Grok session, read `CONTEXTO.md` first.
+
 Peer-to-peer construction escrow on Monero (crypto still a stub). Desktop is Dioxus.
 
 The two people do not see each other like a chat. Roles:
