@@ -1,3 +1,4 @@
+mod export;
 mod persist;
 
 use std::time::Duration;
@@ -276,7 +277,7 @@ fn parse_pct(s: &str) -> u32 {
         .unwrap_or(0)
 }
 
-fn fmt_cuando(ts: i64) -> String {
+pub(crate) fn fmt_cuando(ts: i64) -> String {
     if ts <= 0 {
         return String::new();
     }
@@ -938,6 +939,7 @@ fn Detalle(
     err: Signal<Option<String>>,
 ) -> Element {
     let mut confirma_abandono = use_signal(|| false);
+    let mut export_msg = use_signal(|| None::<String>);
     let id = sel_obra().unwrap_or_default();
     let Some(obra) = obras().into_iter().find(|o| o.id == id) else {
         return rsx! { p { "La obra todavía no llegó. Si la acabás de publicar, esperá al contratista." } };
@@ -967,6 +969,22 @@ fn Detalle(
             }
             p { class: "lead",
                 "Mandante {mnom} · contratista {cnom} · {n_part} partidas de {monto(garantia)}"
+            }
+            if let Some(m) = export_msg() {
+                p { class: "hint", "{m}" }
+            }
+            button {
+                class: "btn btn-ghost",
+                onclick: {
+                    let obra = obra.clone();
+                    move |_| {
+                        match export::guardar(&obra) {
+                            Ok(p) => export_msg.set(Some(format!("Guardado en {}", p.display()))),
+                            Err(e) => export_msg.set(Some(e)),
+                        }
+                    }
+                },
+                "Exportar constancia"
             }
             if contra {
                 p { class: "hint",
