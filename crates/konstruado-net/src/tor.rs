@@ -85,7 +85,8 @@ impl Tor {
 
     pub async fn conectar(&self, host: &str, port: u16) -> std::io::Result<TcpStream> {
         if let Some(socks) = self.socks() {
-            let s = tokio_socks::tcp::Socks5Stream::connect(socks, (host, port))
+            let dest = format!("{host}:{port}");
+            let s = tokio_socks::tcp::Socks5Stream::connect(socks, dest.as_str())
                 .await
                 .map_err(|e| std::io::Error::other(e.to_string()))?;
             Ok(s.into_inner())
@@ -283,11 +284,11 @@ async fn wait_bootstrap(ctl: &mut Control, tor: &Tor) -> std::io::Result<()> {
 
 pub async fn dial_rendezvous(tor: &Tor) -> std::io::Result<TcpStream> {
     timeout(
-        Duration::from_secs(8),
+        Duration::from_secs(45),
         tor.conectar(RENDEZVOUS_ONION, VIRT_PORT),
     )
     .await
-    .map_err(|_| std::io::Error::other("rendezvous timeout"))?
+    .map_err(|_| std::io::Error::other("timeout"))?
 }
 
 #[cfg(test)]

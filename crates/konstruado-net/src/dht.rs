@@ -165,6 +165,10 @@ impl Nodo {
                 tor.marcar_fallo(format!("sala: {e}"));
                 return;
             }
+            for s in (0..30).rev() {
+                tor.marcar_arrancando(format!("publicando sala ({s}s)"));
+                tokio::time::sleep(Duration::from_secs(1)).await;
+            }
             loop {
                 if self.n_peers() > 0 {
                     tor.marcar_listo();
@@ -179,12 +183,13 @@ impl Nodo {
     }
 
     async fn marcar_sala(&self, tor: &Tor) {
+        let mut n = 1u32;
         loop {
             if self.n_peers() > 0 {
                 tor.marcar_listo();
                 return;
             }
-            tor.marcar_arrancando("buscando sala");
+            tor.marcar_arrancando(format!("buscando sala ({n})"));
             match crate::tor::dial_rendezvous(tor).await {
                 Ok(stream) => {
                     tor.marcar_listo();
@@ -194,13 +199,32 @@ impl Nodo {
                         return;
                     }
                 }
-                Err(_) => tokio::time::sleep(Duration::from_secs(3)).await,
+                Err(e) => {
+                    tor.marcar_arrancando(format!("buscando sala ({})", Self::corto_err(&e)));
+                    tokio::time::sleep(Duration::from_secs(2)).await;
+                }
             }
+            n += 1;
         }
     }
 
     pub fn parar(&self) {
         let _ = self.inner.lock().unwrap().halt.send(true);
+    }
+
+    fn corto_err(e: &std::io::Error) -> String {
+        let s = e.to_string();
+        if s.contains("timeout") || s.contains("elapsed") {
+            "sin respuesta".into()
+        } else if s.contains("HostUnreachable")
+            || s.contains("NetworkUnreachable")
+            || s.contains("ttl")
+            || s.contains("TTL")
+        {
+            "sala aún no visible".into()
+        } else {
+            s.chars().take(42).collect()
+        }
     }
 
     pub fn estado_tor(&self) -> EstadoTor {
