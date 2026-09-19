@@ -81,6 +81,9 @@ fn App() -> Element {
                     if let Some(p) = yo() {
                         n.anunciar(p);
                     }
+                    if let Some(r) = rol() {
+                        n.entrar_en_sala(r == Rol::Mandante);
+                    }
                     peers.set(n.n_peers());
                     presentes.set(n.presentes());
                     ofertas.set(n.tablero());
@@ -148,7 +151,7 @@ fn App() -> Element {
                     }
                     match screen() {
                         Screen::Bienvenida => rsx! {
-                            Bienvenida { nombre, rol, yo, screen, err }
+                            Bienvenida { nombre, rol, yo, red, screen, err }
                         },
                         Screen::Tablero => rsx! {
                             Tablero {
@@ -305,6 +308,7 @@ fn Bienvenida(
     nombre: Signal<String>,
     rol: Signal<Option<Rol>>,
     yo: Signal<Option<Persona>>,
+    red: Signal<Option<Nodo>>,
     screen: Signal<Screen>,
     err: Signal<Option<String>>,
 ) -> Element {
@@ -345,6 +349,9 @@ fn Bienvenida(
                     };
                     match Persona::nueva(nombre()) {
                         Ok(p) => {
+                            if let Some(nodo) = red() {
+                                nodo.entrar_en_sala(rol() == Some(Rol::Mandante));
+                            }
                             yo.set(Some(p));
                             err.set(None);
                             screen.set(Screen::Tablero);
@@ -410,8 +417,8 @@ fn Tablero(
             if peers() == 0 {
                 p { class: "hint",
                     match tor() {
-                        EstadoTor::Arrancando { .. } => "Tor está subiendo. En dos PCs puede tardar un minuto. Uno abre la sala, el otro entra.",
-                        _ => "Nadie más todavía. En la misma PC, un segundo cargo run se engancha solo. En otra máquina, los dos entran por Tor al mismo swarm.",
+                        EstadoTor::Arrancando { .. } => "Tor está subiendo. El mandante abre la sala; el contratista solo busca.",
+                        _ => "Nadie más todavía. En la misma PC, un segundo cargo run se engancha solo. En otra máquina, Don Dinero abre la sala y Chasquilla busca.",
                     }
                 }
             }

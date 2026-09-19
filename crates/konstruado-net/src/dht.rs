@@ -24,6 +24,8 @@ struct Inner {
     store: HashMap<String, Vec<u8>>,
     tor: Tor,
     halt: tokio::sync::watch::Sender<bool>,
+    /// Some(true) = mandante hosts the baked room. Some(false) = only dial.
+    rol_sala: Option<bool>,
 }
 
 #[derive(Clone)]
@@ -65,6 +67,7 @@ impl Nodo {
                 store: HashMap::new(),
                 tor,
                 halt: halt.clone(),
+                rol_sala: None,
             })),
             handle: handle.clone(),
         };
@@ -136,6 +139,10 @@ impl Nodo {
         });
     }
 
+    pub fn entrar_en_sala(&self, mandante: bool) {
+        self.inner.lock().unwrap().rol_sala = Some(mandante);
+    }
+
     async fn unirse_tor(&self, local_port: u16) {
         let tor = self.inner.lock().unwrap().tor.clone();
         if let Err(e) = tor.subir(local_port).await {
@@ -145,58 +152,30 @@ impl Nodo {
         if let Some(a) = tor.onion_addr() {
             self.inner.lock().unwrap().addr = a;
         }
-        let hash = {
-            let id = self.inner.lock().unwrap().id.clone();
-            id.as_bytes()
-                .iter()
-                .fold(0u64, |h, b| h.wrapping_mul(33).wrapping_add(u64::from(*b)))
+        let mandante = loop {
+            if let Some(m) = self.inner.lock().unwrap().rol_sala {
+                break m;
+            }
+            tor.marcar_arrancando("tor listo, esperá a entrar");
+            tokio::time::sleep(Duration::from_millis(400)).await;
         };
-        // Half the nodes open the room after two misses; the rest keep
-        // dialing so they can walk in once the descriptor is public.
-        let anfitrion = hash % 2 == 0;
-        let intentos = if anfitrion { 2 } else { 16 };
-        for i in 1..=intentos {
-            if self.n_peers() > 0 {
-                tor.marcar_listo();
+        if mandante {
+            tor.marcar_arrancando("abriendo sala");
+            if let Err(e) = tor.hospedar_sala(local_port).await {
+                tor.marcar_fallo(format!("sala: {e}"));
                 return;
             }
-            tor.marcar_arrancando(format!("buscando sala ({i}/{intentos})"));
-            match crate::tor::dial_rendezvous(&tor).await {
-                Ok(stream) => {
+            loop {
+                if self.n_peers() > 0 {
                     tor.marcar_listo();
-                    let _ = self.sesion_out(stream).await;
-                    if self.n_peers() > 0 {
-                        tor.marcar_listo();
-                        return;
-                    }
+                } else {
+                    tor.marcar_arrancando("sala abierta, esperando al contratista");
                 }
-                Err(_) => tokio::time::sleep(Duration::from_secs(2)).await,
+                tokio::time::sleep(Duration::from_secs(2)).await;
             }
-        }
-        if self.n_peers() > 0 {
-            tor.marcar_listo();
-            return;
-        }
-        tor.marcar_arrancando("abriendo sala");
-        if let Err(e) = tor.hospedar_sala(local_port).await {
-            tor.marcar_arrancando(format!("no pude abrir, sigo buscando ({e})"));
+        } else {
             self.marcar_sala(&tor).await;
-            return;
         }
-        // Two hosts of the same onion never call each other. Wait for a
-        // visitor; if nobody comes, drop the service (staggered) and dial.
-        let paciencia = 45 + (hash % 20);
-        for s in 0..paciencia {
-            if self.n_peers() > 0 {
-                tor.marcar_listo();
-                return;
-            }
-            tor.marcar_arrancando(format!("sala abierta ({s}/{paciencia}s)"));
-            tokio::time::sleep(Duration::from_secs(1)).await;
-        }
-        tor.marcar_arrancando("suelto la sala, marco");
-        let _ = tor.dejar_sala().await;
-        self.marcar_sala(&tor).await;
     }
 
     async fn marcar_sala(&self, tor: &Tor) {
