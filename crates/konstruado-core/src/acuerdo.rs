@@ -175,6 +175,12 @@ impl Partida {
         if self.estado == PartidaEstado::Pagada {
             self.turno = None;
         }
+        if self.estado == PartidaEstado::Pendiente
+            && otra.estado == PartidaEstado::Pendiente
+            && !otra.detalle.is_empty()
+        {
+            self.detalle = otra.detalle;
+        }
     }
 }
 
@@ -278,6 +284,15 @@ pub struct Obra {
     pub partidas: Vec<Partida>,
     /// Contractor proposed a different bond; waiting on principal.
     pub contra: Option<Aceptacion>,
+    /// Extra installment waiting on the other side.
+    #[serde(default)]
+    pub extra: Option<ExtraPartida>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ExtraPartida {
+    pub detalle: String,
+    pub por: Persona,
 }
 
 impl Obra {
@@ -312,6 +327,7 @@ impl Obra {
                 .map(|d| Partida::pendiente(d.clone()))
                 .collect(),
             contra,
+            extra: None,
         })
     }
 
@@ -464,6 +480,73 @@ impl Obra {
         Ok(())
     }
 
+    pub fn editar_detalle(
+        &mut self,
+        i: usize,
+        quien: &Persona,
+        detalle: impl Into<String>,
+    ) -> Result<(), Error> {
+        let _ = self.rol_de(&quien.id)?;
+        match self.estado {
+            EstadoObra::Cerrada | EstadoObra::Rechazada | EstadoObra::Abandonada => {
+                return Err(Error::YaExiste);
+            }
+            _ => {}
+        }
+        let p = self.partidas.get_mut(i).ok_or(Error::NoEsta)?;
+        if p.estado != PartidaEstado::Pendiente {
+            return Err(Error::YaExiste);
+        }
+        p.detalle = crate::partida::limpia_detalle(&detalle.into());
+        Ok(())
+    }
+
+    pub fn proponer_extra(&mut self, quien: &Persona, detalle: impl Into<String>) -> Result<(), Error> {
+        let _ = self.rol_de(&quien.id)?;
+        match self.estado {
+            EstadoObra::Acordada | EstadoObra::EnMarcha => {}
+            _ => return Err(Error::NoToca),
+        }
+        if self.extra.is_some() {
+            return Err(Error::YaExiste);
+        }
+        let detalle = crate::partida::limpia_detalle(&detalle.into());
+        if detalle.is_empty() {
+            return Err(Error::Nombre);
+        }
+        self.extra = Some(ExtraPartida {
+            detalle,
+            por: quien.clone(),
+        });
+        Ok(())
+    }
+
+    pub fn aceptar_extra(&mut self, quien: &Persona) -> Result<(), Error> {
+        let _ = self.rol_de(&quien.id)?;
+        let extra = self.extra.take().ok_or(Error::NoEsta)?;
+        if extra.por.id == quien.id {
+            self.extra = Some(extra);
+            return Err(Error::NoToca);
+        }
+        self.trabajo = self
+            .trabajo
+            .checked_add(self.garantia)
+            .ok_or(Error::Monto)?;
+        self.n_partidas += 1;
+        self.partidas.push(Partida::pendiente(extra.detalle));
+        Ok(())
+    }
+
+    pub fn rechazar_extra(&mut self, quien: &Persona) -> Result<(), Error> {
+        let _ = self.rol_de(&quien.id)?;
+        let extra = self.extra.take().ok_or(Error::NoEsta)?;
+        if extra.por.id == quien.id {
+            self.extra = Some(extra);
+            return Err(Error::NoToca);
+        }
+        Ok(())
+    }
+
     pub fn abandonar(&mut self, quien: &Persona) -> Result<(), Error> {
         let _ = self.rol_de(&quien.id)?;
         match self.estado {
@@ -495,24 +578,50 @@ impl Obra {
     /// Gossip must not roll a job backwards. Encerrar/pagar on one
     /// node wins over a stale copy on the other.
     pub fn fusionar(&mut self, mut otra: Obra) {
+        let extra_otra = otra.extra.take();
         if otra.estado.rango() > self.estado.rango() {
             self.estado = otra.estado;
             self.garantia = otra.garantia;
+            self.trabajo = otra.trabajo;
             self.n_partidas = otra.n_partidas;
             if otra.garantia_publicada > 0 {
                 self.garantia_publicada = otra.garantia_publicada;
             }
             self.contra = otra.contra.take();
-            Self::fusionar_partidas(&mut self.partidas, otra.partidas, self.n_partidas as usize);
+            Self::fusionar_partidas(
+                &mut self.partidas,
+                otra.partidas.clone(),
+                self.n_partidas as usize,
+            );
         } else if otra.estado.rango() == self.estado.rango() {
             if self.contra.is_none() {
                 self.contra = otra.contra.take();
             }
             if otra.n_partidas == self.n_partidas {
-                Self::fusionar_partidas(&mut self.partidas, otra.partidas, self.n_partidas as usize);
+                Self::fusionar_partidas(
+                    &mut self.partidas,
+                    otra.partidas.clone(),
+                    self.n_partidas as usize,
+                );
             }
         } else if otra.n_partidas == self.n_partidas {
+            Self::fusionar_partidas(
+                &mut self.partidas,
+                otra.partidas.clone(),
+                self.n_partidas as usize,
+            );
+        }
+        if otra.n_partidas > self.n_partidas
+            && otra.estado.rango() >= self.estado.rango()
+            && self.estado != EstadoObra::Rechazada
+            && self.estado != EstadoObra::Abandonada
+        {
+            self.trabajo = otra.trabajo;
+            self.n_partidas = otra.n_partidas;
             Self::fusionar_partidas(&mut self.partidas, otra.partidas, self.n_partidas as usize);
+            self.extra = None;
+        } else if self.extra.is_none() {
+            self.extra = extra_otra;
         }
         if self.estado != EstadoObra::Rechazada
             && self.estado != EstadoObra::Abandonada

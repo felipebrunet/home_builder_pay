@@ -347,6 +347,19 @@ fn avisos_para(mid: &str, soy_m: bool, obras: &[Obra], ofertas: &[Oferta]) -> Ve
                 partida: None,
             });
         }
+        if let Some(ex) = obra.extra.as_ref() {
+            if ex.por.id != mid {
+                out.push(Aviso {
+                    texto: format!(
+                        "{}: {} propone partida extra ({})",
+                        obra.nombre, ex.por.nombre, ex.detalle
+                    ),
+                    obra_id: obra.id.clone(),
+                    es_oferta: false,
+                    partida: None,
+                });
+            }
+        }
         let mi_rol = if obra.mandante.id == mid {
             Rol::Mandante
         } else {
@@ -1021,6 +1034,7 @@ fn Detalle(
 ) -> Element {
     let mut confirma_abandono = use_signal(|| false);
     let mut export_msg = use_signal(|| None::<String>);
+    let mut extra_nom = use_signal(String::new);
     let id = sel_obra().unwrap_or_default();
     let Some(obra) = obras().into_iter().find(|o| o.id == id) else {
         return rsx! { p { "La obra todavía no llegó. Si la acabás de publicar, esperá al contratista." } };
@@ -1059,13 +1073,26 @@ fn Detalle(
                 onclick: {
                     let obra = obra.clone();
                     move |_| {
-                        match export::guardar(&obra) {
+                        match export::guardar_txt(&obra) {
                             Ok(p) => export_msg.set(Some(format!("Guardado en {}", p.display()))),
                             Err(e) => export_msg.set(Some(e)),
                         }
                     }
                 },
-                "Exportar constancia"
+                "Exportar texto"
+            }
+            button {
+                class: "btn btn-ghost",
+                onclick: {
+                    let obra = obra.clone();
+                    move |_| {
+                        match export::guardar_pdf(&obra) {
+                            Ok(p) => export_msg.set(Some(format!("Guardado en {}", p.display()))),
+                            Err(e) => export_msg.set(Some(e)),
+                        }
+                    }
+                },
+                "Exportar PDF"
             }
             if contra {
                 p { class: "hint",
@@ -1169,6 +1196,76 @@ fn Detalle(
                     }
                 }
             }
+            if let Some(ex) = obra.extra.clone() {
+                if ex.por.id == mid {
+                    p { class: "hint", "Esperando que acepten la partida extra: {ex.detalle}" }
+                } else {
+                    p { class: "lead", "{ex.por.nombre} propone partida extra: {ex.detalle} (+{monto(garantia)} al trabajo)" }
+                    button {
+                        class: "btn btn-primary",
+                        onclick: {
+                            let mut obra = obra.clone();
+                            move |_| {
+                                let Some(quien) = yo() else { return };
+                                let Some(nodo) = red() else { return };
+                                match obra.aceptar_extra(&quien) {
+                                    Ok(()) => {
+                                        err.set(None);
+                                        nodo.publicar_obra(obra.clone());
+                                    }
+                                    Err(e) => err.set(Some(e.to_string())),
+                                }
+                            }
+                        },
+                        "Aceptar partida extra"
+                    }
+                    button {
+                        class: "btn btn-ghost",
+                        onclick: {
+                            let mut obra = obra.clone();
+                            move |_| {
+                                let Some(quien) = yo() else { return };
+                                let Some(nodo) = red() else { return };
+                                match obra.rechazar_extra(&quien) {
+                                    Ok(()) => {
+                                        err.set(None);
+                                        nodo.publicar_obra(obra.clone());
+                                    }
+                                    Err(e) => err.set(Some(e.to_string())),
+                                }
+                            }
+                        },
+                        "No agregar"
+                    }
+                }
+            } else if abierta && se_puede_abandonar && estado != EstadoObra::Contra {
+                label { class: "et", "PARTIDA EXTRA" }
+                input {
+                    r#type: "text",
+                    placeholder: "P. ej. Techumbre extra",
+                    value: "{extra_nom}",
+                    oninput: move |e| extra_nom.set(e.value()),
+                }
+                button {
+                    class: "btn btn-ghost",
+                    onclick: {
+                        let mut obra = obra.clone();
+                        move |_| {
+                            let Some(quien) = yo() else { return };
+                            let Some(nodo) = red() else { return };
+                            match obra.proponer_extra(&quien, extra_nom()) {
+                                Ok(()) => {
+                                    err.set(None);
+                                    extra_nom.set(String::new());
+                                    nodo.publicar_obra(obra.clone());
+                                }
+                                Err(e) => err.set(Some(e.to_string())),
+                            }
+                        }
+                    },
+                    "Proponer partida extra"
+                }
+            }
             p { class: "hint", "Entrá a cada partida para avisar que terminó, tratar el porcentaje y ver el hilo." }
             div { style: "height: 16px;" }
             for (i, p) in partidas.iter().enumerate() {
@@ -1210,10 +1307,18 @@ fn VerPartida(
     let mut pct = use_signal(|| "100".to_string());
     let mut nota = use_signal(String::new);
     let mut confirma_encerrar = use_signal(|| false);
+    let mut detalle_edit = use_signal(String::new);
     use_effect(move || {
         let _ = sel_partida();
         pct.set("100".into());
         nota.set(String::new());
+        if let (Some(id), Some(i)) = (sel_obra(), sel_partida()) {
+            if let Some(o) = obras().into_iter().find(|o| o.id == id) {
+                if let Some(p) = o.partidas.get(i) {
+                    detalle_edit.set(p.detalle.clone());
+                }
+            }
+        }
     });
     let id = sel_obra().unwrap_or_default();
     let Some(obra) = obras().into_iter().find(|o| o.id == id) else {
@@ -1262,6 +1367,32 @@ fn VerPartida(
             }
             p { class: "lead",
                 "{monto(garantia)} por lado. Mandante {obra.mandante.nombre} · contratista {obra.contratista.nombre}"
+            }
+            if !cortada && p.estado == PartidaEstado::Pendiente && (soy_m || soy_c) {
+                label { class: "et", "TEXTO" }
+                input {
+                    r#type: "text",
+                    value: "{detalle_edit}",
+                    oninput: move |e| detalle_edit.set(e.value()),
+                }
+                button {
+                    class: "btn btn-ghost",
+                    onclick: {
+                        let mut obra = obra.clone();
+                        move |_| {
+                            let Some(quien) = yo() else { return };
+                            let Some(nodo) = red() else { return };
+                            match obra.editar_detalle(i, &quien, detalle_edit()) {
+                                Ok(()) => {
+                                    err.set(None);
+                                    nodo.publicar_obra(obra.clone());
+                                }
+                                Err(e) => err.set(Some(e.to_string())),
+                            }
+                        }
+                    },
+                    "Guardar texto"
+                }
             }
             if cerrado {
                 if let Some(r) = p.recibo.as_ref() {

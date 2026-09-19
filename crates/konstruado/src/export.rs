@@ -18,6 +18,12 @@ pub fn constancia(obra: &Obra) -> String {
     s.push_str(&format!("Trabajo: {}\n", monto(obra.trabajo)));
     s.push_str(&format!("Garantía por partida: {}\n", monto(obra.garantia)));
     s.push_str(&format!("Partidas: {}\n", obra.n_partidas));
+    if let Some(ex) = obra.extra.as_ref() {
+        s.push_str(&format!(
+            "Partida extra propuesta por {}: {}\n",
+            ex.por.nombre, ex.detalle
+        ));
+    }
     for (i, p) in obra.partidas.iter().enumerate() {
         let titulo = titulo_partida(i, &p.detalle);
         s.push_str(&format!(
@@ -65,7 +71,7 @@ pub fn constancia(obra: &Obra) -> String {
     s
 }
 
-pub fn guardar(obra: &Obra) -> Result<PathBuf, String> {
+pub fn guardar_txt(obra: &Obra) -> Result<PathBuf, String> {
     let suggested = format!("konstruado-{}.txt", slug(&obra.nombre));
     let texto = constancia(obra);
     if let Some(path) = rfd::FileDialog::new()
@@ -78,6 +84,92 @@ pub fn guardar(obra: &Obra) -> Result<PathBuf, String> {
         return Ok(path);
     }
     Err("No se eligió dónde guardar.".into())
+}
+
+pub fn guardar_pdf(obra: &Obra) -> Result<PathBuf, String> {
+    let suggested = format!("konstruado-{}.pdf", slug(&obra.nombre));
+    let Some(path) = rfd::FileDialog::new()
+        .set_title("Exportar PDF")
+        .set_file_name(&suggested)
+        .add_filter("PDF", &["pdf"])
+        .save_file()
+    else {
+        return Err("No se eligió dónde guardar.".into());
+    };
+    let bytes = pdf_bytes(obra)?;
+    std::fs::write(&path, bytes).map_err(|e| e.to_string())?;
+    Ok(path)
+}
+
+fn pdf_bytes(obra: &Obra) -> Result<Vec<u8>, String> {
+    use printpdf::*;
+    use std::io::Cursor;
+
+    let (doc, page1, layer1) = PdfDocument::new("Konstruado", Mm(210.0), Mm(297.0), "Capa");
+    let font = pdf_font(&doc)?;
+    let lines = wrap_lines(&constancia(obra), 92);
+    let mut pages: Vec<(PdfPageIndex, PdfLayerIndex)> = vec![(page1, layer1)];
+    let mut page_i = 0usize;
+    let mut y = 280.0;
+    for line in lines {
+        if y < 18.0 {
+            let (p, l) = doc.add_page(Mm(210.0), Mm(297.0), "Capa");
+            pages.push((p, l));
+            page_i += 1;
+            y = 280.0;
+        }
+        let (p, l) = pages[page_i];
+        let layer = doc.get_page(p).get_layer(l);
+        layer.use_text(line, 10.0, Mm(18.0), Mm(y), &font);
+        y -= 5.0;
+    }
+    let mut buf = std::io::BufWriter::new(Cursor::new(Vec::new()));
+    doc.save(&mut buf).map_err(|e| e.to_string())?;
+    let cur = buf.into_inner().map_err(|e| e.to_string())?;
+    Ok(cur.into_inner())
+}
+
+fn pdf_font(doc: &printpdf::PdfDocumentReference) -> Result<printpdf::IndirectFontRef, String> {
+    use printpdf::*;
+    for p in [
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+        "/usr/share/fonts/truetype/freefont/FreeSans.ttf",
+    ] {
+        if let Ok(f) = std::fs::File::open(p) {
+            if let Ok(font) = doc.add_external_font(f) {
+                return Ok(font);
+            }
+        }
+    }
+    doc.add_builtin_font(BuiltinFont::Helvetica)
+        .map_err(|e| e.to_string())
+}
+
+fn wrap_lines(s: &str, width: usize) -> Vec<String> {
+    let mut out = Vec::new();
+    for raw in s.lines() {
+        if raw.chars().count() <= width {
+            out.push(raw.to_string());
+            continue;
+        }
+        let mut cur = String::new();
+        for w in raw.split_whitespace() {
+            if cur.is_empty() {
+                cur = w.to_string();
+            } else if cur.chars().count() + 1 + w.chars().count() <= width {
+                cur.push(' ');
+                cur.push_str(w);
+            } else {
+                out.push(std::mem::take(&mut cur));
+                cur = w.to_string();
+            }
+        }
+        if !cur.is_empty() {
+            out.push(cur);
+        }
+    }
+    out
 }
 
 fn estado(e: &EstadoObra) -> &'static str {

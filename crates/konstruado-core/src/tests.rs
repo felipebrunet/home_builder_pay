@@ -233,3 +233,35 @@ fn nota_de_mas_de_cincuenta_no_entra() {
     let larga = "x".repeat(51);
     assert_eq!(obra.avisar_termino(0, &c, 100, larga), Err(Error::Nota));
 }
+
+#[test]
+fn se_edita_detalle_pendiente_no_encerrada() {
+    let m = Persona::nueva("Dinero").unwrap();
+    let c = Persona::nueva("Chasquilla").unwrap();
+    let o = Oferta::publicar(m.clone(), "Casa", 100, 50, vec!["Cimentos".into()]).unwrap();
+    let a = Aceptacion::de(&o, c.clone(), 50).unwrap();
+    let mut obra = Obra::desde_oferta(o, a).unwrap();
+    obra.editar_detalle(0, &m, "Cimientos").unwrap();
+    assert_eq!(obra.partidas[0].detalle, "Cimientos");
+    obra.encerrar_partida(0, &m).unwrap();
+    assert_eq!(
+        obra.editar_detalle(0, &m, "Otra"),
+        Err(Error::YaExiste)
+    );
+}
+
+#[test]
+fn partida_extra_suma_trabajo_si_ambos_aceptan() {
+    let m = Persona::nueva("Dinero").unwrap();
+    let c = Persona::nueva("Chasquilla").unwrap();
+    let o = Oferta::publicar(m.clone(), "Casa", 100, 50, vec![]).unwrap();
+    let a = Aceptacion::de(&o, c.clone(), 50).unwrap();
+    let mut obra = Obra::desde_oferta(o, a).unwrap();
+    assert_eq!(obra.n_partidas, 2);
+    obra.proponer_extra(&c, "Techumbre extra").unwrap();
+    obra.aceptar_extra(&m).unwrap();
+    assert_eq!(obra.n_partidas, 3);
+    assert_eq!(obra.trabajo, 150);
+    assert_eq!(obra.partidas[2].detalle, "Techumbre extra");
+    assert_eq!(n_partidas(obra.trabajo, obra.garantia).unwrap(), 3);
+}

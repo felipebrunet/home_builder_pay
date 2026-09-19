@@ -5,8 +5,8 @@ mod error;
 mod partida;
 
 pub use acuerdo::{
-    Aceptacion, EstadoObra, NotaPartida, Oferta, Obra, Partida, PartidaEstado, Persona, ReciboPartida,
-    Rol,
+    Aceptacion, EstadoObra, ExtraPartida, NotaPartida, Oferta, Obra, Partida, PartidaEstado, Persona,
+    ReciboPartida, Rol,
 };
 pub use error::Error;
 pub use partida::{
