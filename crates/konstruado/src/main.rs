@@ -1,3 +1,5 @@
+mod persist;
+
 use std::time::Duration;
 
 use dioxus::prelude::*;
@@ -51,12 +53,35 @@ enum Screen {
     VerPartida,
 }
 
+fn persistir(yo: Option<Persona>, rol: Option<Rol>, n: &Nodo) {
+    persist::guardar(&persist::EstadoDisco {
+        yo,
+        rol,
+        ofertas: n.tablero(),
+        obras: n.obras(),
+        presentes: n.presentes(),
+    });
+}
+
 #[component]
 fn App() -> Element {
-    let mut screen = use_signal(|| Screen::Bienvenida);
-    let nombre = use_signal(String::new);
-    let rol = use_signal(|| None::<Rol>);
-    let yo = use_signal(|| None::<Persona>);
+    let guardado = use_hook(persist::cargar);
+    let mut screen = use_signal(|| {
+        if guardado.adentro() {
+            Screen::Tablero
+        } else {
+            Screen::Bienvenida
+        }
+    });
+    let nombre = use_signal(|| {
+        guardado
+            .yo
+            .as_ref()
+            .map(|p| p.nombre.clone())
+            .unwrap_or_default()
+    });
+    let rol = use_signal(|| guardado.rol);
+    let yo = use_signal(|| guardado.yo.clone());
     let mut red = use_signal(|| None::<Nodo>);
     let mut tor = use_signal(|| EstadoTor::Ausente);
     let mut peers = use_signal(|| 0usize);
@@ -72,9 +97,14 @@ fn App() -> Element {
     let obra_nom = use_signal(|| "Casa El Quisco".to_string());
     let garantia_acc = use_signal(|| "2000".to_string());
 
-    use_future(move || async move {
+    use_future(move || {
+        let ofertas0 = guardado.ofertas.clone();
+        let obras0 = guardado.obras.clone();
+        let presentes0 = guardado.presentes.clone();
+        async move {
         match Nodo::arrancar().await {
             Ok(n) => {
+                n.hidratar(ofertas0, obras0, presentes0);
                 red.set(Some(n.clone()));
                 loop {
                     tor.set(n.estado_tor());
@@ -88,10 +118,12 @@ fn App() -> Element {
                     presentes.set(n.presentes());
                     ofertas.set(n.tablero());
                     obras.set(n.obras());
+                    persistir(yo(), rol(), &n);
                     n.esperar(Duration::from_secs(1)).await;
                 }
             }
             Err(e) => err.set(Some(format!("Red: {e}"))),
+        }
         }
     });
 
@@ -337,7 +369,7 @@ fn Bienvenida(
                     class: if rol() == Some(Rol::Contratista) { "rol on" } else { "rol" },
                     onclick: move |_| rol.set(Some(Rol::Contratista)),
                     strong { "La construyo" }
-                    span { "Contratista. Ves lo publicado y aceptás, o proponés otra garantía." }
+                    span { "Contratista. Buscás lo publicado y aceptás, o proponés otra garantía." }
                 }
             }
             button {

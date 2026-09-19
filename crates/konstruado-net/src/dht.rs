@@ -332,6 +332,24 @@ impl Nodo {
         self.spawn_gossip();
     }
 
+    pub fn hidratar(&self, ofertas: Vec<Oferta>, obras: Vec<Obra>, presentes: Vec<Persona>) {
+        {
+            let mut g = self.inner.lock().unwrap();
+            if !ofertas.is_empty() {
+                g.store
+                    .insert(key_hex(&clave_tablero()), encode_tablero(&ofertas));
+            }
+            if !obras.is_empty() {
+                g.store.insert(key_hex(&clave_obras()), encode_obras(&obras));
+            }
+            if !presentes.is_empty() {
+                g.store
+                    .insert(key_hex(&clave_presentes()), encode_presentes(&presentes));
+            }
+        }
+        self.spawn_gossip();
+    }
+
     pub fn presentes(&self) -> Vec<Persona> {
         let key = key_hex(&clave_presentes());
         let g = self.inner.lock().unwrap();

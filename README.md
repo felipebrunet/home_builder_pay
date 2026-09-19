@@ -16,11 +16,13 @@ cargo test --workspace
 cargo run
 ```
 
-Two users on one PC:
+State is saved in `~/.konstruado/estado.json` (override with `KONSTRUADO_DATOS`). Closing the app keeps name, role, and jobs.
+
+Two users on one PC need two data dirs:
 
 ```bash
-cargo run    # window 1
-cargo run    # window 2, another terminal
+KONSTRUADO_DATOS=.konstruado-dinero cargo run
+KONSTRUADO_DATOS=.konstruado-chasquilla cargo run
 ```
 
 Window 1: José, **Pago la obra**, Publicar. Window 2: Juan, **La construyo** — the job appears on his board.
