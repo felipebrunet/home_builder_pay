@@ -1,4 +1,5 @@
 mod export;
+mod help;
 mod i18n;
 mod persist;
 
@@ -47,7 +48,7 @@ fn preparar_grafica() {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum Screen {
+pub(crate) enum Screen {
     Bienvenida,
     Tablero,
     Nueva,
@@ -55,6 +56,7 @@ enum Screen {
     Detalle,
     VerPartida,
     Cuenta,
+    Help,
 }
 
 fn persistir(yo: Option<Persona>, rol: Option<Rol>, tema: String, idioma: String, n: &Nodo) {
@@ -151,7 +153,7 @@ fn App() -> Element {
         }
     });
 
-    let adentro = screen() != Screen::Bienvenida;
+    let adentro = yo().is_some();
     let quien = yo().map(|p| p.nombre).unwrap_or_default();
     let rol_txt = rol().map(|r| idioma().rol(r)).unwrap_or("");
     let lang = idioma();
@@ -177,6 +179,11 @@ fn App() -> Element {
                     "Konstruado"
                 }
                 LangSwitch {}
+                button {
+                    class: "quien",
+                    onclick: move |_| screen.set(Screen::Help),
+                    "Help"
+                }
                 if adentro {
                     button {
                         class: "quien",
@@ -243,6 +250,9 @@ fn App() -> Element {
                         },
                         Screen::Cuenta => rsx! {
                             Cuenta { nombre, rol, yo, red, screen, err, tema }
+                        },
+                        Screen::Help => rsx! {
+                            help::Help { yo, screen }
                         },
                     }
                 }

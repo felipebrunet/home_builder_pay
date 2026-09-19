@@ -107,6 +107,39 @@ body {
 }
 .quien:hover { color: var(--tinta); }
 
+.about {
+  margin: 18px 0 28px;
+  padding: 16px 18px;
+  background: var(--card);
+  border: 1px solid var(--linea);
+  border-radius: 10px;
+}
+.about p { margin: 0 0 8px; }
+.about p:last-child { margin: 0; }
+.help-link {
+  background: none;
+  border: 0;
+  padding: 0;
+  color: var(--tinta);
+  font: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+  word-break: break-all;
+  text-align: left;
+}
+.readme {
+  margin: 0;
+  padding: 16px 18px;
+  background: var(--card);
+  border: 1px solid var(--linea);
+  border-radius: 10px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  font-size: 14px;
+  line-height: 1.45;
+}
+
 .shell {
   display: flex;
   flex: 1;
