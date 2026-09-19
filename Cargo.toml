@@ -13,6 +13,9 @@ edition = "2021"
 license = "MIT"
 repository = "https://github.com/felipebrunet/home_builder_pay"
 
+[profile.release]
+strip = true
+
 [workspace.dependencies]
 xmr-joint = { path = "crates/xmr-joint" }
 konstruado-core = { path = "crates/konstruado-core" }

@@ -30,3 +30,27 @@ KONSTRUADO_DATOS=.konstruado-chasquilla cargo run
 ```
 
 Window 1: José, **Pago la obra**, Publicar. Window 2: Juan, **La construyo** — the job appears on his board.
+
+## Linux binary (not production)
+
+Version is `0.1.0-dev`. About and the window title show that. Build and name it:
+
+```bash
+cargo build -p konstruado --release
+mkdir -p dist
+cp target/release/konstruado dist/konstruado-0.1.0-linux-x86_64-dev
+```
+
+On the other machine (Debian/Ubuntu):
+
+```bash
+sudo apt install tor libgtk-3-0 libwebkit2gtk-4.1-0 libxdo3
+chmod +x construado-0.1.0-linux-x86_64-dev
+./konstruado-0.1.0-linux-x86_64-dev
+```
+
+Upload as a GitHub **pre-release**:
+
+```bash
+gh release create v0.1.0-dev --prerelease --title "0.1.0-dev" --notes "Linux x86_64 preview. Needs tor, GTK3, WebKitGTK 4.1, libxdo. Not production." dist/konstruado-0.1.0-linux-x86_64-dev
+```

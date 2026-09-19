@@ -48,6 +48,8 @@ No son un chat de usuarios: se ven **obras y avisos**, no una lista tipo WhatsAp
 - **Te toca** = interacción de un trato abierto (contra, %, extra), no “alguien publicó”.
 - Exportar constancia: `.txt` y `.pdf` desde el detalle de la obra.
 
+Binario Linux de prueba: `cargo build -p konstruado --release` y copiar `target/release/konstruado` como `konstruado-0.1.0-linux-x86_64-dev`. No es productivo (versión `0.1.0-dev`). El tester necesita `tor`, GTK3, WebKitGTK 4.1 y `libxdo`. No commitear `dist/`.
+
 ## Cómo probar dos máquinas
 
 ```bash

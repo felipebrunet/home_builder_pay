@@ -18,7 +18,7 @@ const CSS: &str = include_str!("ui.css");
 fn main() {
     preparar_grafica();
     let window = dioxus::desktop::WindowBuilder::new()
-        .with_title("Konstruado")
+        .with_title(concat!("Konstruado ", env!("CARGO_PKG_VERSION")))
         .with_inner_size(dioxus::desktop::LogicalSize::new(1100.0, 760.0))
         .with_min_inner_size(dioxus::desktop::LogicalSize::new(420.0, 560.0));
     let cfg = dioxus::desktop::Config::new()

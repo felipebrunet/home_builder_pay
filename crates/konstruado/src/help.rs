@@ -144,7 +144,7 @@ mod tests {
 
     #[test]
     fn about_trae_repo_y_readme() {
-        assert_eq!(VERSION, "0.1.0");
+        assert_eq!(VERSION, "0.1.0-dev");
         assert!(REPO.contains("felipebrunet/home_builder_pay"));
         assert!(README.contains("Konstruado"));
         assert!(README.contains("ES / EN"));
