@@ -7,7 +7,7 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio::time::timeout;
 use uuid::Uuid;
 
-use konstruado_core::{Oferta, Obra, Persona};
+use konstruado_core::{ahora, Oferta, Obra, Persona};
 
 use crate::proto::{
     decode_obras, decode_presentes, decode_tablero, encode_obras, encode_presentes, encode_tablero,
@@ -249,6 +249,16 @@ impl Nodo {
         self.inner.lock().unwrap().peers.len()
     }
 
+    pub fn sesion_viva(&self, _yo_id: &str, otro_id: &str) -> bool {
+        if self.n_peers() == 0 {
+            return false;
+        }
+        let t = ahora();
+        self.presentes().iter().any(|p| {
+            p.id == otro_id && t.saturating_sub(p.visto) <= 25
+        })
+    }
+
     /// Contractor "Buscar ofertas": gossip plus a dial to the baked room
     /// if we are not the porter (dialing our own onion is a no-op).
     pub fn buscar(&self) {
@@ -365,7 +375,8 @@ impl Nodo {
         self.anunciar(persona);
     }
 
-    pub fn anunciar(&self, persona: Persona) {
+    pub fn anunciar(&self, mut persona: Persona) {
+        persona.visto = ahora();
         let key = key_hex(&clave_presentes());
         {
             let mut g = self.inner.lock().unwrap();
@@ -622,8 +633,13 @@ fn merge_store(store: &mut HashMap<String, Vec<u8>>, key: String, val: Vec<u8>) 
             .unwrap_or_default();
         let b = decode_presentes(&val);
         for p in b {
-            a.retain(|x| x.id != p.id);
-            a.push(p);
+            if let Some(ex) = a.iter_mut().find(|x| x.id == p.id) {
+                if p.visto >= ex.visto {
+                    *ex = p;
+                }
+            } else {
+                a.push(p);
+            }
         }
         store.insert(key, encode_presentes(&a));
     } else {

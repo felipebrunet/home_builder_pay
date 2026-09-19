@@ -21,7 +21,9 @@ El split está bien. No hace falta un refactor grande. `main.rs` es largo; parti
 - **Contratista** construye. Solo busca sala. Ve avisos, acepta o propone otra garantía.
 - Garantía de la obra **divide exacto** el trabajo (10 000 / 2 000 → 5 partidas). Cada partida original encierra esa garantía por lado.
 - **Contra:** el contratista propone otra garantía. El mandante confirma o **No aceptar esta garantía** (el aviso vuelve al tablero con lo original).
-- **Partida:** encerrar (con confirmación y quién) → el contratista avisa término con % y nota (máx. 50) → el otro acepta o contraoferta % → al pagar, **recibo congelado**.
+- **Partida:** los dos confirman el encierre (sesión viva) → el contratista avisa término con % y nota (máx. 50) → el otro acepta o contraoferta % → al pagar, **recibo congelado**.
+- **Abandono:** si no hay encierre, unilateral. Si hay Encerrando/Encerrada/En trato/Pagada, es *propuesta de cierre* y el otro acepta.
+- **Sesión viva:** pagar, contra, extra, encerrar y cierre cooperativo piden que el otro tenga Konstruado abierto (pong ~25 s). Publicar, exportar, tema y editar texto pendiente no.
 - **Extra:** cualquiera propone texto **y monto propio**. El otro acepta o rechaza. El rechazo no se puede pisar con gossip (`extra_seq`). Extra congelada si la obra está abandonada/cerrada/rechazada.
 - **Abandonar** corta el trato. Cerradas/abandonadas no viven en el tablero central.
 

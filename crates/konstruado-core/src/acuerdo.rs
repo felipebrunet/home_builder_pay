@@ -8,6 +8,8 @@ use crate::partida::{ahora, ajusta_detalles, limpia_nota, monto_pct, n_partidas,
 pub struct Persona {
     pub id: String,
     pub nombre: String,
+    #[serde(default)]
+    pub visto: i64,
 }
 
 impl Persona {
@@ -16,6 +18,7 @@ impl Persona {
         Ok(Self {
             id: Uuid::new_v4().to_string(),
             nombre,
+            visto: 0,
         })
     }
 
@@ -64,6 +67,7 @@ pub enum EstadoObra {
 #[serde(rename_all = "snake_case")]
 pub enum PartidaEstado {
     Pendiente,
+    Encerrando,
     Encerrada,
     EnTrato,
     Pagada,
@@ -109,15 +113,18 @@ pub struct Partida {
     /// 0 means use the obra's `garantia`.
     #[serde(default)]
     pub monto: u64,
+    #[serde(default)]
+    pub encerrar_seq: u32,
 }
 
 impl PartidaEstado {
     fn rango(self) -> u8 {
         match self {
             PartidaEstado::Pendiente => 0,
-            PartidaEstado::Encerrada => 1,
-            PartidaEstado::EnTrato => 2,
-            PartidaEstado::Pagada => 3,
+            PartidaEstado::Encerrando => 1,
+            PartidaEstado::Encerrada => 2,
+            PartidaEstado::EnTrato => 3,
+            PartidaEstado::Pagada => 4,
         }
     }
 }
@@ -135,6 +142,7 @@ impl Partida {
             encerrado_cuando: 0,
             recibo: None,
             monto: 0,
+            encerrar_seq: 0,
         }
     }
 
@@ -155,6 +163,16 @@ impl Partida {
     pub fn fusionar(&mut self, otra: Partida) {
         if self.detalle.is_empty() && !otra.detalle.is_empty() {
             self.detalle = otra.detalle.clone();
+        }
+        if otra.encerrar_seq > self.encerrar_seq
+            && self.estado.rango() < PartidaEstado::EnTrato.rango()
+        {
+            self.estado = otra.estado;
+            self.encerrado_por = otra.encerrado_por.clone();
+            self.encerrado_cuando = otra.encerrado_cuando;
+            self.encerrar_seq = otra.encerrar_seq;
+        } else if otra.encerrar_seq > self.encerrar_seq {
+            self.encerrar_seq = otra.encerrar_seq;
         }
         if otra.estado.rango() > self.estado.rango() {
             self.estado = otra.estado;
@@ -318,6 +336,10 @@ pub struct Obra {
     pub extra_seq: u32,
     #[serde(default)]
     pub actualizado: i64,
+    #[serde(default)]
+    pub cierre: Option<Persona>,
+    #[serde(default)]
+    pub cierre_seq: u32,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -363,6 +385,8 @@ impl Obra {
             extra: None,
             extra_seq: 0,
             actualizado: ahora(),
+            cierre: None,
+            cierre_seq: 0,
         })
     }
 
@@ -413,18 +437,63 @@ impl Obra {
         Ok(())
     }
 
-    /// Both sides lock the same `garantia` for installment `i`. Stub until XMR.
-    pub fn encerrar_partida(&mut self, i: usize, quien: &Persona) -> Result<(), Error> {
+    pub fn hay_riesgo(&self) -> bool {
+        self.partidas.iter().any(|p| {
+            matches!(
+                p.estado,
+                PartidaEstado::Encerrando
+                    | PartidaEstado::Encerrada
+                    | PartidaEstado::EnTrato
+                    | PartidaEstado::Pagada
+            )
+        })
+    }
+
+    /// First of two confirmations to lock installment `i`. Stub until XMR.
+    pub fn encerrar_proponer(&mut self, i: usize, quien: &Persona) -> Result<(), Error> {
         let _ = self.rol_de(&quien.id)?;
         let p = self.partidas.get_mut(i).ok_or(Error::NoEsta)?;
         if p.estado != PartidaEstado::Pendiente {
             return Err(Error::YaExiste);
         }
+        p.estado = PartidaEstado::Encerrando;
+        p.encerrado_por = Some(quien.clone());
+        p.encerrar_seq = p.encerrar_seq.saturating_add(1);
+        self.estado = EstadoObra::EnMarcha;
+        self.tocar();
+        Ok(())
+    }
+
+    /// Second confirmation: the other party agrees to lock.
+    pub fn encerrar_confirmar(&mut self, i: usize, quien: &Persona) -> Result<(), Error> {
+        let _ = self.rol_de(&quien.id)?;
+        let p = self.partidas.get_mut(i).ok_or(Error::NoEsta)?;
+        if p.estado != PartidaEstado::Encerrando {
+            return Err(Error::NoToca);
+        }
+        let Some(prop) = p.encerrado_por.as_ref() else {
+            return Err(Error::NoEsta);
+        };
+        if prop.id == quien.id {
+            return Err(Error::NoToca);
+        }
         let _ = xmr_hook();
         p.estado = PartidaEstado::Encerrada;
-        p.encerrado_por = Some(quien.clone());
         p.encerrado_cuando = ahora();
-        self.estado = EstadoObra::EnMarcha;
+        p.encerrar_seq = p.encerrar_seq.saturating_add(1);
+        self.tocar();
+        Ok(())
+    }
+
+    pub fn encerrar_cancelar(&mut self, i: usize, quien: &Persona) -> Result<(), Error> {
+        let _ = self.rol_de(&quien.id)?;
+        let p = self.partidas.get_mut(i).ok_or(Error::NoEsta)?;
+        if p.estado != PartidaEstado::Encerrando {
+            return Err(Error::NoToca);
+        }
+        p.estado = PartidaEstado::Pendiente;
+        p.encerrado_por = None;
+        p.encerrar_seq = p.encerrar_seq.saturating_add(1);
         self.tocar();
         Ok(())
     }
@@ -624,9 +693,47 @@ impl Obra {
             }
             _ => {}
         }
+        if !self.hay_riesgo() {
+            self.estado = EstadoObra::Abandonada;
+            self.extra = None;
+            self.extra_seq = self.extra_seq.saturating_add(1);
+            self.cierre = None;
+            self.cierre_seq = self.cierre_seq.saturating_add(1);
+            self.tocar();
+            return Ok(());
+        }
+        if self.cierre.is_some() {
+            return Err(Error::YaExiste);
+        }
+        self.cierre = Some(quien.clone());
+        self.cierre_seq = self.cierre_seq.saturating_add(1);
+        self.tocar();
+        Ok(())
+    }
+
+    pub fn aceptar_cierre(&mut self, quien: &Persona) -> Result<(), Error> {
+        let _ = self.rol_de(&quien.id)?;
+        let prop = self.cierre.take().ok_or(Error::NoEsta)?;
+        if prop.id == quien.id {
+            self.cierre = Some(prop);
+            return Err(Error::NoToca);
+        }
         self.estado = EstadoObra::Abandonada;
         self.extra = None;
         self.extra_seq = self.extra_seq.saturating_add(1);
+        self.cierre_seq = self.cierre_seq.saturating_add(1);
+        self.tocar();
+        Ok(())
+    }
+
+    pub fn rechazar_cierre(&mut self, quien: &Persona) -> Result<(), Error> {
+        let _ = self.rol_de(&quien.id)?;
+        let prop = self.cierre.take().ok_or(Error::NoEsta)?;
+        if prop.id == quien.id {
+            self.cierre = Some(prop);
+            return Err(Error::NoToca);
+        }
+        self.cierre_seq = self.cierre_seq.saturating_add(1);
         self.tocar();
         Ok(())
     }
@@ -703,10 +810,20 @@ impl Obra {
             EstadoObra::Abandonada | EstadoObra::Cerrada | EstadoObra::Rechazada
         ) {
             self.extra = None;
+            self.cierre = None;
+        }
+        let cierre_otra = otra.cierre.take();
+        let cseq = otra.cierre_seq;
+        if self.estado == EstadoObra::Abandonada {
+            self.cierre = None;
+            self.cierre_seq = self.cierre_seq.max(cseq);
+        } else if cseq > self.cierre_seq {
+            self.cierre = cierre_otra;
+            self.cierre_seq = cseq;
         }
         if self.estado != EstadoObra::Rechazada
             && self.estado != EstadoObra::Abandonada
-            && self.partidas.iter().any(|p| p.estado.rango() >= PartidaEstado::Encerrada.rango())
+            && self.partidas.iter().any(|p| p.estado.rango() >= PartidaEstado::Encerrando.rango())
             && self.estado.rango() < EstadoObra::EnMarcha.rango()
         {
             self.estado = EstadoObra::EnMarcha;

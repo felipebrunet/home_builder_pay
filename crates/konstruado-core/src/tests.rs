@@ -100,11 +100,14 @@ fn encerrar_y_pagar_usa_stub_xmr() {
     let o = Oferta::publicar(m.clone(), "Muro", 100, 50, vec![]).unwrap();
     let a = Aceptacion::de(&o, c.clone(), 50).unwrap();
     let mut obra = Obra::desde_oferta(o, a).unwrap();
-    obra.encerrar_partida(0, &m).unwrap();
+    obra.encerrar_proponer(0, &m).unwrap();
+    assert_eq!(obra.partidas[0].estado, PartidaEstado::Encerrando);
+    obra.encerrar_confirmar(0, &c).unwrap();
     assert_eq!(obra.partidas[0].estado, PartidaEstado::Encerrada);
     obra.avisar_termino(0, &c, 100, "Listo").unwrap();
     obra.aceptar_pago(0, &m).unwrap();
-    obra.encerrar_partida(1, &m).unwrap();
+    obra.encerrar_proponer(1, &m).unwrap();
+    obra.encerrar_confirmar(1, &c).unwrap();
     obra.avisar_termino(1, &c, 100, "").unwrap();
     obra.aceptar_pago(1, &m).unwrap();
     assert_eq!(obra.estado, EstadoObra::Cerrada);
@@ -129,14 +132,62 @@ fn se_puede_abandonar_antes_de_cerrar() {
 }
 
 #[test]
+fn encerrar_pide_a_los_dos() {
+    let m = Persona::nueva("Dinero").unwrap();
+    let c = Persona::nueva("Chasquilla").unwrap();
+    let o = Oferta::publicar(m.clone(), "Casa", 100, 50, vec![]).unwrap();
+    let a = Aceptacion::de(&o, c.clone(), 50).unwrap();
+    let mut obra = Obra::desde_oferta(o, a).unwrap();
+    obra.encerrar_proponer(0, &m).unwrap();
+    assert_eq!(obra.encerrar_confirmar(0, &m), Err(Error::NoToca));
+    obra.encerrar_confirmar(0, &c).unwrap();
+    assert_eq!(obra.partidas[0].estado, PartidaEstado::Encerrada);
+}
+
+#[test]
+fn abandonar_con_encierre_es_a_dos() {
+    let m = Persona::nueva("Dinero").unwrap();
+    let c = Persona::nueva("Chasquilla").unwrap();
+    let o = Oferta::publicar(m.clone(), "Casa", 100, 50, vec![]).unwrap();
+    let a = Aceptacion::de(&o, c.clone(), 50).unwrap();
+    let mut obra = Obra::desde_oferta(o, a).unwrap();
+    obra.encerrar_proponer(0, &m).unwrap();
+    obra.encerrar_confirmar(0, &c).unwrap();
+    obra.abandonar(&c).unwrap();
+    assert_eq!(obra.estado, EstadoObra::EnMarcha);
+    assert_eq!(obra.cierre.as_ref().unwrap().id, c.id);
+    obra.aceptar_cierre(&m).unwrap();
+    assert_eq!(obra.estado, EstadoObra::Abandonada);
+}
+
+#[test]
+fn rechazar_cierre_no_vuelve_con_el_chisme() {
+    let m = Persona::nueva("Dinero").unwrap();
+    let c = Persona::nueva("Chasquilla").unwrap();
+    let o = Oferta::publicar(m.clone(), "Casa", 100, 50, vec![]).unwrap();
+    let a = Aceptacion::de(&o, c.clone(), 50).unwrap();
+    let mut obra = Obra::desde_oferta(o, a).unwrap();
+    obra.encerrar_proponer(0, &m).unwrap();
+    obra.encerrar_confirmar(0, &c).unwrap();
+    let mut propuesta = obra.clone();
+    propuesta.abandonar(&c).unwrap();
+    let mut mandante = propuesta.clone();
+    mandante.rechazar_cierre(&m).unwrap();
+    mandante.fusionar(propuesta);
+    assert!(mandante.cierre.is_none());
+    assert_eq!(mandante.estado, EstadoObra::EnMarcha);
+}
+
+#[test]
 fn fusionar_no_vuelve_encerrar_atras() {
     let m = Persona::nueva("Dinero").unwrap();
     let c = Persona::nueva("Chasquilla").unwrap();
     let o = Oferta::publicar(m.clone(), "Casa", 100, 50, vec![]).unwrap();
-    let a = Aceptacion::de(&o, c, 50).unwrap();
+    let a = Aceptacion::de(&o, c.clone(), 50).unwrap();
     let mut vieja = Obra::desde_oferta(o, a).unwrap();
     let mut nueva = vieja.clone();
-    nueva.encerrar_partida(0, &m).unwrap();
+    nueva.encerrar_proponer(0, &m).unwrap();
+    nueva.encerrar_confirmar(0, &c).unwrap();
     vieja.fusionar(nueva.clone());
     assert_eq!(vieja.partidas[0].estado, PartidaEstado::Encerrada);
     let mut stale = nueva.clone();
@@ -199,7 +250,8 @@ fn partida_se_paga_al_ochenta_con_notas_congeladas() {
     let o = Oferta::publicar(m.clone(), "Casa", 10_000, 2_000, vec!["Fundaciones".into()]).unwrap();
     let a = Aceptacion::de(&o, c.clone(), 2_000).unwrap();
     let mut obra = Obra::desde_oferta(o, a).unwrap();
-    obra.encerrar_partida(0, &m).unwrap();
+    obra.encerrar_proponer(0, &m).unwrap();
+    obra.encerrar_confirmar(0, &c).unwrap();
     obra.avisar_termino(0, &c, 100, "Terminé las fundaciones")
         .unwrap();
     assert_eq!(obra.partidas[0].estado, PartidaEstado::EnTrato);
@@ -229,7 +281,8 @@ fn nota_de_mas_de_cincuenta_no_entra() {
     let o = Oferta::publicar(m.clone(), "Casa", 100, 50, vec![]).unwrap();
     let a = Aceptacion::de(&o, c.clone(), 50).unwrap();
     let mut obra = Obra::desde_oferta(o, a).unwrap();
-    obra.encerrar_partida(0, &m).unwrap();
+    obra.encerrar_proponer(0, &m).unwrap();
+    obra.encerrar_confirmar(0, &c).unwrap();
     let larga = "x".repeat(51);
     assert_eq!(obra.avisar_termino(0, &c, 100, larga), Err(Error::Nota));
 }
@@ -243,7 +296,8 @@ fn se_edita_detalle_pendiente_no_encerrada() {
     let mut obra = Obra::desde_oferta(o, a).unwrap();
     obra.editar_detalle(0, &m, "Cimientos").unwrap();
     assert_eq!(obra.partidas[0].detalle, "Cimientos");
-    obra.encerrar_partida(0, &m).unwrap();
+    obra.encerrar_proponer(0, &m).unwrap();
+    obra.encerrar_confirmar(0, &c).unwrap();
     assert_eq!(
         obra.editar_detalle(0, &m, "Otra"),
         Err(Error::YaExiste)

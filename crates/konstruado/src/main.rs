@@ -275,7 +275,9 @@ fn label_estado(e: EstadoObra) -> &'static str {
 fn chip_partida(e: PartidaEstado) -> &'static str {
     match e {
         PartidaEstado::Pendiente => "chip chip-off",
-        PartidaEstado::Encerrada | PartidaEstado::EnTrato => "chip chip-wait",
+        PartidaEstado::Encerrando | PartidaEstado::Encerrada | PartidaEstado::EnTrato => {
+            "chip chip-wait"
+        }
         PartidaEstado::Pagada => "chip chip-ok",
     }
 }
@@ -283,6 +285,7 @@ fn chip_partida(e: PartidaEstado) -> &'static str {
 fn label_partida(p: &Partida) -> String {
     match p.estado {
         PartidaEstado::Pendiente => "Pendiente".into(),
+        PartidaEstado::Encerrando => "Encerrando".into(),
         PartidaEstado::Encerrada => "En obra".into(),
         PartidaEstado::EnTrato => match p.propuesto {
             Some(n) => format!("Trato {n}%"),
@@ -310,6 +313,34 @@ pub(crate) fn fmt_cuando(ts: i64) -> String {
     chrono::DateTime::from_timestamp(ts, 0)
         .map(|d| d.format("%d/%m/%Y %H:%M").to_string())
         .unwrap_or_default()
+}
+
+fn exigir_sesion(
+    red: Signal<Option<Nodo>>,
+    yo: Signal<Option<Persona>>,
+    obra: &Obra,
+    mut err: Signal<Option<String>>,
+) -> bool {
+    let Some(nodo) = red() else {
+        err.set(Some("La red todavía no arrancó.".into()));
+        return false;
+    };
+    let Some(p) = yo() else {
+        return false;
+    };
+    let otro = if p.id == obra.mandante.id {
+        &obra.contratista.id
+    } else {
+        &obra.mandante.id
+    };
+    if nodo.sesion_viva(&p.id, otro) {
+        true
+    } else {
+        err.set(Some(
+            "El otro no está en línea. Tiene que tener Konstruado abierto.".into(),
+        ));
+        false
+    }
 }
 
 fn recorta_nota(s: String) -> String {
@@ -366,6 +397,16 @@ fn avisos_para(mid: &str, _soy_m: bool, obras: &[Obra], _ofertas: &[Oferta]) -> 
                 });
             }
         }
+        if let Some(cl) = obra.cierre.as_ref() {
+            if cl.id != mid {
+                out.push(Aviso {
+                    texto: format!("{}: {} quiere cortar el trato", obra.nombre, cl.nombre),
+                    obra_id: obra.id.clone(),
+                    es_oferta: false,
+                    partida: None,
+                });
+            }
+        }
         let mi_rol = if obra.mandante.id == mid {
             Rol::Mandante
         } else {
@@ -373,6 +414,19 @@ fn avisos_para(mid: &str, _soy_m: bool, obras: &[Obra], _ofertas: &[Oferta]) -> 
         };
         for (i, p) in obra.partidas.iter().enumerate() {
             let titulo = titulo_partida(i, &p.detalle);
+            if p.estado == PartidaEstado::Encerrando {
+                if p.encerrado_por.as_ref().map(|q| q.id.as_str()) != Some(mid) {
+                    out.push(Aviso {
+                        texto: format!(
+                            "{} · {}: te toca confirmar el encierre",
+                            obra.nombre, titulo
+                        ),
+                        obra_id: obra.id.clone(),
+                        es_oferta: false,
+                        partida: Some(i),
+                    });
+                }
+            }
             if p.estado == PartidaEstado::EnTrato && p.turno == Some(mi_rol) {
                 let pct = p.propuesto.unwrap_or(0);
                 out.push(Aviso {
@@ -1138,6 +1192,9 @@ fn Detalle(
                             let mut obra = obra.clone();
                             let mid = mid.clone();
                             move |_| {
+                                if !exigir_sesion(red, yo, &obra, err) {
+                                    return;
+                                }
                                 let Some(nodo) = red() else { return };
                                 match obra.confirmar_contra(&mid) {
                                     Ok(()) => {
@@ -1155,6 +1212,9 @@ fn Detalle(
                             let mut obra = obra.clone();
                             let mid = mid.clone();
                             move |_| {
+                                if !exigir_sesion(red, yo, &obra, err) {
+                                    return;
+                                }
                                 let Some(nodo) = red() else { return };
                                 match obra.rechazar_contra(&mid) {
                                     Ok(()) => {
@@ -1193,20 +1253,24 @@ fn Detalle(
             if estado == EstadoObra::Abandonada {
                 p { class: "hint", "Esta obra se abandonó. El trato quedó cortado." }
             }
-            if abierta && se_puede_abandonar {
-                if confirma_abandono() {
-                    p { class: "hint", "¿Abandonar? Se corta el trato y no se puede deshacer." }
+            if let Some(cl) = obra.cierre.clone() {
+                if cl.id == mid {
+                    p { class: "hint", "Esperando que acepten cortar el trato." }
+                } else if se_puede_abandonar {
+                    p { class: "lead", "{cl.nombre} quiere cortar el trato." }
                     button {
                         class: "btn btn-primary",
                         onclick: {
                             let mut obra = obra.clone();
                             move |_| {
+                                if !exigir_sesion(red, yo, &obra, err) {
+                                    return;
+                                }
                                 let Some(quien) = yo() else { return };
                                 let Some(nodo) = red() else { return };
-                                match obra.abandonar(&quien) {
+                                match obra.aceptar_cierre(&quien) {
                                     Ok(()) => {
                                         err.set(None);
-                                        confirma_abandono.set(false);
                                         nodo.publicar_obra(obra.clone());
                                         screen.set(Screen::Tablero);
                                     }
@@ -1214,7 +1278,63 @@ fn Detalle(
                                 }
                             }
                         },
-                        "Sí, abandonar"
+                        "Aceptar cierre"
+                    }
+                    button {
+                        class: "btn btn-ghost",
+                        onclick: {
+                            let mut obra = obra.clone();
+                            move |_| {
+                                if !exigir_sesion(red, yo, &obra, err) {
+                                    return;
+                                }
+                                let Some(quien) = yo() else { return };
+                                let Some(nodo) = red() else { return };
+                                match obra.rechazar_cierre(&quien) {
+                                    Ok(()) => {
+                                        err.set(None);
+                                        nodo.publicar_obra(obra.clone());
+                                    }
+                                    Err(e) => err.set(Some(e.to_string())),
+                                }
+                            }
+                        },
+                        "Seguir con la obra"
+                    }
+                }
+            } else if abierta && se_puede_abandonar {
+                if confirma_abandono() {
+                    p { class: "hint",
+                        if obra.hay_riesgo() {
+                            "Hay partidas encerradas. El otro tiene que aceptar el cierre."
+                        } else {
+                            "¿Abandonar? Se corta el trato y no se puede deshacer."
+                        }
+                    }
+                    button {
+                        class: "btn btn-primary",
+                        onclick: {
+                            let mut obra = obra.clone();
+                            move |_| {
+                                if obra.hay_riesgo() && !exigir_sesion(red, yo, &obra, err) {
+                                    return;
+                                }
+                                let Some(quien) = yo() else { return };
+                                let Some(nodo) = red() else { return };
+                                match obra.abandonar(&quien) {
+                                    Ok(()) => {
+                                        err.set(None);
+                                        confirma_abandono.set(false);
+                                        nodo.publicar_obra(obra.clone());
+                                        if !obra.hay_riesgo() || obra.estado == EstadoObra::Abandonada {
+                                            screen.set(Screen::Tablero);
+                                        }
+                                    }
+                                    Err(e) => err.set(Some(e.to_string())),
+                                }
+                            }
+                        },
+                        if obra.hay_riesgo() { "Proponer cierre" } else { "Sí, abandonar" }
                     }
                     button {
                         class: "btn btn-ghost",
@@ -1265,6 +1385,9 @@ fn Detalle(
                             onclick: {
                                 let mut obra = obra.clone();
                                 move |_| {
+                                    if !exigir_sesion(red, yo, &obra, err) {
+                                        return;
+                                    }
                                     let Some(quien) = yo() else { return };
                                     let Some(nodo) = red() else { return };
                                     match obra.aceptar_extra(&quien) {
@@ -1283,6 +1406,9 @@ fn Detalle(
                             onclick: {
                                 let mut obra = obra.clone();
                                 move |_| {
+                                    if !exigir_sesion(red, yo, &obra, err) {
+                                        return;
+                                    }
                                     let Some(quien) = yo() else { return };
                                     let Some(nodo) = red() else { return };
                                     match obra.rechazar_extra(&quien) {
@@ -1328,6 +1454,9 @@ fn Detalle(
                                     .unwrap_or(0);
                                 if m == 0 {
                                     err.set(Some("La extra lleva un monto mayor a cero.".into()));
+                                    return;
+                                }
+                                if !exigir_sesion(red, yo, &obra, err) {
                                     return;
                                 }
                                 let Some(quien) = yo() else { return };
@@ -1412,6 +1541,11 @@ fn VerPartida(
         EstadoObra::Abandonada | EstadoObra::Cerrada | EstadoObra::Rechazada
     );
     let n_nota = nota().chars().count();
+    let soy_prop_enc = p
+        .encerrado_por
+        .as_ref()
+        .map(|q| q.id == mid)
+        .unwrap_or(false);
     rsx! {
         div { class: "pane narrow",
             button {
@@ -1485,15 +1619,18 @@ fn VerPartida(
                 } else if !activa {
                     p { class: "hint", "Todavía no toca. Cerrá la partida que está en curso." }
                 } else if confirma_encerrar() {
-                    p { class: "hint", "¿Encerrar esta partida? Queda registro de quién lo hizo." }
+                    p { class: "hint", "Los dos tienen que confirmar el encierre. El otro tiene que estar en línea." }
                     button {
                         class: "btn btn-primary",
                         onclick: {
                             let mut obra = obra.clone();
                             move |_| {
+                                if !exigir_sesion(red, yo, &obra, err) {
+                                    return;
+                                }
                                 let Some(quien) = yo() else { return };
                                 let Some(nodo) = red() else { return };
-                                match obra.encerrar_partida(i, &quien) {
+                                match obra.encerrar_proponer(i, &quien) {
                                     Ok(()) => {
                                         err.set(None);
                                         confirma_encerrar.set(false);
@@ -1503,7 +1640,7 @@ fn VerPartida(
                                 }
                             }
                         },
-                        "Sí, encerrar"
+                        "Proponer encerrar"
                     }
                     button {
                         class: "btn btn-ghost",
@@ -1516,6 +1653,76 @@ fn VerPartida(
                         class: "btn btn-primary",
                         onclick: move |_| confirma_encerrar.set(true),
                         "Encerrar esta partida (stub XMR)"
+                    }
+                }
+            }
+            if !cortada && p.estado == PartidaEstado::Encerrando {
+                if soy_prop_enc {
+                    p { class: "hint", "Esperando que el otro confirme el encierre." }
+                    button {
+                        class: "btn btn-ghost",
+                        onclick: {
+                            let mut obra = obra.clone();
+                            move |_| {
+                                if !exigir_sesion(red, yo, &obra, err) {
+                                    return;
+                                }
+                                let Some(quien) = yo() else { return };
+                                let Some(nodo) = red() else { return };
+                                match obra.encerrar_cancelar(i, &quien) {
+                                    Ok(()) => {
+                                        err.set(None);
+                                        nodo.publicar_obra(obra.clone());
+                                    }
+                                    Err(e) => err.set(Some(e.to_string())),
+                                }
+                            }
+                        },
+                        "Cancelar propuesta"
+                    }
+                } else {
+                    p { class: "lead", "El otro quiere encerrar esta partida. Los dos tienen que confirmar." }
+                    button {
+                        class: "btn btn-primary",
+                        onclick: {
+                            let mut obra = obra.clone();
+                            move |_| {
+                                if !exigir_sesion(red, yo, &obra, err) {
+                                    return;
+                                }
+                                let Some(quien) = yo() else { return };
+                                let Some(nodo) = red() else { return };
+                                match obra.encerrar_confirmar(i, &quien) {
+                                    Ok(()) => {
+                                        err.set(None);
+                                        nodo.publicar_obra(obra.clone());
+                                    }
+                                    Err(e) => err.set(Some(e.to_string())),
+                                }
+                            }
+                        },
+                        "Confirmar encierre"
+                    }
+                    button {
+                        class: "btn btn-ghost",
+                        onclick: {
+                            let mut obra = obra.clone();
+                            move |_| {
+                                if !exigir_sesion(red, yo, &obra, err) {
+                                    return;
+                                }
+                                let Some(quien) = yo() else { return };
+                                let Some(nodo) = red() else { return };
+                                match obra.encerrar_cancelar(i, &quien) {
+                                    Ok(()) => {
+                                        err.set(None);
+                                        nodo.publicar_obra(obra.clone());
+                                    }
+                                    Err(e) => err.set(Some(e.to_string())),
+                                }
+                            }
+                        },
+                        "No encerrar"
                     }
                 }
             }
@@ -1539,6 +1746,9 @@ fn VerPartida(
                     onclick: {
                         let mut obra = obra.clone();
                         move |_| {
+                            if !exigir_sesion(red, yo, &obra, err) {
+                                return;
+                            }
                             let Some(quien) = yo() else { return };
                             let Some(nodo) = red() else { return };
                             match obra.avisar_termino(i, &quien, parse_pct(&pct()), nota()) {
@@ -1570,6 +1780,9 @@ fn VerPartida(
                         onclick: {
                             let mut obra = obra.clone();
                             move |_| {
+                                if !exigir_sesion(red, yo, &obra, err) {
+                                    return;
+                                }
                                 let Some(quien) = yo() else { return };
                                 let Some(nodo) = red() else { return };
                                 match obra.aceptar_pago(i, &quien) {
@@ -1601,6 +1814,9 @@ fn VerPartida(
                         onclick: {
                             let mut obra = obra.clone();
                             move |_| {
+                                if !exigir_sesion(red, yo, &obra, err) {
+                                    return;
+                                }
                                 let Some(quien) = yo() else { return };
                                 let Some(nodo) = red() else { return };
                                 match obra.contra_pago(i, &quien, parse_pct(&pct()), nota()) {

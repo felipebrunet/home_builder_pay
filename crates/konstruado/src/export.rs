@@ -191,6 +191,7 @@ fn estado(e: &EstadoObra) -> &'static str {
 fn partida_estado(e: PartidaEstado) -> &'static str {
     match e {
         PartidaEstado::Pendiente => "Pendiente",
+        PartidaEstado::Encerrando => "Encerrando",
         PartidaEstado::Encerrada => "Encerrada",
         PartidaEstado::EnTrato => "En trato",
         PartidaEstado::Pagada => "Pagada",
