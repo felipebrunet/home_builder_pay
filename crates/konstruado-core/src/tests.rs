@@ -59,6 +59,28 @@ fn rechazar_contra_vuelve_el_aviso() {
     obra.rechazar_contra(&mid).unwrap();
     assert_eq!(obra.estado, EstadoObra::Rechazada);
     assert!(obra.contra.is_none());
+    assert_eq!(obra.n_partidas, 5);
+    assert_eq!(obra.partidas.len(), 5);
+    assert_eq!(obra.garantia, 2_000);
+}
+
+#[test]
+fn fusionar_no_revive_partidas_de_contra_rechazada() {
+    let m = Persona::nueva("Dinero").unwrap();
+    let c = Persona::nueva("Chasquilla").unwrap();
+    let o = Oferta::publicar(m.clone(), "Casa", 10_000, 5_000, vec![]).unwrap();
+    let a = Aceptacion::de(&o, c.clone(), 2_000).unwrap();
+    let contra = Obra::desde_oferta(o, a).unwrap();
+    assert_eq!(contra.n_partidas, 5);
+    let o2 = Oferta::publicar(m, "Casa", 10_000, 5_000, vec![]).unwrap();
+    let a2 = Aceptacion::de(&o2, c, 5_000).unwrap();
+    let mut acordada = Obra::desde_oferta(o2, a2).unwrap();
+    acordada.id = contra.id.clone();
+    assert_eq!(acordada.n_partidas, 2);
+    acordada.fusionar(contra);
+    assert_eq!(acordada.n_partidas, 2);
+    assert_eq!(acordada.partidas.len(), 2);
+    assert_eq!(acordada.estado, EstadoObra::Acordada);
 }
 
 #[test]

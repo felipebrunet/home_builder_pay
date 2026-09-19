@@ -860,6 +860,8 @@ fn Detalle(
                             let mid = mid.clone();
                             move |_| {
                                 let Some(nodo) = red() else { return };
+                                match obra.rechazar_contra(&mid) {
+                                    Ok(()) => {
                                 let gpub = if obra.garantia_publicada > 0 {
                                     obra.garantia_publicada
                                 } else {
@@ -867,8 +869,7 @@ fn Detalle(
                                 };
                                 let dets: Vec<String> =
                                     obra.partidas.iter().map(|p| p.detalle.clone()).collect();
-                                match obra.rechazar_contra(&mid) {
-                                    Ok(()) => match Oferta::publicar(
+                                match Oferta::publicar(
                                         obra.mandante.clone(),
                                         obra.nombre.clone(),
                                         obra.trabajo,
@@ -883,7 +884,8 @@ fn Detalle(
                                             screen.set(Screen::Tablero);
                                         }
                                         Err(e) => err.set(Some(e.to_string())),
-                                    },
+                                    }
+                                    }
                                     Err(e) => err.set(Some(e.to_string())),
                                 }
                             }

@@ -298,6 +298,20 @@ impl Obra {
             return Err(Error::NoEsta);
         }
         self.estado = EstadoObra::Rechazada;
+        let g = if self.garantia_publicada > 0 {
+            self.garantia_publicada
+        } else {
+            self.garantia
+        };
+        if let Ok(n) = n_partidas(self.trabajo, g) {
+            self.garantia = g;
+            self.n_partidas = n;
+            let dets: Vec<String> = self.partidas.iter().map(|p| p.detalle.clone()).collect();
+            self.partidas = ajusta_detalles(n, dets)
+                .into_iter()
+                .map(Partida::pendiente)
+                .collect();
+        }
         Ok(())
     }
 
@@ -419,17 +433,20 @@ impl Obra {
             self.estado = otra.estado;
             self.garantia = otra.garantia;
             self.n_partidas = otra.n_partidas;
+            if otra.garantia_publicada > 0 {
+                self.garantia_publicada = otra.garantia_publicada;
+            }
             self.contra = otra.contra.take();
-        } else if otra.estado == self.estado && self.contra.is_none() {
-            self.contra = otra.contra.take();
-        }
-        let n = self.partidas.len().max(otra.partidas.len());
-        self.partidas
-            .resize(n, Partida::pendiente(String::new()));
-        otra.partidas
-            .resize(n, Partida::pendiente(String::new()));
-        for (a, b) in self.partidas.iter_mut().zip(otra.partidas) {
-            a.fusionar(b);
+            Self::fusionar_partidas(&mut self.partidas, otra.partidas, self.n_partidas as usize);
+        } else if otra.estado.rango() == self.estado.rango() {
+            if self.contra.is_none() {
+                self.contra = otra.contra.take();
+            }
+            if otra.n_partidas == self.n_partidas {
+                Self::fusionar_partidas(&mut self.partidas, otra.partidas, self.n_partidas as usize);
+            }
+        } else if otra.n_partidas == self.n_partidas {
+            Self::fusionar_partidas(&mut self.partidas, otra.partidas, self.n_partidas as usize);
         }
         if self.estado != EstadoObra::Rechazada
             && self.partidas.iter().any(|p| p.estado.rango() >= PartidaEstado::Encerrada.rango())
@@ -444,6 +461,14 @@ impl Obra {
             && !self.partidas.is_empty()
         {
             self.estado = EstadoObra::Cerrada;
+        }
+    }
+
+    fn fusionar_partidas(dst: &mut Vec<Partida>, mut src: Vec<Partida>, n: usize) {
+        dst.resize(n, Partida::pendiente(String::new()));
+        src.resize(n, Partida::pendiente(String::new()));
+        for (a, b) in dst.iter_mut().zip(src) {
+            a.fusionar(b);
         }
     }
 }
