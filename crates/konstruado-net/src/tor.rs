@@ -247,18 +247,29 @@ async fn wait_cookie(
 }
 
 async fn wait_bootstrap(ctl: &mut Control, tor: &Tor) -> std::io::Result<()> {
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(120);
+    let mut visto = 0u32;
+    let mut cambio = tokio::time::Instant::now();
+    let limite = tokio::time::Instant::now() + Duration::from_secs(15 * 60);
     loop {
         let phase = ctl.getinfo("status/bootstrap-phase").await.unwrap_or_default();
         let n = crate::ctl::parse_progress(&phase).unwrap_or(0);
+        if n > visto {
+            visto = n;
+            cambio = tokio::time::Instant::now();
+        }
         tor.marcar_arrancando(format!("bootstrap {n}%"));
         if n >= 100 {
             return Ok(());
         }
-        if tokio::time::Instant::now() > deadline {
-            return Err(std::io::Error::other(format!("tor bootstrap: {phase}")));
+        if cambio.elapsed() > Duration::from_secs(5 * 60) {
+            return Err(std::io::Error::other(format!(
+                "bootstrap trabado en {n}%"
+            )));
         }
-        sleep(Duration::from_millis(400)).await;
+        if tokio::time::Instant::now() > limite {
+            return Err(std::io::Error::other(format!("bootstrap lento ({n}%)")));
+        }
+        sleep(Duration::from_millis(500)).await;
     }
 }
 
