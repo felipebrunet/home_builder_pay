@@ -357,8 +357,8 @@ fn avisos_para(mid: &str, _soy_m: bool, obras: &[Obra], _ofertas: &[Oferta]) -> 
             if ex.por.id != mid {
                 out.push(Aviso {
                     texto: format!(
-                        "{}: {} propone partida extra ({})",
-                        obra.nombre, ex.por.nombre, ex.detalle
+                        "{}: {} propone extra {} ({})",
+                        obra.nombre, ex.por.nombre, ex.detalle, monto(ex.monto)
                     ),
                     obra_id: obra.id.clone(),
                     es_oferta: false,
@@ -1067,6 +1067,7 @@ fn Detalle(
     let mut confirma_abandono = use_signal(|| false);
     let mut export_msg = use_signal(|| None::<String>);
     let mut extra_nom = use_signal(String::new);
+    let mut extra_monto = use_signal(String::new);
     let id = sel_obra().unwrap_or_default();
     let Some(obra) = obras().into_iter().find(|o| o.id == id) else {
         return rsx! { p { "La obra todavía no llegó. Si la acabás de publicar, esperá al contratista." } };
@@ -1095,7 +1096,7 @@ fn Detalle(
                 span { class: chip_estado(estado), "{label_estado(estado)}" }
             }
             p { class: "lead",
-                "Mandante {mnom} · contratista {cnom} · {n_part} partidas de {monto(garantia)}"
+                "Mandante {mnom} · contratista {cnom} · {n_part} partidas · trabajo {monto(obra.trabajo)}"
             }
             if let Some(m) = export_msg() {
                 p { class: "hint", "{m}" }
@@ -1245,7 +1246,7 @@ fn Detalle(
                             },
                             div { class: "txt",
                                 strong { "{i + 1}  {titulo}" }
-                                span { "{monto(garantia)} por lado" }
+                                span { "{monto(p.capital(garantia))} por lado" }
                             }
                             span { class: kind, "{label}" }
                         }
@@ -1253,11 +1254,12 @@ fn Detalle(
                 }
             }
             div { class: "extra-box",
-                if let Some(ex) = obra.extra.clone() {
+                if !abierta {}
+                else if let Some(ex) = obra.extra.clone() {
                     if ex.por.id == mid {
-                        p { class: "hint", "Esperando partida extra: {ex.detalle}" }
+                        p { class: "hint", "Esperando extra: {ex.detalle} ({monto(ex.monto)} por lado)" }
                     } else {
-                        p { class: "hint", "{ex.por.nombre} propone extra: {ex.detalle} (+{monto(garantia)})" }
+                        p { class: "hint", "{ex.por.nombre} propone extra: {ex.detalle} (+{monto(ex.monto)} por lado)" }
                         button {
                             class: "btn btn-primary",
                             onclick: {
@@ -1303,6 +1305,13 @@ fn Detalle(
                         value: "{extra_nom}",
                         oninput: move |e| extra_nom.set(e.value()),
                     }
+                    label { class: "et", "MONTO POR LADO" }
+                    input {
+                        r#type: "text",
+                        placeholder: "P. ej. 3000",
+                        value: "{extra_monto}",
+                        oninput: move |e| extra_monto.set(e.value()),
+                    }
                     button {
                         class: "btn btn-ghost",
                         onclick: {
@@ -1311,12 +1320,23 @@ fn Detalle(
                                 if extra_nom().trim().is_empty() {
                                     return;
                                 }
+                                let m = extra_monto()
+                                    .chars()
+                                    .filter(|c| c.is_ascii_digit())
+                                    .collect::<String>()
+                                    .parse()
+                                    .unwrap_or(0);
+                                if m == 0 {
+                                    err.set(Some("La extra lleva un monto mayor a cero.".into()));
+                                    return;
+                                }
                                 let Some(quien) = yo() else { return };
                                 let Some(nodo) = red() else { return };
-                                match obra.proponer_extra(&quien, extra_nom()) {
+                                match obra.proponer_extra(&quien, extra_nom(), m) {
                                     Ok(()) => {
                                         err.set(None);
                                         extra_nom.set(String::new());
+                                        extra_monto.set(String::new());
                                         nodo.publicar_obra(obra.clone());
                                     }
                                     Err(e) => err.set(Some(e.to_string())),
@@ -1404,7 +1424,7 @@ fn VerPartida(
                 span { class: chip_partida(p.estado), "{label}" }
             }
             p { class: "lead",
-                "{monto(garantia)} por lado. Mandante {obra.mandante.nombre} · contratista {obra.contratista.nombre}"
+                "{monto(p.capital(garantia))} por lado. Mandante {obra.mandante.nombre} · contratista {obra.contratista.nombre}"
             }
             if !cortada && p.estado == PartidaEstado::Pendiente && (soy_m || soy_c) {
                 label { class: "et", "TEXTO" }

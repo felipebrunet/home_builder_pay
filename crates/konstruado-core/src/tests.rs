@@ -258,11 +258,39 @@ fn partida_extra_suma_trabajo_si_ambos_aceptan() {
     let a = Aceptacion::de(&o, c.clone(), 50).unwrap();
     let mut obra = Obra::desde_oferta(o, a).unwrap();
     assert_eq!(obra.n_partidas, 2);
-    obra.proponer_extra(&c, "Techumbre extra").unwrap();
+    obra.proponer_extra(&c, "Techumbre extra", 30).unwrap();
     obra.aceptar_extra(&m).unwrap();
     assert_eq!(obra.n_partidas, 3);
-    assert_eq!(obra.trabajo, 150);
+    assert_eq!(obra.trabajo, 130);
     assert_eq!(obra.partidas[2].detalle, "Techumbre extra");
-    assert_eq!(n_partidas(obra.trabajo, obra.garantia).unwrap(), 3);
-    assert_eq!(obra.proponer_extra(&m, "  "), Err(Error::Detalle));
+    assert_eq!(obra.partidas[2].capital(obra.garantia), 30);
+    assert_eq!(obra.proponer_extra(&m, "  ", 10), Err(Error::Detalle));
+}
+
+#[test]
+fn rechazar_extra_no_vuelve_con_el_chisme() {
+    let m = Persona::nueva("Dinero").unwrap();
+    let c = Persona::nueva("Chasquilla").unwrap();
+    let o = Oferta::publicar(m.clone(), "Casa", 100, 50, vec![]).unwrap();
+    let a = Aceptacion::de(&o, c.clone(), 50).unwrap();
+    let mut propuesta = Obra::desde_oferta(o, a).unwrap();
+    propuesta.proponer_extra(&c, "Extra", 40).unwrap();
+    let mut mandante = propuesta.clone();
+    mandante.rechazar_extra(&m).unwrap();
+    assert!(mandante.extra.is_none());
+    mandante.fusionar(propuesta);
+    assert!(mandante.extra.is_none());
+}
+
+#[test]
+fn extra_no_entra_si_esta_abandonada() {
+    let m = Persona::nueva("Dinero").unwrap();
+    let c = Persona::nueva("Chasquilla").unwrap();
+    let o = Oferta::publicar(m.clone(), "Casa", 100, 50, vec![]).unwrap();
+    let a = Aceptacion::de(&o, c.clone(), 50).unwrap();
+    let mut obra = Obra::desde_oferta(o, a).unwrap();
+    obra.proponer_extra(&c, "Extra", 40).unwrap();
+    obra.abandonar(&m).unwrap();
+    assert!(obra.extra.is_none());
+    assert_eq!(obra.aceptar_extra(&c), Err(Error::NoToca));
 }

@@ -106,6 +106,9 @@ pub struct Partida {
     pub encerrado_cuando: i64,
     #[serde(default)]
     pub recibo: Option<ReciboPartida>,
+    /// 0 means use the obra's `garantia`.
+    #[serde(default)]
+    pub monto: u64,
 }
 
 impl PartidaEstado {
@@ -131,6 +134,21 @@ impl Partida {
             encerrado_por: None,
             encerrado_cuando: 0,
             recibo: None,
+            monto: 0,
+        }
+    }
+
+    pub fn pendiente_monto(detalle: impl Into<String>, monto: u64) -> Self {
+        let mut p = Self::pendiente(detalle);
+        p.monto = monto;
+        p
+    }
+
+    pub fn capital(&self, garantia_obra: u64) -> u64 {
+        if self.monto > 0 {
+            self.monto
+        } else {
+            garantia_obra
         }
     }
 
@@ -171,6 +189,12 @@ impl Partida {
             if self.recibo.is_none() {
                 self.recibo = otra.recibo;
             }
+            if self.monto == 0 {
+                self.monto = otra.monto;
+            }
+        }
+        if self.monto == 0 && otra.monto > 0 {
+            self.monto = otra.monto;
         }
         if self.estado == PartidaEstado::Pagada {
             self.turno = None;
@@ -291,12 +315,15 @@ pub struct Obra {
     #[serde(default)]
     pub extra: Option<ExtraPartida>,
     #[serde(default)]
+    pub extra_seq: u32,
+    #[serde(default)]
     pub actualizado: i64,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ExtraPartida {
     pub detalle: String,
+    pub monto: u64,
     pub por: Persona,
 }
 
@@ -333,6 +360,7 @@ impl Obra {
                 .collect(),
             contra,
             extra: None,
+            extra_seq: 0,
             actualizado: ahora(),
         })
     }
@@ -473,6 +501,7 @@ impl Obra {
             return Err(Error::NoToca);
         }
         let pct = p.propuesto.ok_or(Error::NoEsta)?;
+        let cap = p.capital(self.garantia);
         let _ = xmr_hook();
         let titulo = titulo_partida(i, &p.detalle);
         p.pago = Some(pct);
@@ -481,7 +510,7 @@ impl Obra {
         p.recibo = Some(ReciboPartida {
             titulo,
             porcentaje: pct,
-            monto: monto_pct(self.garantia, pct),
+            monto: monto_pct(cap, pct),
             acepto_nombre: quien.nombre.clone(),
             cuando: ahora(),
         });
@@ -518,21 +547,35 @@ impl Obra {
         Ok(())
     }
 
-    pub fn proponer_extra(&mut self, quien: &Persona, detalle: impl Into<String>) -> Result<(), Error> {
-        let _ = self.rol_de(&quien.id)?;
+    fn extra_en_curso(&self) -> Result<(), Error> {
         match self.estado {
-            EstadoObra::Acordada | EstadoObra::EnMarcha => {}
-            _ => return Err(Error::NoToca),
+            EstadoObra::Acordada | EstadoObra::EnMarcha => Ok(()),
+            _ => Err(Error::NoToca),
         }
+    }
+
+    pub fn proponer_extra(
+        &mut self,
+        quien: &Persona,
+        detalle: impl Into<String>,
+        monto: u64,
+    ) -> Result<(), Error> {
+        let _ = self.rol_de(&quien.id)?;
+        self.extra_en_curso()?;
         if self.extra.is_some() {
             return Err(Error::YaExiste);
+        }
+        if monto == 0 {
+            return Err(Error::Monto);
         }
         let detalle = crate::partida::limpia_detalle(&detalle.into());
         if detalle.is_empty() {
             return Err(Error::Detalle);
         }
+        self.extra_seq = self.extra_seq.saturating_add(1);
         self.extra = Some(ExtraPartida {
             detalle,
+            monto,
             por: quien.clone(),
         });
         self.tocar();
@@ -541,6 +584,7 @@ impl Obra {
 
     pub fn aceptar_extra(&mut self, quien: &Persona) -> Result<(), Error> {
         let _ = self.rol_de(&quien.id)?;
+        self.extra_en_curso()?;
         let extra = self.extra.take().ok_or(Error::NoEsta)?;
         if extra.por.id == quien.id {
             self.extra = Some(extra);
@@ -548,21 +592,25 @@ impl Obra {
         }
         self.trabajo = self
             .trabajo
-            .checked_add(self.garantia)
+            .checked_add(extra.monto)
             .ok_or(Error::Monto)?;
         self.n_partidas += 1;
-        self.partidas.push(Partida::pendiente(extra.detalle));
+        self.partidas
+            .push(Partida::pendiente_monto(extra.detalle, extra.monto));
+        self.extra_seq = self.extra_seq.saturating_add(1);
         self.tocar();
         Ok(())
     }
 
     pub fn rechazar_extra(&mut self, quien: &Persona) -> Result<(), Error> {
         let _ = self.rol_de(&quien.id)?;
+        self.extra_en_curso()?;
         let extra = self.extra.take().ok_or(Error::NoEsta)?;
         if extra.por.id == quien.id {
             self.extra = Some(extra);
             return Err(Error::NoToca);
         }
+        self.extra_seq = self.extra_seq.saturating_add(1);
         self.tocar();
         Ok(())
     }
@@ -576,6 +624,8 @@ impl Obra {
             _ => {}
         }
         self.estado = EstadoObra::Abandonada;
+        self.extra = None;
+        self.extra_seq = self.extra_seq.saturating_add(1);
         self.tocar();
         Ok(())
     }
@@ -600,6 +650,7 @@ impl Obra {
     /// node wins over a stale copy on the other.
     pub fn fusionar(&mut self, mut otra: Obra) {
         let extra_otra = otra.extra.take();
+        let seq_otra = otra.extra_seq;
         if otra.estado.rango() > self.estado.rango() {
             self.estado = otra.estado;
             self.garantia = otra.garantia;
@@ -641,8 +692,16 @@ impl Obra {
             self.n_partidas = otra.n_partidas;
             Self::fusionar_partidas(&mut self.partidas, otra.partidas, self.n_partidas as usize);
             self.extra = None;
-        } else if self.extra.is_none() {
+            self.extra_seq = self.extra_seq.max(seq_otra);
+        } else if seq_otra > self.extra_seq {
             self.extra = extra_otra;
+            self.extra_seq = seq_otra;
+        }
+        if matches!(
+            self.estado,
+            EstadoObra::Abandonada | EstadoObra::Cerrada | EstadoObra::Rechazada
+        ) {
+            self.extra = None;
         }
         if self.estado != EstadoObra::Rechazada
             && self.estado != EstadoObra::Abandonada

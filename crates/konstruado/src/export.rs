@@ -20,8 +20,8 @@ pub fn constancia(obra: &Obra) -> String {
     s.push_str(&format!("Partidas: {}\n", obra.n_partidas));
     if let Some(ex) = obra.extra.as_ref() {
         s.push_str(&format!(
-            "Partida extra propuesta por {}: {}\n",
-            ex.por.nombre, ex.detalle
+            "Partida extra propuesta por {}: {} ({})\n",
+            ex.por.nombre, ex.detalle, monto(ex.monto)
         ));
     }
     for (i, p) in obra.partidas.iter().enumerate() {
@@ -31,6 +31,10 @@ pub fn constancia(obra: &Obra) -> String {
             i + 1,
             titulo,
             partida_estado(p.estado)
+        ));
+        s.push_str(&format!(
+            "Monto por lado: {}\n",
+            monto(p.capital(obra.garantia))
         ));
         if let Some(q) = p.encerrado_por.as_ref() {
             s.push_str(&format!(
