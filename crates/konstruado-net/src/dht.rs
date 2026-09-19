@@ -153,39 +153,53 @@ impl Nodo {
         if let Some(a) = tor.onion_addr() {
             self.inner.lock().unwrap().addr = a;
         }
-        let mandante = loop {
-            if let Some(m) = self.inner.lock().unwrap().rol_sala {
-                break m;
-            }
-            tor.marcar_arrancando("tor listo, esperá a entrar");
-            tokio::time::sleep(Duration::from_millis(400)).await;
-        };
-        if mandante {
-            tor.marcar_arrancando("abriendo sala");
-            if let Err(e) = tor.hospedar_sala(local_port).await {
-                tor.marcar_fallo(format!("sala: {e}"));
-                return;
-            }
-            for s in (0..30).rev() {
-                tor.marcar_arrancando(format!("publicando sala ({s}s)"));
-                tokio::time::sleep(Duration::from_secs(1)).await;
-            }
-            loop {
-                if self.n_peers() > 0 {
-                    tor.marcar_listo();
-                } else {
-                    tor.marcar_arrancando("sala abierta, esperando al contratista");
+        loop {
+            let mandante = loop {
+                if let Some(m) = self.inner.lock().unwrap().rol_sala {
+                    break m;
                 }
-                tokio::time::sleep(Duration::from_secs(2)).await;
+                tor.marcar_arrancando("tor listo, esperá a entrar");
+                tokio::time::sleep(Duration::from_millis(400)).await;
+            };
+            if mandante {
+                if !tor.hospeda_sala() {
+                    tor.marcar_arrancando("abriendo sala");
+                    if let Err(e) = tor.hospedar_sala(local_port).await {
+                        tor.marcar_fallo(format!("sala: {e}"));
+                        return;
+                    }
+                    for s in (0..30).rev() {
+                        if self.inner.lock().unwrap().rol_sala != Some(true) {
+                            break;
+                        }
+                        tor.marcar_arrancando(format!("publicando sala ({s}s)"));
+                        tokio::time::sleep(Duration::from_secs(1)).await;
+                    }
+                }
+                loop {
+                    if self.inner.lock().unwrap().rol_sala != Some(true) {
+                        let _ = tor.dejar_sala().await;
+                        break;
+                    }
+                    if self.n_peers() > 0 {
+                        tor.marcar_listo();
+                    } else {
+                        tor.marcar_arrancando("sala abierta, esperando al contratista");
+                    }
+                    tokio::time::sleep(Duration::from_secs(2)).await;
+                }
+            } else {
+                self.marcar_sala(&tor).await;
             }
-        } else {
-            self.marcar_sala(&tor).await;
         }
     }
 
     async fn marcar_sala(&self, tor: &Tor) {
         let mut n = 1u32;
         loop {
+            if self.inner.lock().unwrap().rol_sala == Some(true) {
+                return;
+            }
             if self.n_peers() > 0 {
                 tor.marcar_listo();
             } else {
@@ -194,8 +208,6 @@ impl Nodo {
             match crate::tor::dial_rendezvous(tor).await {
                 Ok(stream) => {
                     tor.marcar_listo();
-                    // Drop and redial so a later Put (2nd job) is pulled
-                    // via a fresh Hola dump, not only onion-to-onion gossip.
                     let _ = timeout(Duration::from_secs(12), self.sesion_out(stream)).await;
                     tokio::time::sleep(Duration::from_secs(4)).await;
                 }
@@ -316,6 +328,41 @@ impl Nodo {
             .get(&key)
             .map(|b| decode_obras(b))
             .unwrap_or_default()
+    }
+
+    pub fn actualizar_yo(&self, persona: Persona) {
+        let id = persona.id.clone();
+        {
+            let mut g = self.inner.lock().unwrap();
+            let kt = key_hex(&clave_tablero());
+            let mut tab = g
+                .store
+                .get(&kt)
+                .map(|b| decode_tablero(b))
+                .unwrap_or_default();
+            for o in &mut tab {
+                if o.mandante.id == id {
+                    o.mandante = persona.clone();
+                }
+            }
+            g.store.insert(kt, encode_tablero(&tab));
+            let ko = key_hex(&clave_obras());
+            let mut obras = g
+                .store
+                .get(&ko)
+                .map(|b| decode_obras(b))
+                .unwrap_or_default();
+            for o in &mut obras {
+                if o.mandante.id == id {
+                    o.mandante = persona.clone();
+                }
+                if o.contratista.id == id {
+                    o.contratista = persona.clone();
+                }
+            }
+            g.store.insert(ko, encode_obras(&obras));
+        }
+        self.anunciar(persona);
     }
 
     pub fn anunciar(&self, persona: Persona) {

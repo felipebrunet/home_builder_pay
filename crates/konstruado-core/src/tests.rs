@@ -1,6 +1,16 @@
 use super::*;
 
 #[test]
+fn renombrar_conserva_id() {
+    let mut p = Persona::nueva("José").unwrap();
+    let id = p.id.clone();
+    p.renombrar("Don Dinero").unwrap();
+    assert_eq!(p.id, id);
+    assert_eq!(p.nombre, "Don Dinero");
+    assert_eq!(p.renombrar("  "), Err(Error::Nombre));
+}
+
+#[test]
 fn diez_mil_y_dos_mil_son_cinco() {
     assert_eq!(n_partidas(10_000, 2_000).unwrap(), 5);
     assert_eq!(capital_por_lado(2_000), 2_000);

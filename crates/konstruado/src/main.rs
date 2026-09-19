@@ -52,6 +52,7 @@ enum Screen {
     Oferta,
     Detalle,
     VerPartida,
+    Cuenta,
 }
 
 fn persistir(yo: Option<Persona>, rol: Option<Rol>, n: &Nodo) {
@@ -158,7 +159,11 @@ fn App() -> Element {
                     "Konstruado"
                 }
                 if adentro {
-                    span { class: "quien", "{quien} · {rol_txt}" }
+                    button {
+                        class: "quien",
+                        onclick: move |_| screen.set(Screen::Cuenta),
+                        "{quien} · {rol_txt}"
+                    }
                 }
             }
             div { class: "shell",
@@ -214,6 +219,9 @@ fn App() -> Element {
                         },
                         Screen::VerPartida => rsx! {
                             VerPartida { yo, red, obras, sel_obra, sel_partida, screen, err }
+                        },
+                        Screen::Cuenta => rsx! {
+                            Cuenta { nombre, rol, yo, red, screen, err }
                         },
                     }
                 }
@@ -498,6 +506,79 @@ fn Bienvenida(
                     }
                 },
                 "Entrar"
+            }
+        }
+    }
+}
+
+#[component]
+fn Cuenta(
+    nombre: Signal<String>,
+    rol: Signal<Option<Rol>>,
+    yo: Signal<Option<Persona>>,
+    red: Signal<Option<Nodo>>,
+    screen: Signal<Screen>,
+    err: Signal<Option<String>>,
+) -> Element {
+    let mut nom = use_signal(|| nombre());
+    let mut rlocal = use_signal(|| rol());
+    rsx! {
+        div { class: "pane narrow",
+            h1 { "Tu cuenta" }
+            p { class: "lead",
+                "El nombre y el rol se pueden cambiar. Las obras no se borran. El mandante abre la sala; el contratista solo busca."
+            }
+            label { class: "et", "NOMBRE" }
+            input {
+                r#type: "text",
+                value: "{nom}",
+                oninput: move |e| nom.set(e.value()),
+            }
+            div { class: "paso", b { "2" } "¿Qué vas a hacer?" }
+            div { class: "roles",
+                button {
+                    class: if rlocal() == Some(Rol::Mandante) { "rol on" } else { "rol" },
+                    onclick: move |_| rlocal.set(Some(Rol::Mandante)),
+                    strong { "Pago la obra" }
+                    span { "Mandante. Publicás y abrís la sala." }
+                }
+                button {
+                    class: if rlocal() == Some(Rol::Contratista) { "rol on" } else { "rol" },
+                    onclick: move |_| rlocal.set(Some(Rol::Contratista)),
+                    strong { "La construyo" }
+                    span { "Contratista. Buscás lo publicado. No abrís sala." }
+                }
+            }
+            button {
+                class: "btn btn-primary",
+                onclick: move |_| {
+                    let Some(mut p) = yo() else { return };
+                    let Some(r) = rlocal() else {
+                        err.set(Some("Elegí si pagás la obra o la construís.".into()));
+                        return;
+                    };
+                    match p.renombrar(nom()) {
+                        Ok(()) => {
+                            if let Some(nodo) = red() {
+                                nodo.actualizar_yo(p.clone());
+                                nodo.entrar_en_sala(r == Rol::Mandante);
+                                persistir(Some(p.clone()), Some(r), &nodo);
+                            }
+                            nombre.set(nom());
+                            rol.set(Some(r));
+                            yo.set(Some(p));
+                            err.set(None);
+                            screen.set(Screen::Tablero);
+                        }
+                        Err(e) => err.set(Some(e.to_string())),
+                    }
+                },
+                "Guardar"
+            }
+            button {
+                class: "btn btn-ghost",
+                onclick: move |_| screen.set(Screen::Tablero),
+                "Volver"
             }
         }
     }

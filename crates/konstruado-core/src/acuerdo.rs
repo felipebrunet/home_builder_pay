@@ -18,6 +18,11 @@ impl Persona {
             nombre,
         })
     }
+
+    pub fn renombrar(&mut self, nombre: impl Into<String>) -> Result<(), Error> {
+        self.nombre = limpia_nombre(&nombre.into()).ok_or(Error::Nombre)?;
+        Ok(())
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
