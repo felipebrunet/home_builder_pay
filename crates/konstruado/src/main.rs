@@ -333,14 +333,49 @@ fn exigir_sesion(
     } else {
         &obra.mandante.id
     };
-    if nodo.sesion_viva(&p.id, otro) {
+    if matches!(nodo.estado_tor(), EstadoTor::Arrancando { .. }) && nodo.n_peers() == 0 {
+        err.set(Some(
+            "Sincronizando el trato… esperá a que baje el estado del otro.".into(),
+        ));
+        return false;
+    }
+    if nodo.trato_alineado(&p.id, otro) {
         true
+    } else if nodo.sesion_viva(&p.id, otro) && !nodo.sync_reciente() {
+        err.set(Some(
+            "Sincronizando el trato… todavía no bajó lo último del otro.".into(),
+        ));
+        false
     } else {
         err.set(Some(
             "El otro no está en línea. Tiene que tener Konstruado abierto.".into(),
         ));
         false
     }
+}
+
+/// True while waiting for a dump; not when the other is simply offline.
+fn sincronizando_trato(
+    red: Signal<Option<Nodo>>,
+    yo: Signal<Option<Persona>>,
+    obra: &Obra,
+) -> bool {
+    let Some(nodo) = red() else {
+        return false;
+    };
+    let Some(p) = yo() else {
+        return false;
+    };
+    let otro = if p.id == obra.mandante.id {
+        &obra.contratista.id
+    } else {
+        &obra.mandante.id
+    };
+    if nodo.trato_alineado(&p.id, otro) {
+        return false;
+    }
+    (matches!(nodo.estado_tor(), EstadoTor::Arrancando { .. }) && nodo.n_peers() == 0)
+        || (nodo.sesion_viva(&p.id, otro) && !nodo.sync_reciente())
 }
 
 fn recorta_nota(s: String) -> String {
@@ -1143,6 +1178,7 @@ fn Detalle(
         estado,
         EstadoObra::Cerrada | EstadoObra::Rechazada | EstadoObra::Abandonada
     );
+    let sincronizando = abierta && sincronizando_trato(red, yo, &obra);
     rsx! {
         div { class: "pane",
             div { class: "card-h",
@@ -1151,6 +1187,9 @@ fn Detalle(
             }
             p { class: "lead",
                 "Mandante {mnom} · contratista {cnom} · {n_part} partidas · trabajo {monto(obra.trabajo)}"
+            }
+            if sincronizando {
+                p { class: "hint", "Sincronizando el trato… las acciones esperan a bajar el estado del otro." }
             }
             if let Some(m) = export_msg() {
                 p { class: "hint", "{m}" }
@@ -1546,6 +1585,7 @@ fn VerPartida(
         .as_ref()
         .map(|q| q.id == mid)
         .unwrap_or(false);
+    let sincronizando = !cortada && sincronizando_trato(red, yo, &obra);
     rsx! {
         div { class: "pane narrow",
             button {
@@ -1559,6 +1599,9 @@ fn VerPartida(
             }
             p { class: "lead",
                 "{monto(p.capital(garantia))} por lado. Mandante {obra.mandante.nombre} · contratista {obra.contratista.nombre}"
+            }
+            if sincronizando {
+                p { class: "hint", "Sincronizando el trato… las acciones esperan a bajar el estado del otro." }
             }
             if !cortada && p.estado == PartidaEstado::Pendiente && (soy_m || soy_c) {
                 label { class: "et", "TEXTO" }

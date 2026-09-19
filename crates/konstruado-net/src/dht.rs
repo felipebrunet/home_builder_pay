@@ -27,6 +27,8 @@ struct Inner {
     halt: tokio::sync::watch::Sender<bool>,
     /// Some(true) = mandante hosts the baked room. Some(false) = only dial.
     rol_sala: Option<bool>,
+    /// Unix time of last inbound dump (Hola/Put/Peers from a peer).
+    sync_at: i64,
 }
 
 #[derive(Clone)]
@@ -69,6 +71,7 @@ impl Nodo {
                 tor,
                 halt: halt.clone(),
                 rol_sala: None,
+                sync_at: 0,
             })),
             handle: handle.clone(),
         };
@@ -257,6 +260,21 @@ impl Nodo {
         self.presentes().iter().any(|p| {
             p.id == otro_id && t.saturating_sub(p.visto) <= 25
         })
+    }
+
+    pub fn sync_reciente(&self) -> bool {
+        let t = ahora();
+        let sync = self.inner.lock().unwrap().sync_at;
+        sync > 0 && t.saturating_sub(sync) <= 30
+    }
+
+    /// Catch-up before a deal blow: live counterparty and a recent dump.
+    pub fn trato_alineado(&self, yo_id: &str, otro_id: &str) -> bool {
+        self.sesion_viva(yo_id, otro_id) && self.sync_reciente()
+    }
+
+    fn marcar_sync(&self) {
+        self.inner.lock().unwrap().sync_at = ahora();
     }
 
     /// Contractor "Buscar ofertas": gossip plus a dial to the baked room
@@ -545,7 +563,8 @@ impl Nodo {
                     return Vec::new();
                 }
                 let mut g = self.inner.lock().unwrap();
-                if node != g.id {
+                let foreign = node != g.id;
+                if foreign {
                     g.peers.insert(node, addr);
                 }
                 let list: Vec<_> = g
@@ -563,6 +582,9 @@ impl Nodo {
                     })
                     .collect();
                 drop(g);
+                if foreign {
+                    self.marcar_sync();
+                }
                 let mut out = vec![Msg::Peers { list }];
                 out.extend(puts);
                 out
@@ -570,16 +592,24 @@ impl Nodo {
             Msg::Peers { list } => {
                 let mut g = self.inner.lock().unwrap();
                 let me = g.id.clone();
+                let mut foreign = false;
                 for (id, addr) in list {
                     if id != me {
                         g.peers.insert(id, addr);
+                        foreign = true;
                     }
+                }
+                drop(g);
+                if foreign {
+                    self.marcar_sync();
                 }
                 Vec::new()
             }
             Msg::Put { key, val } => {
                 let mut g = self.inner.lock().unwrap();
                 merge_store(&mut g.store, key, val);
+                drop(g);
+                self.marcar_sync();
                 Vec::new()
             }
             Msg::Get { key } => {
@@ -593,6 +623,8 @@ impl Nodo {
                 if let Some(val) = val {
                     let mut g = self.inner.lock().unwrap();
                     merge_store(&mut g.store, key, val);
+                    drop(g);
+                    self.marcar_sync();
                 }
                 Vec::new()
             }
