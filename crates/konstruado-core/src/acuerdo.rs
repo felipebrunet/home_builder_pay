@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::error::Error;
-use crate::partida::{ajusta_detalles, limpia_nota, n_partidas, porcentaje};
+use crate::partida::{ahora, ajusta_detalles, limpia_nota, monto_pct, n_partidas, porcentaje, titulo_partida};
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Persona {
@@ -51,6 +51,7 @@ pub enum EstadoObra {
     Rechazada,
     Acordada,
     EnMarcha,
+    Abandonada,
     Cerrada,
 }
 
@@ -69,6 +70,17 @@ pub struct NotaPartida {
     pub autor_nombre: String,
     pub porcentaje: u32,
     pub texto: String,
+    #[serde(default)]
+    pub cuando: i64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReciboPartida {
+    pub titulo: String,
+    pub porcentaje: u32,
+    pub monto: u64,
+    pub acepto_nombre: String,
+    pub cuando: i64,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -83,6 +95,12 @@ pub struct Partida {
     pub turno: Option<Rol>,
     #[serde(default)]
     pub notas: Vec<NotaPartida>,
+    #[serde(default)]
+    pub encerrado_por: Option<Persona>,
+    #[serde(default)]
+    pub encerrado_cuando: i64,
+    #[serde(default)]
+    pub recibo: Option<ReciboPartida>,
 }
 
 impl PartidaEstado {
@@ -105,6 +123,9 @@ impl Partida {
             pago: None,
             turno: None,
             notas: Vec::new(),
+            encerrado_por: None,
+            encerrado_cuando: 0,
+            recibo: None,
         }
     }
 
@@ -120,6 +141,13 @@ impl Partida {
             if otra.notas.len() >= self.notas.len() {
                 self.notas = otra.notas;
             }
+            if otra.encerrado_por.is_some() {
+                self.encerrado_por = otra.encerrado_por;
+                self.encerrado_cuando = otra.encerrado_cuando;
+            }
+            if otra.recibo.is_some() {
+                self.recibo = otra.recibo;
+            }
             return;
         }
         if otra.estado == self.estado {
@@ -130,6 +158,13 @@ impl Partida {
             }
             if self.pago.is_none() {
                 self.pago = otra.pago;
+            }
+            if self.encerrado_por.is_none() {
+                self.encerrado_por = otra.encerrado_por;
+                self.encerrado_cuando = otra.encerrado_cuando;
+            }
+            if self.recibo.is_none() {
+                self.recibo = otra.recibo;
             }
         }
         if self.estado == PartidaEstado::Pagada {
@@ -146,7 +181,8 @@ impl EstadoObra {
             EstadoObra::Rechazada => 2,
             EstadoObra::Acordada => 3,
             EstadoObra::EnMarcha => 4,
-            EstadoObra::Cerrada => 5,
+            EstadoObra::Abandonada => 5,
+            EstadoObra::Cerrada => 6,
         }
     }
 }
@@ -316,13 +352,16 @@ impl Obra {
     }
 
     /// Both sides lock the same `garantia` for installment `i`. Stub until XMR.
-    pub fn encerrar_partida(&mut self, i: usize) -> Result<(), Error> {
+    pub fn encerrar_partida(&mut self, i: usize, quien: &Persona) -> Result<(), Error> {
+        let _ = self.rol_de(&quien.id)?;
         let p = self.partidas.get_mut(i).ok_or(Error::NoEsta)?;
         if p.estado != PartidaEstado::Pendiente {
             return Err(Error::YaExiste);
         }
         let _ = xmr_hook();
         p.estado = PartidaEstado::Encerrada;
+        p.encerrado_por = Some(quien.clone());
+        p.encerrado_cuando = ahora();
         self.estado = EstadoObra::EnMarcha;
         Ok(())
     }
@@ -349,6 +388,7 @@ impl Obra {
             autor_nombre: quien.nombre.clone(),
             porcentaje: pct,
             texto,
+            cuando: ahora(),
         });
         p.propuesto = Some(pct);
         p.turno = Some(Rol::Mandante);
@@ -379,6 +419,7 @@ impl Obra {
             autor_nombre: quien.nombre.clone(),
             porcentaje: pct,
             texto,
+            cuando: ahora(),
         });
         p.propuesto = Some(pct);
         p.turno = Some(match rol {
@@ -397,9 +438,17 @@ impl Obra {
         }
         let pct = p.propuesto.ok_or(Error::NoEsta)?;
         let _ = xmr_hook();
+        let titulo = titulo_partida(i, &p.detalle);
         p.pago = Some(pct);
         p.turno = None;
         p.estado = PartidaEstado::Pagada;
+        p.recibo = Some(ReciboPartida {
+            titulo,
+            porcentaje: pct,
+            monto: monto_pct(self.garantia, pct),
+            acepto_nombre: quien.nombre.clone(),
+            cuando: ahora(),
+        });
         if self
             .partidas
             .iter()
@@ -407,6 +456,18 @@ impl Obra {
         {
             self.estado = EstadoObra::Cerrada;
         }
+        Ok(())
+    }
+
+    pub fn abandonar(&mut self, quien: &Persona) -> Result<(), Error> {
+        let _ = self.rol_de(&quien.id)?;
+        match self.estado {
+            EstadoObra::Cerrada | EstadoObra::Rechazada | EstadoObra::Abandonada => {
+                return Err(Error::YaExiste);
+            }
+            _ => {}
+        }
+        self.estado = EstadoObra::Abandonada;
         Ok(())
     }
 
@@ -449,6 +510,7 @@ impl Obra {
             Self::fusionar_partidas(&mut self.partidas, otra.partidas, self.n_partidas as usize);
         }
         if self.estado != EstadoObra::Rechazada
+            && self.estado != EstadoObra::Abandonada
             && self.partidas.iter().any(|p| p.estado.rango() >= PartidaEstado::Encerrada.rango())
             && self.estado.rango() < EstadoObra::EnMarcha.rango()
         {

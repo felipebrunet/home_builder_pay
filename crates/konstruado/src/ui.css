@@ -315,6 +315,16 @@ input[type="text"]:focus {
 .nota strong { display: block; font-size: 15px; }
 .nota p { margin: 6px 0 0; color: var(--apagado); font-size: 15px; }
 
+.recibo {
+  background: var(--card);
+  border: 2px solid var(--tinta);
+  border-radius: 12px;
+  padding: 14px 16px;
+  margin: 12px 0 8px;
+}
+.recibo strong { display: block; font-size: 16px; }
+.recibo p { margin: 6px 0 0; font-size: 15px; }
+
 .lista-part {
   margin: 8px 0 0;
   border: 1px solid var(--linea);

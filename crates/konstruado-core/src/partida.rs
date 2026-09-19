@@ -1,5 +1,12 @@
 use crate::error::Error;
 
+pub fn ahora() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}
+
 /// Number of installments. Each is `garantia` from the principal and `garantia`
 /// from the contractor, so capital in play is always equal.
 pub fn n_partidas(trabajo: u64, garantia: u64) -> Result<u32, Error> {

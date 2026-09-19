@@ -228,6 +228,7 @@ fn chip_estado(e: EstadoObra) -> &'static str {
         EstadoObra::Rechazada => "chip chip-off",
         EstadoObra::Acordada => "chip chip-off",
         EstadoObra::EnMarcha => "chip chip-wait",
+        EstadoObra::Abandonada => "chip chip-off",
         EstadoObra::Cerrada => "chip chip-ok",
     }
 }
@@ -239,6 +240,7 @@ fn label_estado(e: EstadoObra) -> &'static str {
         EstadoObra::Rechazada => "Rechazada",
         EstadoObra::Acordada => "Acordada",
         EstadoObra::EnMarcha => "En marcha",
+        EstadoObra::Abandonada => "Abandonada",
         EstadoObra::Cerrada => "Cerrada",
     }
 }
@@ -272,6 +274,15 @@ fn parse_pct(s: &str) -> u32 {
         .collect::<String>()
         .parse()
         .unwrap_or(0)
+}
+
+fn fmt_cuando(ts: i64) -> String {
+    if ts <= 0 {
+        return String::new();
+    }
+    chrono::DateTime::from_timestamp(ts, 0)
+        .map(|d| d.format("%d/%m/%Y %H:%M").to_string())
+        .unwrap_or_default()
 }
 
 fn recorta_nota(s: String) -> String {
@@ -807,6 +818,7 @@ fn Detalle(
     screen: Signal<Screen>,
     err: Signal<Option<String>>,
 ) -> Element {
+    let mut confirma_abandono = use_signal(|| false);
     let id = sel_obra().unwrap_or_default();
     let Some(obra) = obras().into_iter().find(|o| o.id == id) else {
         return rsx! { p { "La obra todavía no llegó. Si la acabás de publicar, esperá al contratista." } };
@@ -822,6 +834,12 @@ fn Detalle(
     let cnom = obra.contratista.nombre.clone();
     let partidas = obra.partidas.clone();
     let contra = estado == EstadoObra::Contra;
+    let soy_c = obra.contratista.id == mid;
+    let se_puede_abandonar = soy_m || soy_c;
+    let abierta = !matches!(
+        estado,
+        EstadoObra::Cerrada | EstadoObra::Rechazada | EstadoObra::Abandonada
+    );
     rsx! {
         div { class: "pane",
             div { class: "card-h",
@@ -894,6 +912,45 @@ fn Detalle(
                     }
                 }
             }
+            if estado == EstadoObra::Abandonada {
+                p { class: "hint", "Esta obra se abandonó. El trato quedó cortado." }
+            }
+            if abierta && se_puede_abandonar {
+                if confirma_abandono() {
+                    p { class: "hint", "¿Abandonar? Se corta el trato y no se puede deshacer." }
+                    button {
+                        class: "btn btn-primary",
+                        onclick: {
+                            let mut obra = obra.clone();
+                            move |_| {
+                                let Some(quien) = yo() else { return };
+                                let Some(nodo) = red() else { return };
+                                match obra.abandonar(&quien) {
+                                    Ok(()) => {
+                                        err.set(None);
+                                        confirma_abandono.set(false);
+                                        nodo.publicar_obra(obra.clone());
+                                        screen.set(Screen::Tablero);
+                                    }
+                                    Err(e) => err.set(Some(e.to_string())),
+                                }
+                            }
+                        },
+                        "Sí, abandonar"
+                    }
+                    button {
+                        class: "btn btn-ghost",
+                        onclick: move |_| confirma_abandono.set(false),
+                        "No"
+                    }
+                } else {
+                    button {
+                        class: "btn btn-ghost",
+                        onclick: move |_| confirma_abandono.set(true),
+                        "Abandonar esta obra"
+                    }
+                }
+            }
             p { class: "hint", "Entrá a cada partida para avisar que terminó, tratar el porcentaje y ver el hilo." }
             div { style: "height: 16px;" }
             for (i, p) in partidas.iter().enumerate() {
@@ -934,6 +991,7 @@ fn VerPartida(
 ) -> Element {
     let mut pct = use_signal(|| "100".to_string());
     let mut nota = use_signal(String::new);
+    let mut confirma_encerrar = use_signal(|| false);
     use_effect(move || {
         let _ = sel_partida();
         pct.set("100".into());
@@ -968,6 +1026,10 @@ fn VerPartida(
     let garantia = obra.garantia;
     let propuesto = p.propuesto;
     let cerrado = p.estado == PartidaEstado::Pagada;
+    let cortada = matches!(
+        obra.estado,
+        EstadoObra::Abandonada | EstadoObra::Cerrada | EstadoObra::Rechazada
+    );
     let n_nota = nota().chars().count();
     rsx! {
         div { class: "pane narrow",
@@ -984,15 +1046,25 @@ fn VerPartida(
                 "{monto(garantia)} por lado. Mandante {obra.mandante.nombre} · contratista {obra.contratista.nombre}"
             }
             if cerrado {
-                p { class: "hint",
-                    "Cerró al {p.pago.unwrap_or(0)}% ({monto(monto_pct(garantia, p.pago.unwrap_or(0)))}). El hilo quedó guardado."
+                if let Some(r) = p.recibo.as_ref() {
+                    div { class: "recibo",
+                        strong { "Recibo · {r.titulo}" }
+                        p { "Pagó {r.porcentaje}% · {monto(r.monto)} · aceptó {r.acepto_nombre} · {fmt_cuando(r.cuando)}" }
+                    }
+                } else {
+                    p { class: "hint",
+                        "Cerró al {p.pago.unwrap_or(0)}% ({monto(monto_pct(garantia, p.pago.unwrap_or(0)))}). El hilo quedó guardado."
+                    }
                 }
+            }
+            if let Some(q) = p.encerrado_por.as_ref() {
+                p { class: "meta", "Encerró {q.nombre} · {fmt_cuando(p.encerrado_cuando)}" }
             }
             if !p.notas.is_empty() {
                 div { class: "notas",
                     for n in p.notas.iter() {
                         div { class: "nota",
-                            strong { "{n.autor_nombre} · {n.porcentaje}%" }
+                            strong { "{n.autor_nombre} · {n.porcentaje}% · {fmt_cuando(n.cuando)}" }
                             if !n.texto.is_empty() {
                                 p { "{n.texto}" }
                             }
@@ -1000,33 +1072,47 @@ fn VerPartida(
                     }
                 }
             }
-            if p.estado == PartidaEstado::Pendiente {
+            if !cortada && p.estado == PartidaEstado::Pendiente {
                 if contra {
                     p { class: "hint", "Primero hay que confirmar la contra de la obra." }
                 } else if !activa {
                     p { class: "hint", "Todavía no toca. Cerrá la partida que está en curso." }
-                } else {
-                    div { style: "height: 16px;" }
+                } else if confirma_encerrar() {
+                    p { class: "hint", "¿Encerrar esta partida? Queda registro de quién lo hizo." }
                     button {
                         class: "btn btn-primary",
                         onclick: {
                             let mut obra = obra.clone();
                             move |_| {
+                                let Some(quien) = yo() else { return };
                                 let Some(nodo) = red() else { return };
-                                match obra.encerrar_partida(i) {
+                                match obra.encerrar_partida(i, &quien) {
                                     Ok(()) => {
                                         err.set(None);
+                                        confirma_encerrar.set(false);
                                         nodo.publicar_obra(obra.clone());
                                     }
                                     Err(e) => err.set(Some(e.to_string())),
                                 }
                             }
                         },
+                        "Sí, encerrar"
+                    }
+                    button {
+                        class: "btn btn-ghost",
+                        onclick: move |_| confirma_encerrar.set(false),
+                        "No"
+                    }
+                } else {
+                    div { style: "height: 16px;" }
+                    button {
+                        class: "btn btn-primary",
+                        onclick: move |_| confirma_encerrar.set(true),
                         "Encerrar esta partida (stub XMR)"
                     }
                 }
             }
-            if p.estado == PartidaEstado::Encerrada && soy_c {
+            if !cortada && p.estado == PartidaEstado::Encerrada && soy_c {
                 label { class: "et", "PORCENTAJE A COBRAR" }
                 input {
                     r#type: "text",
@@ -1060,10 +1146,10 @@ fn VerPartida(
                     "Avisar que terminé"
                 }
             }
-            if p.estado == PartidaEstado::Encerrada && soy_m {
+            if !cortada && p.estado == PartidaEstado::Encerrada && soy_m {
                 p { class: "hint", "El contratista avisa cuando termina y propone cuánto se paga." }
             }
-            if p.estado == PartidaEstado::EnTrato {
+            if !cortada && p.estado == PartidaEstado::EnTrato {
                 if let Some(n) = propuesto {
                     p { class: "lead", "Sobre la mesa: {n}% ({monto(monto_pct(garantia, n))})." }
                 }
