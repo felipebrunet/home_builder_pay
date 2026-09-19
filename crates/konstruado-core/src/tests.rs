@@ -264,4 +264,5 @@ fn partida_extra_suma_trabajo_si_ambos_aceptan() {
     assert_eq!(obra.trabajo, 150);
     assert_eq!(obra.partidas[2].detalle, "Techumbre extra");
     assert_eq!(n_partidas(obra.trabajo, obra.garantia).unwrap(), 3);
+    assert_eq!(obra.proponer_extra(&m, "  "), Err(Error::Detalle));
 }

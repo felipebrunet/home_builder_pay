@@ -9,6 +9,7 @@ pub enum Error {
     YaExiste,
     Nota,
     Porcentaje,
+    Detalle,
 }
 
 impl std::fmt::Display for Error {
@@ -26,6 +27,7 @@ impl std::fmt::Display for Error {
             Error::YaExiste => write!(f, "Eso ya está hecho."),
             Error::Nota => write!(f, "La nota no puede pasar de 50 caracteres."),
             Error::Porcentaje => write!(f, "El pago va del 1 al 100 por ciento."),
+            Error::Detalle => write!(f, "Escribí qué es la partida extra."),
         }
     }
 }

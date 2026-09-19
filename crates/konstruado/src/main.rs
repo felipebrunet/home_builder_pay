@@ -55,13 +55,14 @@ enum Screen {
     Cuenta,
 }
 
-fn persistir(yo: Option<Persona>, rol: Option<Rol>, n: &Nodo) {
+fn persistir(yo: Option<Persona>, rol: Option<Rol>, tema: String, n: &Nodo) {
     persist::guardar(&persist::EstadoDisco {
         yo,
         rol,
         ofertas: n.tablero(),
         obras: n.obras(),
         presentes: n.presentes(),
+        tema,
     });
 }
 
@@ -98,6 +99,13 @@ fn App() -> Element {
     let garantia = use_signal(|| "2000".to_string());
     let obra_nom = use_signal(|| "Casa El Quisco".to_string());
     let garantia_acc = use_signal(|| "2000".to_string());
+    let tema = use_signal(|| {
+        if guardado.tema.is_empty() {
+            "vivo".into()
+        } else {
+            guardado.tema.clone()
+        }
+    });
 
     use_future(move || {
         let ofertas0 = guardado.ofertas.clone();
@@ -126,7 +134,7 @@ fn App() -> Element {
                     presentes.set(n.presentes());
                     ofertas.set(n.tablero());
                     obras.set(n.obras());
-                    persistir(yo(), rol(), &n);
+                    persistir(yo(), rol(), tema(), &n);
                     n.esperar(Duration::from_secs(1)).await;
                 }
             }
@@ -147,7 +155,7 @@ fn App() -> Element {
 
     rsx! {
         style { {CSS} }
-        div { class: "app",
+        div { class: "app", "data-theme": "{tema()}",
             header { class: "top",
                 button {
                     class: "logo",
@@ -170,15 +178,17 @@ fn App() -> Element {
                 if adentro {
                     aside { class: "side",
                         h2 { "Obras" }
-                        for o in mis_obras {
-                            button {
-                                class: "side-item",
-                                onclick: move |_| {
-                                    sel_obra.set(Some(o.id.clone()));
-                                    screen.set(Screen::Detalle);
-                                },
-                                strong { "{o.nombre}" }
-                                span { class: chip_estado(o.estado), "{label_estado(o.estado)}" }
+                        div { class: "side-list",
+                            for o in mis_obras {
+                                button {
+                                    class: "side-item",
+                                    onclick: move |_| {
+                                        sel_obra.set(Some(o.id.clone()));
+                                        screen.set(Screen::Detalle);
+                                    },
+                                    strong { "{o.nombre}" }
+                                    span { class: chip_estado(o.estado), "{label_estado(o.estado)}" }
+                                }
                             }
                         }
                         if rol() == Some(Rol::Mandante) {
@@ -221,7 +231,7 @@ fn App() -> Element {
                             VerPartida { yo, red, obras, sel_obra, sel_partida, screen, err }
                         },
                         Screen::Cuenta => rsx! {
-                            Cuenta { nombre, rol, yo, red, screen, err }
+                            Cuenta { nombre, rol, yo, red, screen, err, tema }
                         },
                     }
                 }
@@ -310,20 +320,8 @@ struct Aviso {
     partida: Option<usize>,
 }
 
-fn avisos_para(mid: &str, soy_m: bool, obras: &[Obra], ofertas: &[Oferta]) -> Vec<Aviso> {
+fn avisos_para(mid: &str, _soy_m: bool, obras: &[Obra], _ofertas: &[Oferta]) -> Vec<Aviso> {
     let mut out = Vec::new();
-    if !soy_m {
-        for o in ofertas {
-            if o.mandante.id != mid {
-                out.push(Aviso {
-                    texto: format!("{}: {} publicó, podés aceptar", o.nombre, o.mandante.nombre),
-                    obra_id: o.id.clone(),
-                    es_oferta: true,
-                    partida: None,
-                });
-            }
-        }
-    }
     for obra in obras {
         if obra.mandante.id != mid && obra.contratista.id != mid {
             continue;
@@ -532,9 +530,11 @@ fn Cuenta(
     red: Signal<Option<Nodo>>,
     screen: Signal<Screen>,
     err: Signal<Option<String>>,
+    tema: Signal<String>,
 ) -> Element {
     let mut nom = use_signal(|| nombre());
     let mut rlocal = use_signal(|| rol());
+    let mut tlocal = use_signal(|| tema());
     rsx! {
         div { class: "pane narrow",
             h1 { "Tu cuenta" }
@@ -562,6 +562,21 @@ fn Cuenta(
                     span { "Contratista. Buscás lo publicado. No abrís sala." }
                 }
             }
+            div { class: "paso", b { "3" } "Apariencia" }
+            div { class: "roles",
+                button {
+                    class: if tlocal() == "vivo" { "rol on" } else { "rol" },
+                    onclick: move |_| tlocal.set("vivo".into()),
+                    strong { "Vivo" }
+                    span { "Arcilla, crema y contraste. El de siempre más color." }
+                }
+                button {
+                    class: if tlocal() == "calma" { "rol on" } else { "rol" },
+                    onclick: move |_| tlocal.set("calma".into()),
+                    strong { "Calma" }
+                    span { "Gris claro, menos tinta. El anterior." }
+                }
+            }
             button {
                 class: "btn btn-primary",
                 onclick: move |_| {
@@ -572,10 +587,11 @@ fn Cuenta(
                     };
                     match p.renombrar(nom()) {
                         Ok(()) => {
+                            tema.set(tlocal());
                             if let Some(nodo) = red() {
                                 nodo.actualizar_yo(p.clone());
                                 nodo.entrar_en_sala(r == Rol::Mandante);
-                                persistir(Some(p.clone()), Some(r), &nodo);
+                                persistir(Some(p.clone()), Some(r), tlocal(), &nodo);
                             }
                             nombre.set(nom());
                             rol.set(Some(r));
@@ -1196,76 +1212,6 @@ fn Detalle(
                     }
                 }
             }
-            if let Some(ex) = obra.extra.clone() {
-                if ex.por.id == mid {
-                    p { class: "hint", "Esperando que acepten la partida extra: {ex.detalle}" }
-                } else {
-                    p { class: "lead", "{ex.por.nombre} propone partida extra: {ex.detalle} (+{monto(garantia)} al trabajo)" }
-                    button {
-                        class: "btn btn-primary",
-                        onclick: {
-                            let mut obra = obra.clone();
-                            move |_| {
-                                let Some(quien) = yo() else { return };
-                                let Some(nodo) = red() else { return };
-                                match obra.aceptar_extra(&quien) {
-                                    Ok(()) => {
-                                        err.set(None);
-                                        nodo.publicar_obra(obra.clone());
-                                    }
-                                    Err(e) => err.set(Some(e.to_string())),
-                                }
-                            }
-                        },
-                        "Aceptar partida extra"
-                    }
-                    button {
-                        class: "btn btn-ghost",
-                        onclick: {
-                            let mut obra = obra.clone();
-                            move |_| {
-                                let Some(quien) = yo() else { return };
-                                let Some(nodo) = red() else { return };
-                                match obra.rechazar_extra(&quien) {
-                                    Ok(()) => {
-                                        err.set(None);
-                                        nodo.publicar_obra(obra.clone());
-                                    }
-                                    Err(e) => err.set(Some(e.to_string())),
-                                }
-                            }
-                        },
-                        "No agregar"
-                    }
-                }
-            } else if abierta && se_puede_abandonar && estado != EstadoObra::Contra {
-                label { class: "et", "PARTIDA EXTRA" }
-                input {
-                    r#type: "text",
-                    placeholder: "P. ej. Techumbre extra",
-                    value: "{extra_nom}",
-                    oninput: move |e| extra_nom.set(e.value()),
-                }
-                button {
-                    class: "btn btn-ghost",
-                    onclick: {
-                        let mut obra = obra.clone();
-                        move |_| {
-                            let Some(quien) = yo() else { return };
-                            let Some(nodo) = red() else { return };
-                            match obra.proponer_extra(&quien, extra_nom()) {
-                                Ok(()) => {
-                                    err.set(None);
-                                    extra_nom.set(String::new());
-                                    nodo.publicar_obra(obra.clone());
-                                }
-                                Err(e) => err.set(Some(e.to_string())),
-                            }
-                        }
-                    },
-                    "Proponer partida extra"
-                }
-            }
             p { class: "hint", "Entrá a cada partida para avisar que terminó, tratar el porcentaje y ver el hilo." }
             div { style: "height: 16px;" }
             for (i, p) in partidas.iter().enumerate() {
@@ -1290,6 +1236,81 @@ fn Detalle(
                     }
                 }
             }
+            div { class: "extra-box",
+                if let Some(ex) = obra.extra.clone() {
+                    if ex.por.id == mid {
+                        p { class: "hint", "Esperando partida extra: {ex.detalle}" }
+                    } else {
+                        p { class: "hint", "{ex.por.nombre} propone extra: {ex.detalle} (+{monto(garantia)})" }
+                        button {
+                            class: "btn btn-primary",
+                            onclick: {
+                                let mut obra = obra.clone();
+                                move |_| {
+                                    let Some(quien) = yo() else { return };
+                                    let Some(nodo) = red() else { return };
+                                    match obra.aceptar_extra(&quien) {
+                                        Ok(()) => {
+                                            err.set(None);
+                                            nodo.publicar_obra(obra.clone());
+                                        }
+                                        Err(e) => err.set(Some(e.to_string())),
+                                    }
+                                }
+                            },
+                            "Aceptar extra"
+                        }
+                        button {
+                            class: "btn btn-ghost",
+                            onclick: {
+                                let mut obra = obra.clone();
+                                move |_| {
+                                    let Some(quien) = yo() else { return };
+                                    let Some(nodo) = red() else { return };
+                                    match obra.rechazar_extra(&quien) {
+                                        Ok(()) => {
+                                            err.set(None);
+                                            nodo.publicar_obra(obra.clone());
+                                        }
+                                        Err(e) => err.set(Some(e.to_string())),
+                                    }
+                                }
+                            },
+                            "No agregar"
+                        }
+                    }
+                } else if abierta && se_puede_abandonar && estado != EstadoObra::Contra {
+                    label { class: "et", "PARTIDA EXTRA (OPCIONAL)" }
+                    input {
+                        r#type: "text",
+                        placeholder: "P. ej. Techumbre extra",
+                        value: "{extra_nom}",
+                        oninput: move |e| extra_nom.set(e.value()),
+                    }
+                    button {
+                        class: "btn btn-ghost",
+                        onclick: {
+                            let mut obra = obra.clone();
+                            move |_| {
+                                if extra_nom().trim().is_empty() {
+                                    return;
+                                }
+                                let Some(quien) = yo() else { return };
+                                let Some(nodo) = red() else { return };
+                                match obra.proponer_extra(&quien, extra_nom()) {
+                                    Ok(()) => {
+                                        err.set(None);
+                                        extra_nom.set(String::new());
+                                        nodo.publicar_obra(obra.clone());
+                                    }
+                                    Err(e) => err.set(Some(e.to_string())),
+                                }
+                            }
+                        },
+                        "Proponer extra"
+                    }
+                }
+            }
         }
     }
 }
@@ -1309,11 +1330,12 @@ fn VerPartida(
     let mut confirma_encerrar = use_signal(|| false);
     let mut detalle_edit = use_signal(String::new);
     use_effect(move || {
-        let _ = sel_partida();
+        let id = sel_obra();
+        let idx = sel_partida();
         pct.set("100".into());
         nota.set(String::new());
-        if let (Some(id), Some(i)) = (sel_obra(), sel_partida()) {
-            if let Some(o) = obras().into_iter().find(|o| o.id == id) {
+        if let (Some(id), Some(i)) = (id, idx) {
+            if let Some(o) = obras.peek().iter().find(|o| o.id == id) {
                 if let Some(p) = o.partidas.get(i) {
                     detalle_edit.set(p.detalle.clone());
                 }

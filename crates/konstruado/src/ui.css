@@ -1,4 +1,21 @@
-:root {
+:root, .app[data-theme="vivo"] {
+  --fondo: #f4e4cc;
+  --card: #fffaf2;
+  --tinta: #1c120c;
+  --apagado: #6a3e28;
+  --place: #8d6a52;
+  --linea: #e2b07a;
+  --ok: #0b7a42;
+  --ok-bg: #c6f2d6;
+  --wait: #d35400;
+  --wait-bg: #ffd7a8;
+  --off: #3d291e;
+  --off-bg: #f0d8c0;
+  --acento: #c0392b;
+  --acento-hover: #9b2c20;
+}
+
+.app[data-theme="calma"] {
   --fondo: #e4e4e4;
   --card: #ffffff;
   --tinta: #111111;
@@ -11,6 +28,8 @@
   --wait-bg: #ffdcb0;
   --off: #2a2a2a;
   --off-bg: #dddddd;
+  --acento: #111111;
+  --acento-hover: #000000;
 }
 
 * { box-sizing: border-box; }
@@ -34,6 +53,8 @@ body {
   flex-direction: column;
   min-height: 100vh;
   height: 100%;
+  background: var(--fondo);
+  color: var(--tinta);
 }
 
 .top {
@@ -75,14 +96,24 @@ body {
 }
 
 .side {
-  width: 300px;
+  width: 260px;
   flex-shrink: 0;
   background: var(--card);
   border-right: 1px solid var(--linea);
-  padding: 20px;
+  padding: 16px;
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 8px;
+  min-height: 0;
+}
+
+.side-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
 }
 
 .side h2 {
@@ -181,12 +212,12 @@ input[type="text"]:focus {
 }
 
 .btn-primary {
-  background: var(--tinta);
+  background: var(--acento);
   color: #fff;
   border: 0;
 }
 
-.btn-primary:hover { background: #000; }
+.btn-primary:hover { background: var(--acento-hover); }
 
 .btn-ghost {
   background: transparent;
@@ -195,7 +226,7 @@ input[type="text"]:focus {
   margin-top: 10px;
 }
 
-.btn-ghost:hover { background: #eee; }
+.btn-ghost:hover { background: var(--off-bg); }
 
 .btn-role {
   background: var(--card);
@@ -366,17 +397,25 @@ input[type="text"]:focus {
 
 .side-item {
   text-align: left;
-  background: var(--card);
+  background: var(--fondo);
   border: 1px solid var(--linea);
-  border-radius: 12px;
-  padding: 12px;
+  border-radius: 8px;
+  padding: 8px 10px;
   cursor: pointer;
   font-family: inherit;
   width: 100%;
 }
 
 .side-item.on { border: 2px solid var(--tinta); }
-.side-item strong { display: block; margin-bottom: 6px; }
+.side-item strong { display: block; margin-bottom: 4px; font-size: 14px; }
+
+.extra-box {
+  margin-top: 32px;
+  padding-top: 16px;
+  border-top: 1px dashed var(--linea);
+}
+
+.extra-box .btn { font-size: 16px; padding: 12px 16px; }
 
 .side .btn { margin-top: auto; }
 

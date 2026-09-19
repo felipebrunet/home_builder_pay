@@ -512,7 +512,7 @@ impl Obra {
         }
         let detalle = crate::partida::limpia_detalle(&detalle.into());
         if detalle.is_empty() {
-            return Err(Error::Nombre);
+            return Err(Error::Detalle);
         }
         self.extra = Some(ExtraPartida {
             detalle,
