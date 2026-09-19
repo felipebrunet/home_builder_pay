@@ -147,11 +147,12 @@ fn App() -> Element {
     let quien = yo().map(|p| p.nombre).unwrap_or_default();
     let rol_txt = rol().map(Rol::etiqueta).unwrap_or("");
     let mid = yo().map(|p| p.id).unwrap_or_default();
-    let mis_obras: Vec<Obra> = obras()
+    let mut mis_obras: Vec<Obra> = obras()
         .into_iter()
         .filter(|o| o.estado != EstadoObra::Rechazada)
         .filter(|o| o.mandante.id == mid || o.contratista.id == mid)
         .collect();
+    mis_obras.sort_by(|a, b| b.actualizado.cmp(&a.actualizado).then(b.id.cmp(&a.id)));
 
     rsx! {
         style { {CSS} }
@@ -177,7 +178,7 @@ fn App() -> Element {
             div { class: "shell",
                 if adentro {
                     aside { class: "side",
-                        h2 { "Obras" }
+                        h2 { "Mis obras" }
                         div { class: "side-list",
                             for o in mis_obras {
                                 button {
@@ -250,6 +251,13 @@ fn chip_estado(e: EstadoObra) -> &'static str {
         EstadoObra::Abandonada => "chip chip-off",
         EstadoObra::Cerrada => "chip chip-ok",
     }
+}
+
+fn obra_en_curso(e: EstadoObra) -> bool {
+    matches!(
+        e,
+        EstadoObra::Contra | EstadoObra::Acordada | EstadoObra::EnMarcha
+    )
 }
 
 fn label_estado(e: EstadoObra) -> &'static str {
@@ -636,24 +644,32 @@ fn Tablero(
         .filter(|o| o.estado != EstadoObra::Rechazada)
         .map(|o| o.id)
         .collect();
-    let mias: Vec<Oferta> = ofertas()
+    let mut mias: Vec<Oferta> = ofertas()
         .into_iter()
         .filter(|o| o.mandante.id == mid && !ocupadas.contains(&o.id))
         .collect();
-    let ajenas: Vec<Oferta> = ofertas()
+    mias.sort_by(|a, b| b.actualizado.cmp(&a.actualizado).then(b.id.cmp(&a.id)));
+    let mut ajenas: Vec<Oferta> = ofertas()
         .into_iter()
         .filter(|o| o.mandante.id != mid && !ocupadas.contains(&o.id))
         .collect();
-    let mis_obras: Vec<Obra> = obras()
+    ajenas.sort_by(|a, b| b.actualizado.cmp(&a.actualizado).then(b.id.cmp(&a.id)));
+    let mut mis_obras: Vec<Obra> = obras()
         .into_iter()
         .filter(|o| o.estado != EstadoObra::Rechazada)
         .filter(|o| o.mandante.id == mid || o.contratista.id == mid)
+        .collect();
+    mis_obras.sort_by(|a, b| b.actualizado.cmp(&a.actualizado).then(b.id.cmp(&a.id)));
+    let en_curso: Vec<Obra> = mis_obras
+        .iter()
+        .filter(|o| obra_en_curso(o.estado))
+        .cloned()
         .collect();
     let otros = otros_nombres(yo(), presentes(), peers());
     let status = linea_red(tor(), peers(), &otros);
     let soy_m = rol() == Some(Rol::Mandante);
     let sin_ajenas = ajenas.is_empty();
-    let sin_mias = mias.is_empty() && mis_obras.is_empty();
+    let sin_mias = mias.is_empty() && en_curso.is_empty();
     let avisos = avisos_para(&mid, soy_m, &mis_obras, &ajenas);
     let hint_contratista = if otros.is_empty() {
         "No hay avisos. Don Dinero tiene que publicar, y vos podés tocar Buscar ofertas.".to_string()
@@ -665,7 +681,7 @@ fn Tablero(
     };
     rsx! {
         div { class: "pane",
-            h1 { if soy_m { "Tus obras" } else { "Tablero" } }
+            h1 { "Tablero" }
             p { class: "status",
                 "Red " code { "{RED}" } " · {status}"
             }
@@ -732,7 +748,7 @@ fn Tablero(
                             }
                         }
                     }
-                    for o in mis_obras {
+                    for o in en_curso {
                         button {
                             class: "card",
                             onclick: move |_| {
@@ -803,11 +819,11 @@ fn Tablero(
                 if sin_ajenas {
                     p { class: "hint", "{hint_contratista}" }
                 }
-                if !mis_obras.is_empty() {
+                if !en_curso.is_empty() {
                     div { style: "height: 24px;" }
-                    h1 { "Mis obras" }
+                    p { class: "lead", "En curso" }
                     div { class: "stack",
-                        for o in mis_obras {
+                        for o in en_curso {
                             button {
                                 class: "card",
                                 onclick: move |_| {

@@ -208,6 +208,8 @@ pub struct Oferta {
     pub mandante: Persona,
     #[serde(default)]
     pub detalles: Vec<String>,
+    #[serde(default)]
+    pub actualizado: i64,
 }
 
 impl Oferta {
@@ -228,6 +230,7 @@ impl Oferta {
             n_partidas_sugeridas: n,
             mandante,
             detalles: ajusta_detalles(n, detalles),
+            actualizado: ahora(),
         })
     }
 }
@@ -287,6 +290,8 @@ pub struct Obra {
     /// Extra installment waiting on the other side.
     #[serde(default)]
     pub extra: Option<ExtraPartida>,
+    #[serde(default)]
+    pub actualizado: i64,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -328,7 +333,12 @@ impl Obra {
                 .collect(),
             contra,
             extra: None,
+            actualizado: ahora(),
         })
+    }
+
+    fn tocar(&mut self) {
+        self.actualizado = ahora();
     }
 
     pub fn confirmar_contra(&mut self, mandante_id: &str) -> Result<(), Error> {
@@ -344,6 +354,7 @@ impl Obra {
             .map(|d| Partida::pendiente(d.clone()))
             .collect();
         self.estado = EstadoObra::Acordada;
+        self.tocar();
         Ok(())
     }
 
@@ -369,6 +380,7 @@ impl Obra {
                 .map(Partida::pendiente)
                 .collect();
         }
+        self.tocar();
         Ok(())
     }
 
@@ -384,6 +396,7 @@ impl Obra {
         p.encerrado_por = Some(quien.clone());
         p.encerrado_cuando = ahora();
         self.estado = EstadoObra::EnMarcha;
+        self.tocar();
         Ok(())
     }
 
@@ -414,6 +427,7 @@ impl Obra {
         p.propuesto = Some(pct);
         p.turno = Some(Rol::Mandante);
         p.estado = PartidaEstado::EnTrato;
+        self.tocar();
         Ok(())
     }
 
@@ -447,6 +461,7 @@ impl Obra {
             Rol::Mandante => Rol::Contratista,
             Rol::Contratista => Rol::Mandante,
         });
+        self.tocar();
         Ok(())
     }
 
@@ -477,6 +492,7 @@ impl Obra {
         {
             self.estado = EstadoObra::Cerrada;
         }
+        self.tocar();
         Ok(())
     }
 
@@ -498,6 +514,7 @@ impl Obra {
             return Err(Error::YaExiste);
         }
         p.detalle = crate::partida::limpia_detalle(&detalle.into());
+        self.tocar();
         Ok(())
     }
 
@@ -518,6 +535,7 @@ impl Obra {
             detalle,
             por: quien.clone(),
         });
+        self.tocar();
         Ok(())
     }
 
@@ -534,6 +552,7 @@ impl Obra {
             .ok_or(Error::Monto)?;
         self.n_partidas += 1;
         self.partidas.push(Partida::pendiente(extra.detalle));
+        self.tocar();
         Ok(())
     }
 
@@ -544,6 +563,7 @@ impl Obra {
             self.extra = Some(extra);
             return Err(Error::NoToca);
         }
+        self.tocar();
         Ok(())
     }
 
@@ -556,6 +576,7 @@ impl Obra {
             _ => {}
         }
         self.estado = EstadoObra::Abandonada;
+        self.tocar();
         Ok(())
     }
 
@@ -638,6 +659,7 @@ impl Obra {
         {
             self.estado = EstadoObra::Cerrada;
         }
+        self.actualizado = self.actualizado.max(otra.actualizado);
     }
 
     fn fusionar_partidas(dst: &mut Vec<Partida>, mut src: Vec<Partida>, n: usize) {
