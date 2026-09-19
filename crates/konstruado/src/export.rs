@@ -1,57 +1,88 @@
 use std::path::PathBuf;
 
-use konstruado_core::{
-    monto, titulo_partida, EstadoObra, Obra, PartidaEstado,
-};
+use konstruado_core::{monto, Obra, PartidaEstado};
 
-use crate::fmt_cuando;
+use crate::i18n::Idioma;
 
-pub fn constancia(obra: &Obra) -> String {
+pub fn constancia(obra: &Obra, lang: Idioma) -> String {
     let mut s = String::new();
-    s.push_str("KONSTRUADO — constancia de obra\n");
+    s.push_str(lang.t(
+        "KONSTRUADO — constancia de obra\n",
+        "KONSTRUADO — job record\n",
+    ));
     s.push_str("================================\n\n");
     s.push_str(&obra.nombre);
     s.push('\n');
-    s.push_str(&format!("Estado: {}\n\n", estado(&obra.estado)));
-    s.push_str(&format!("Mandante: {}\n", obra.mandante.nombre));
-    s.push_str(&format!("Contratista: {}\n\n", obra.contratista.nombre));
-    s.push_str(&format!("Trabajo: {}\n", monto(obra.trabajo)));
-    s.push_str(&format!("Garantía por partida: {}\n", monto(obra.garantia)));
-    s.push_str(&format!("Partidas: {}\n", obra.n_partidas));
+    s.push_str(&format!(
+        "{}: {}\n\n",
+        lang.t("Estado", "Status"),
+        lang.label_estado(obra.estado)
+    ));
+    s.push_str(&format!(
+        "{}: {}\n",
+        lang.t("Mandante", "Client"),
+        obra.mandante.nombre
+    ));
+    s.push_str(&format!(
+        "{}: {}\n\n",
+        lang.t("Contratista", "Contractor"),
+        obra.contratista.nombre
+    ));
+    s.push_str(&format!(
+        "{}: {}\n",
+        lang.t("Trabajo", "Job amount"),
+        monto(obra.trabajo)
+    ));
+    s.push_str(&format!(
+        "{}: {}\n",
+        lang.t("Garantía por partida", "Guarantee per stage"),
+        monto(obra.garantia)
+    ));
+    s.push_str(&format!(
+        "{}: {}\n",
+        lang.t("Partidas", "Stages"),
+        obra.n_partidas
+    ));
     if let Some(ex) = obra.extra.as_ref() {
         s.push_str(&format!(
-            "Partida extra propuesta por {}: {} ({})\n",
-            ex.por.nombre, ex.detalle, monto(ex.monto)
+            "{} {}: {} ({})\n",
+            lang.t("Partida extra propuesta por", "Extra stage proposed by"),
+            ex.por.nombre,
+            ex.detalle,
+            monto(ex.monto)
         ));
     }
     for (i, p) in obra.partidas.iter().enumerate() {
-        let titulo = titulo_partida(i, &p.detalle);
+        let titulo = lang.titulo_partida(i, &p.detalle);
         s.push_str(&format!(
-            "\n--- Partida {} · {} · {} ---\n",
+            "\n--- {} {} · {} · {} ---\n",
+            lang.t("Partida", "Stage"),
             i + 1,
             titulo,
-            partida_estado(p.estado)
+            partida_estado(lang, p.estado)
         ));
         s.push_str(&format!(
-            "Monto por lado: {}\n",
+            "{}: {}\n",
+            lang.t("Monto por lado", "Amount per side"),
             monto(p.capital(obra.garantia))
         ));
         if let Some(q) = p.encerrado_por.as_ref() {
             s.push_str(&format!(
-                "Encerró {} · {}\n",
+                "{} {} · {}\n",
+                lang.t("Encerró", "Locked by"),
                 q.nombre,
-                fmt_cuando(p.encerrado_cuando)
+                lang.fmt_cuando(p.encerrado_cuando)
             ));
         }
-        if let Some(t) = p.turno {
-            s.push_str(&format!("Turno: {}\n", t.etiqueta()));
+        if let Some(r) = p.turno {
+            s.push_str(&format!("{}: {}\n", lang.t("Turno", "Turn"), lang.rol(r)));
         }
         if !p.notas.is_empty() {
-            s.push_str("Notas:\n");
+            s.push_str(lang.t("Notas:\n", "Notes:\n"));
             for n in &p.notas {
                 s.push_str(&format!(
                     "  {}  {} · {}%\n",
-                    fmt_cuando(n.cuando),
+                    lang.fmt_cuando(n.cuando),
                     n.autor_nombre,
                     n.porcentaje
                 ));
@@ -62,12 +93,15 @@ pub fn constancia(obra: &Obra) -> String {
         }
         if let Some(r) = p.recibo.as_ref() {
             s.push_str(&format!(
-                "Recibo: {}\n  Pagó {}% · {} · aceptó {} · {}\n",
+                "{}: {}\n  {} {}% · {} · {} {} · {}\n",
+                lang.t("Recibo", "Receipt"),
                 r.titulo,
+                lang.t("Pagó", "Paid"),
                 r.porcentaje,
                 monto(r.monto),
+                lang.t("aceptó", "accepted by"),
                 r.acepto_nombre,
-                fmt_cuando(r.cuando)
+                lang.fmt_cuando(r.cuando)
             ));
         }
     }
@@ -75,49 +109,53 @@ pub fn constancia(obra: &Obra) -> String {
     s
 }
 
-pub fn guardar_txt(obra: &Obra) -> Result<PathBuf, String> {
+pub fn guardar_txt(obra: &Obra, lang: Idioma) -> Result<PathBuf, String> {
     let suggested = format!("konstruado-{}.txt", slug(&obra.nombre));
-    let texto = constancia(obra);
+    let texto = constancia(obra, lang);
     if let Some(path) = rfd::FileDialog::new()
-        .set_title("Exportar constancia")
+        .set_title(lang.t("Exportar constancia", "Export record"))
         .set_file_name(&suggested)
-        .add_filter("Texto", &["txt"])
+        .add_filter(lang.t("Texto", "Text"), &["txt"])
         .save_file()
     {
         std::fs::write(&path, texto.as_bytes()).map_err(|e| e.to_string())?;
         return Ok(path);
     }
-    Err("No se eligió dónde guardar.".into())
+    Err(lang
+        .t("No se eligió dónde guardar.", "No save location was chosen.")
+        .into())
 }
 
-pub fn guardar_pdf(obra: &Obra) -> Result<PathBuf, String> {
+pub fn guardar_pdf(obra: &Obra, lang: Idioma) -> Result<PathBuf, String> {
     let suggested = format!("konstruado-{}.pdf", slug(&obra.nombre));
     let Some(path) = rfd::FileDialog::new()
-        .set_title("Exportar PDF")
+        .set_title(lang.t("Exportar PDF", "Export PDF"))
         .set_file_name(&suggested)
         .add_filter("PDF", &["pdf"])
         .save_file()
     else {
-        return Err("No se eligió dónde guardar.".into());
+        return Err(lang
+            .t("No se eligió dónde guardar.", "No save location was chosen.")
+            .into());
     };
-    let bytes = pdf_bytes(obra)?;
+    let bytes = pdf_bytes(obra, lang)?;
     std::fs::write(&path, bytes).map_err(|e| e.to_string())?;
     Ok(path)
 }
 
-fn pdf_bytes(obra: &Obra) -> Result<Vec<u8>, String> {
+fn pdf_bytes(obra: &Obra, lang: Idioma) -> Result<Vec<u8>, String> {
     use printpdf::*;
     use std::io::Cursor;
 
-    let (doc, page1, layer1) = PdfDocument::new("Konstruado", Mm(210.0), Mm(297.0), "Capa");
+    let (doc, page1, layer1) = PdfDocument::new("Konstruado", Mm(210.0), Mm(297.0), "Layer");
     let font = pdf_font(&doc)?;
-    let lines = wrap_lines(&constancia(obra), 92);
+    let lines = wrap_lines(&constancia(obra, lang), 92);
     let mut pages: Vec<(PdfPageIndex, PdfLayerIndex)> = vec![(page1, layer1)];
     let mut page_i = 0usize;
     let mut y = 280.0;
     for line in lines {
         if y < 18.0 {
-            let (p, l) = doc.add_page(Mm(210.0), Mm(297.0), "Capa");
+            let (p, l) = doc.add_page(Mm(210.0), Mm(297.0), "Layer");
             pages.push((p, l));
             page_i += 1;
             y = 280.0;
@@ -176,25 +214,18 @@ fn wrap_lines(s: &str, width: usize) -> Vec<String> {
     out
 }
 
-fn estado(e: &EstadoObra) -> &'static str {
-    match e {
-        EstadoObra::Publicada => "Publicada",
-        EstadoObra::Contra => "Contra",
-        EstadoObra::Rechazada => "Rechazada",
-        EstadoObra::Acordada => "Acordada",
-        EstadoObra::EnMarcha => "En marcha",
-        EstadoObra::Abandonada => "Abandonada",
-        EstadoObra::Cerrada => "Cerrada",
-    }
-}
-
-fn partida_estado(e: PartidaEstado) -> &'static str {
-    match e {
-        PartidaEstado::Pendiente => "Pendiente",
-        PartidaEstado::Encerrando => "Encerrando",
-        PartidaEstado::Encerrada => "Encerrada",
-        PartidaEstado::EnTrato => "En trato",
-        PartidaEstado::Pagada => "Pagada",
+fn partida_estado(lang: Idioma, e: PartidaEstado) -> &'static str {
+    match (lang, e) {
+        (Idioma::Es, PartidaEstado::Pendiente) => "Pendiente",
+        (Idioma::Es, PartidaEstado::Encerrando) => "Encerrando",
+        (Idioma::Es, PartidaEstado::Encerrada) => "Encerrada",
+        (Idioma::Es, PartidaEstado::EnTrato) => "En trato",
+        (Idioma::Es, PartidaEstado::Pagada) => "Pagada",
+        (Idioma::En, PartidaEstado::Pendiente) => "Pending",
+        (Idioma::En, PartidaEstado::Encerrando) => "Locking",
+        (Idioma::En, PartidaEstado::Encerrada) => "Locked",
+        (Idioma::En, PartidaEstado::EnTrato) => "In deal",
+        (Idioma::En, PartidaEstado::Pagada) => "Paid",
     }
 }
 
@@ -210,7 +241,11 @@ fn slug(s: &str) -> String {
         })
         .collect();
     let t = t.trim_matches('-');
-    if t.is_empty() { "obra".into() } else { t.into() }
+    if t.is_empty() {
+        "obra".into()
+    } else {
+        t.into()
+    }
 }
 
 #[cfg(test)]
@@ -227,11 +262,14 @@ mod tests {
             .unwrap();
         let a = Aceptacion::de(&o, c, 5_000).unwrap();
         let obra = konstruado_core::Obra::desde_oferta(o, a).unwrap();
-        let t = constancia(&obra);
+        let t = constancia(&obra, Idioma::Es);
         assert!(t.contains("Casa El Quisco"));
         assert!(t.contains("Don Dinero"));
         assert!(t.contains("Don Chasquilla"));
         assert!(t.contains("Fundaciones"));
         assert!(t.contains("2"));
+        let en = constancia(&obra, Idioma::En);
+        assert!(en.contains("job record"));
+        assert!(en.contains("Client"));
     }
 }

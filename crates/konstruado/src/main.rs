@@ -1,14 +1,16 @@
 mod export;
+mod i18n;
 mod persist;
 
 use std::time::Duration;
 
 use dioxus::prelude::*;
 use konstruado_core::{
-    monto, monto_pct, n_partidas, titulo_partida, Aceptacion, EstadoObra, Oferta, Obra, Partida,
-    PartidaEstado, Persona, Rol, MAX_NOTA,
+    monto, monto_pct, n_partidas, Aceptacion, EstadoObra, Oferta, Obra, PartidaEstado, Persona, Rol,
+    MAX_NOTA,
 };
 use konstruado_net::{EstadoTor, Nodo, RED};
+use i18n::Idioma;
 
 const CSS: &str = include_str!("ui.css");
 
@@ -55,7 +57,7 @@ enum Screen {
     Cuenta,
 }
 
-fn persistir(yo: Option<Persona>, rol: Option<Rol>, tema: String, n: &Nodo) {
+fn persistir(yo: Option<Persona>, rol: Option<Rol>, tema: String, idioma: String, n: &Nodo) {
     persist::guardar(&persist::EstadoDisco {
         yo,
         rol,
@@ -63,7 +65,12 @@ fn persistir(yo: Option<Persona>, rol: Option<Rol>, tema: String, n: &Nodo) {
         obras: n.obras(),
         presentes: n.presentes(),
         tema,
+        idioma,
     });
+}
+
+fn lang_now() -> Idioma {
+    consume_context::<Signal<Idioma>>()()
 }
 
 #[component]
@@ -106,6 +113,7 @@ fn App() -> Element {
             guardado.tema.clone()
         }
     });
+    let idioma = use_context_provider(|| Signal::new(Idioma::parse(&guardado.idioma)));
 
     use_future(move || {
         let ofertas0 = guardado.ofertas.clone();
@@ -134,7 +142,7 @@ fn App() -> Element {
                     presentes.set(n.presentes());
                     ofertas.set(n.tablero());
                     obras.set(n.obras());
-                    persistir(yo(), rol(), tema(), &n);
+                    persistir(yo(), rol(), tema(), idioma().codigo().into(), &n);
                     n.esperar(Duration::from_secs(1)).await;
                 }
             }
@@ -145,7 +153,8 @@ fn App() -> Element {
 
     let adentro = screen() != Screen::Bienvenida;
     let quien = yo().map(|p| p.nombre).unwrap_or_default();
-    let rol_txt = rol().map(Rol::etiqueta).unwrap_or("");
+    let rol_txt = rol().map(|r| idioma().rol(r)).unwrap_or("");
+    let lang = idioma();
     let mid = yo().map(|p| p.id).unwrap_or_default();
     let mut mis_obras: Vec<Obra> = obras()
         .into_iter()
@@ -167,6 +176,7 @@ fn App() -> Element {
                     },
                     "Konstruado"
                 }
+                LangSwitch {}
                 if adentro {
                     button {
                         class: "quien",
@@ -178,7 +188,7 @@ fn App() -> Element {
             div { class: "shell",
                 if adentro {
                     aside { class: "side",
-                        h2 { "Mis obras" }
+                        h2 { {lang.t("Mis obras", "My jobs")} }
                         div { class: "side-list",
                             for o in mis_obras {
                                 button {
@@ -188,7 +198,7 @@ fn App() -> Element {
                                         screen.set(Screen::Detalle);
                                     },
                                     strong { "{o.nombre}" }
-                                    span { class: chip_estado(o.estado), "{label_estado(o.estado)}" }
+                                    span { class: chip_estado(o.estado), "{lang.label_estado(o.estado)}" }
                                 }
                             }
                         }
@@ -196,7 +206,7 @@ fn App() -> Element {
                             button {
                                 class: "btn btn-primary",
                                 onclick: move |_| screen.set(Screen::Nueva),
-                                "Publicar obra"
+                                {lang.t("Publicar obra", "Post a job")}
                             }
                         }
                     }
@@ -260,17 +270,6 @@ fn obra_en_curso(e: EstadoObra) -> bool {
     )
 }
 
-fn label_estado(e: EstadoObra) -> &'static str {
-    match e {
-        EstadoObra::Publicada => "Publicada",
-        EstadoObra::Contra => "Contra",
-        EstadoObra::Rechazada => "Rechazada",
-        EstadoObra::Acordada => "Acordada",
-        EstadoObra::EnMarcha => "En marcha",
-        EstadoObra::Abandonada => "Abandonada",
-        EstadoObra::Cerrada => "Cerrada",
-    }
-}
 
 fn chip_partida(e: PartidaEstado) -> &'static str {
     match e {
@@ -282,21 +281,6 @@ fn chip_partida(e: PartidaEstado) -> &'static str {
     }
 }
 
-fn label_partida(p: &Partida) -> String {
-    match p.estado {
-        PartidaEstado::Pendiente => "Pendiente".into(),
-        PartidaEstado::Encerrando => "Encerrando".into(),
-        PartidaEstado::Encerrada => "En obra".into(),
-        PartidaEstado::EnTrato => match p.propuesto {
-            Some(n) => format!("Trato {n}%"),
-            None => "En trato".into(),
-        },
-        PartidaEstado::Pagada => match p.pago {
-            Some(n) => format!("Pagada {n}%"),
-            None => "Pagada".into(),
-        },
-    }
-}
 
 fn parse_pct(s: &str) -> u32 {
     s.chars()
@@ -306,14 +290,6 @@ fn parse_pct(s: &str) -> u32 {
         .unwrap_or(0)
 }
 
-pub(crate) fn fmt_cuando(ts: i64) -> String {
-    if ts <= 0 {
-        return String::new();
-    }
-    chrono::DateTime::from_timestamp(ts, 0)
-        .map(|d| d.format("%d/%m/%Y %H:%M").to_string())
-        .unwrap_or_default()
-}
 
 fn exigir_sesion(
     red: Signal<Option<Nodo>>,
@@ -322,7 +298,7 @@ fn exigir_sesion(
     mut err: Signal<Option<String>>,
 ) -> bool {
     let Some(nodo) = red() else {
-        err.set(Some("La red todavía no arrancó.".into()));
+        err.set(Some(lang_now().t("La red todavía no arrancó.", "The network has not started yet.").into()));
         return false;
     };
     let Some(p) = yo() else {
@@ -335,7 +311,10 @@ fn exigir_sesion(
     };
     if matches!(nodo.estado_tor(), EstadoTor::Arrancando { .. }) && nodo.n_peers() == 0 {
         err.set(Some(
-            "Sincronizando el trato… esperá a que baje el estado del otro.".into(),
+            lang_now().t(
+                "Sincronizando el trato… esperá a que baje el estado del otro.",
+                "Syncing the deal… wait for the other side's state.",
+            ).into(),
         ));
         return false;
     }
@@ -343,12 +322,18 @@ fn exigir_sesion(
         true
     } else if nodo.sesion_viva(&p.id, otro) && !nodo.sync_reciente() {
         err.set(Some(
-            "Sincronizando el trato… todavía no bajó lo último del otro.".into(),
+            lang_now().t(
+                "Sincronizando el trato… todavía no bajó lo último del otro.",
+                "Syncing the deal… the latest from the other side has not arrived yet.",
+            ).into(),
         ));
         false
     } else {
         err.set(Some(
-            "El otro no está en línea. Tiene que tener Konstruado abierto.".into(),
+            lang_now().t(
+                "El otro no está en línea. Tiene que tener Konstruado abierto.",
+                "The other person is offline. They need Konstruado open.",
+            ).into(),
         ));
         false
     }
@@ -394,7 +379,7 @@ struct Aviso {
     partida: Option<usize>,
 }
 
-fn avisos_para(mid: &str, _soy_m: bool, obras: &[Obra], _ofertas: &[Oferta]) -> Vec<Aviso> {
+fn avisos_para(mid: &str, _soy_m: bool, obras: &[Obra], _ofertas: &[Oferta], lang: Idioma) -> Vec<Aviso> {
     let mut out = Vec::new();
     for obra in obras {
         if obra.mandante.id != mid && obra.contratista.id != mid {
@@ -408,12 +393,20 @@ fn avisos_para(mid: &str, _soy_m: bool, obras: &[Obra], _ofertas: &[Oferta]) -> 
         }
         if obra.estado == EstadoObra::Contra && obra.mandante.id == mid {
             out.push(Aviso {
-                texto: format!(
-                    "{}: {} propone garantía {}",
-                    obra.nombre,
-                    obra.contratista.nombre,
-                    monto(obra.garantia)
-                ),
+                texto: match lang {
+                    Idioma::Es => format!(
+                        "{}: {} propone garantía {}",
+                        obra.nombre,
+                        obra.contratista.nombre,
+                        monto(obra.garantia)
+                    ),
+                    Idioma::En => format!(
+                        "{}: {} proposes guarantee {}",
+                        obra.nombre,
+                        obra.contratista.nombre,
+                        monto(obra.garantia)
+                    ),
+                },
                 obra_id: obra.id.clone(),
                 es_oferta: false,
                 partida: None,
@@ -422,10 +415,16 @@ fn avisos_para(mid: &str, _soy_m: bool, obras: &[Obra], _ofertas: &[Oferta]) -> 
         if let Some(ex) = obra.extra.as_ref() {
             if ex.por.id != mid {
                 out.push(Aviso {
-                    texto: format!(
-                        "{}: {} propone extra {} ({})",
-                        obra.nombre, ex.por.nombre, ex.detalle, monto(ex.monto)
-                    ),
+                    texto: match lang {
+                        Idioma::Es => format!(
+                            "{}: {} propone extra {} ({})",
+                            obra.nombre, ex.por.nombre, ex.detalle, monto(ex.monto)
+                        ),
+                        Idioma::En => format!(
+                            "{}: {} proposes extra {} ({})",
+                            obra.nombre, ex.por.nombre, ex.detalle, monto(ex.monto)
+                        ),
+                    },
                     obra_id: obra.id.clone(),
                     es_oferta: false,
                     partida: None,
@@ -435,7 +434,10 @@ fn avisos_para(mid: &str, _soy_m: bool, obras: &[Obra], _ofertas: &[Oferta]) -> 
         if let Some(cl) = obra.cierre.as_ref() {
             if cl.id != mid {
                 out.push(Aviso {
-                    texto: format!("{}: {} quiere cortar el trato", obra.nombre, cl.nombre),
+                    texto: match lang {
+                        Idioma::Es => format!("{}: {} quiere cortar el trato", obra.nombre, cl.nombre),
+                        Idioma::En => format!("{}: {} wants to end the deal", obra.nombre, cl.nombre),
+                    },
                     obra_id: obra.id.clone(),
                     es_oferta: false,
                     partida: None,
@@ -448,14 +450,20 @@ fn avisos_para(mid: &str, _soy_m: bool, obras: &[Obra], _ofertas: &[Oferta]) -> 
             Rol::Contratista
         };
         for (i, p) in obra.partidas.iter().enumerate() {
-            let titulo = titulo_partida(i, &p.detalle);
+            let titulo = lang.titulo_partida(i, &p.detalle);
             if p.estado == PartidaEstado::Encerrando {
                 if p.encerrado_por.as_ref().map(|q| q.id.as_str()) != Some(mid) {
                     out.push(Aviso {
-                        texto: format!(
-                            "{} · {}: te toca confirmar el encierre",
-                            obra.nombre, titulo
-                        ),
+                        texto: match lang {
+                            Idioma::Es => format!(
+                                "{} · {}: te toca confirmar el encierre",
+                                obra.nombre, titulo
+                            ),
+                            Idioma::En => format!(
+                                "{} · {}: your turn to confirm the lock",
+                                obra.nombre, titulo
+                            ),
+                        },
                         obra_id: obra.id.clone(),
                         es_oferta: false,
                         partida: Some(i),
@@ -465,7 +473,10 @@ fn avisos_para(mid: &str, _soy_m: bool, obras: &[Obra], _ofertas: &[Oferta]) -> 
             if p.estado == PartidaEstado::EnTrato && p.turno == Some(mi_rol) {
                 let pct = p.propuesto.unwrap_or(0);
                 out.push(Aviso {
-                    texto: format!("{} · {}: te toca responder ({pct}%)", obra.nombre, titulo),
+                    texto: match lang {
+                    Idioma::Es => format!("{} · {}: te toca responder ({pct}%)", obra.nombre, titulo),
+                    Idioma::En => format!("{} · {}: your turn to reply ({pct}%)", obra.nombre, titulo),
+                },
                     obra_id: obra.id.clone(),
                     es_oferta: false,
                     partida: Some(i),
@@ -476,12 +487,18 @@ fn avisos_para(mid: &str, _soy_m: bool, obras: &[Obra], _ofertas: &[Oferta]) -> 
                     .encerrado_por
                     .as_ref()
                     .map(|q| q.nombre.as_str())
-                    .unwrap_or("el mandante");
+                    .unwrap_or(lang.t("el mandante", "the client"));
                 out.push(Aviso {
-                    texto: format!(
-                        "{} · {}: {quien} encerró, avisá cuando termines",
-                        obra.nombre, titulo
-                    ),
+                    texto: match lang {
+                        Idioma::Es => format!(
+                            "{} · {}: {quien} encerró, avisá cuando termines",
+                            obra.nombre, titulo
+                        ),
+                        Idioma::En => format!(
+                            "{} · {}: {quien} locked it, report when you finish",
+                            obra.nombre, titulo
+                        ),
+                    },
                     obra_id: obra.id.clone(),
                     es_oferta: false,
                     partida: Some(i),
@@ -520,41 +537,23 @@ fn resumen_detalles(detalles: &[String]) -> Option<String> {
     }
 }
 
-fn placeholder_partida(i: usize, n: u32) -> &'static str {
-    const CINCO: [&str; 5] = [
-        "Cimientos",
-        "Muros",
-        "Techumbre",
-        "Instalaciones",
-        "Terminaciones",
-    ];
-    if n == 5 && i < 5 {
-        CINCO[i]
-    } else {
-        "Qué se hace en esta partida"
+#[component]
+fn LangSwitch() -> Element {
+    let mut idioma = use_context::<Signal<Idioma>>();
+    rsx! {
+        div { class: "lang",
+            button {
+                class: if idioma() == Idioma::Es { "lang-opt on" } else { "lang-opt" },
+                onclick: move |_| idioma.set(Idioma::Es),
+                "ES"
+            }
+            button {
+                class: if idioma() == Idioma::En { "lang-opt on" } else { "lang-opt" },
+                onclick: move |_| idioma.set(Idioma::En),
+                "EN"
+            }
+        }
     }
-}
-
-fn linea_red(tor: EstadoTor, peers: usize, otros: &[String]) -> String {
-    let tor_txt = match tor {
-        EstadoTor::Listo { onion } => {
-            let corto = onion.get(..8).unwrap_or(onion.as_str());
-            format!("Tor {corto}…")
-        }
-        EstadoTor::Arrancando { paso } => format!("Tor {paso}"),
-        EstadoTor::Fallo(s) => format!("Tor: {s}"),
-        EstadoTor::Ausente => "Red local".into(),
-    };
-    let gente = if otros.is_empty() {
-        if peers == 0 {
-            "nadie más en la red".into()
-        } else {
-            format!("{peers} par(es), todavía sin nombre")
-        }
-    } else {
-        otros.join(", ")
-    };
-    format!("{tor_txt} · {gente}")
 }
 
 #[component]
@@ -566,39 +565,40 @@ fn Bienvenida(
     screen: Signal<Screen>,
     err: Signal<Option<String>>,
 ) -> Element {
+    let lang = use_context::<Signal<Idioma>>()();
     rsx! {
         div { class: "pane narrow",
-            h1 { "La obra, con el dinero encerrado." }
+            h1 { {lang.t("La obra, con el dinero encerrado.", "The job, with the money locked.")} }
             p { class: "lead",
-                "No te ves con la otra persona como en un chat. El mandante publica una obra. El contratista la ve en el tablero y acepta (o propone otra garantía)."
+                {lang.t("No te ves con la otra persona como en un chat. El mandante publica una obra. El contratista la ve en el tablero y acepta (o propone otra garantía).", "You do not see the other person like a chat. The client posts a job. The contractor sees it on the board and accepts (or proposes another guarantee).")}
             }
-            div { class: "paso", b { "1" } "Tu nombre" }
+            div { class: "paso", b { "1" } {lang.t("Tu nombre", "Your name")} }
             input {
                 r#type: "text",
-                placeholder: "Cómo te llamás",
+                placeholder: lang.t("Cómo te llamás", "Your name"),
                 value: "{nombre}",
                 oninput: move |e| nombre.set(e.value()),
             }
-            div { class: "paso", b { "2" } "¿Qué vas a hacer?" }
+            div { class: "paso", b { "2" } {lang.t("¿Qué vas a hacer?", "What will you do?")} }
             div { class: "roles",
                 button {
                     class: if rol() == Some(Rol::Mandante) { "rol on" } else { "rol" },
                     onclick: move |_| rol.set(Some(Rol::Mandante)),
-                    strong { "Pago la obra" }
-                    span { "Mandante. Publicás el trabajo y la garantía. El otro la ve." }
+                    strong { {lang.t("Pago la obra", "I pay for the job")} }
+                    span { {lang.t("Mandante. Publicás el trabajo y la garantía. El otro la ve.", "Client. You post the job and the guarantee. The other person sees it.")} }
                 }
                 button {
                     class: if rol() == Some(Rol::Contratista) { "rol on" } else { "rol" },
                     onclick: move |_| rol.set(Some(Rol::Contratista)),
-                    strong { "La construyo" }
-                    span { "Contratista. Buscás lo publicado y aceptás, o proponés otra garantía." }
+                    strong { {lang.t("La construyo", "I build it")} }
+                    span { {lang.t("Contratista. Buscás lo publicado y aceptás, o proponés otra garantía.", "Contractor. You look at posted jobs and accept, or propose another guarantee.")} }
                 }
             }
             button {
                 class: "btn btn-primary",
                 onclick: move |_| {
                     let Some(_) = rol() else {
-                        err.set(Some("Elegí si pagás la obra o la construís.".into()));
+                        err.set(Some(lang_now().t("Elegí si pagás la obra o la construís.", "Choose whether you pay for the job or build it.").into()));
                         return;
                     };
                     match Persona::nueva(nombre()) {
@@ -610,10 +610,10 @@ fn Bienvenida(
                             err.set(None);
                             screen.set(Screen::Tablero);
                         }
-                        Err(e) => err.set(Some(e.to_string())),
+                        Err(e) => err.set(Some(lang_now().error(&e))),
                     }
                 },
-                "Entrar"
+                {lang.t("Entrar", "Enter")}
             }
         }
     }
@@ -632,46 +632,64 @@ fn Cuenta(
     let mut nom = use_signal(|| nombre());
     let mut rlocal = use_signal(|| rol());
     let mut tlocal = use_signal(|| tema());
+    let mut idioma = use_context::<Signal<Idioma>>();
+    let mut ilocal = use_signal(|| idioma());
+    let lang = idioma();
     rsx! {
         div { class: "pane narrow",
-            h1 { "Tu cuenta" }
+            h1 { {lang.t("Tu cuenta", "Your account")} }
             p { class: "lead",
-                "El nombre y el rol se pueden cambiar. Las obras no se borran. El mandante abre la sala; el contratista solo busca."
+                {lang.t("El nombre y el rol se pueden cambiar. Las obras no se borran. El mandante abre la sala; el contratista solo busca.", "Name and role can be changed. Jobs are not deleted. The client opens the room; the contractor only looks.")}
             }
-            label { class: "et", "NOMBRE" }
+            label { class: "et", {lang.t("NOMBRE", "NAME")} }
             input {
                 r#type: "text",
                 value: "{nom}",
                 oninput: move |e| nom.set(e.value()),
             }
-            div { class: "paso", b { "2" } "¿Qué vas a hacer?" }
+            div { class: "paso", b { "2" } {lang.t("¿Qué vas a hacer?", "What will you do?")} }
             div { class: "roles",
                 button {
                     class: if rlocal() == Some(Rol::Mandante) { "rol on" } else { "rol" },
                     onclick: move |_| rlocal.set(Some(Rol::Mandante)),
-                    strong { "Pago la obra" }
-                    span { "Mandante. Publicás y abrís la sala." }
+                    strong { {lang.t("Pago la obra", "I pay for the job")} }
+                    span { {lang.t("Mandante. Publicás y abrís la sala.", "Client. You post and open the room.")} }
                 }
                 button {
                     class: if rlocal() == Some(Rol::Contratista) { "rol on" } else { "rol" },
                     onclick: move |_| rlocal.set(Some(Rol::Contratista)),
-                    strong { "La construyo" }
-                    span { "Contratista. Buscás lo publicado. No abrís sala." }
+                    strong { {lang.t("La construyo", "I build it")} }
+                    span { {lang.t("Contratista. Buscás lo publicado. No abrís sala.", "Contractor. You look at posted jobs. You do not open a room.")} }
                 }
             }
-            div { class: "paso", b { "3" } "Apariencia" }
+            div { class: "paso", b { "3" } {lang.t("Apariencia", "Look")} }
             div { class: "roles",
                 button {
                     class: if tlocal() == "vivo" { "rol on" } else { "rol" },
                     onclick: move |_| tlocal.set("vivo".into()),
-                    strong { "Vivo" }
-                    span { "Arcilla, crema y contraste. El de siempre más color." }
+                    strong { {lang.t("Vivo", "Vivid")} }
+                    span { {lang.t("Arcilla, crema y contraste. El de siempre más color.", "Clay, cream and contrast. The usual, more color.")} }
                 }
                 button {
                     class: if tlocal() == "calma" { "rol on" } else { "rol" },
                     onclick: move |_| tlocal.set("calma".into()),
-                    strong { "Calma" }
-                    span { "Gris claro, menos tinta. El anterior." }
+                    strong { {lang.t("Calma", "Calm")} }
+                    span { {lang.t("Gris claro, menos tinta. El anterior.", "Light gray, less ink. The previous look.")} }
+                }
+            }
+            div { class: "paso", b { "4" } {lang.t("Idioma", "Language")} }
+            div { class: "roles",
+                button {
+                    class: if ilocal() == Idioma::Es { "rol on" } else { "rol" },
+                    onclick: move |_| ilocal.set(Idioma::Es),
+                    strong { "Español" }
+                    span { {lang.t("El idioma de la ventana. El trato es el mismo.", "The language of this window. The deal is the same.")} }
+                }
+                button {
+                    class: if ilocal() == Idioma::En { "rol on" } else { "rol" },
+                    onclick: move |_| ilocal.set(Idioma::En),
+                    strong { "English" }
+                    span { {lang.t("English. The deal does not change.", "English. The deal does not change.")} }
                 }
             }
             button {
@@ -679,16 +697,17 @@ fn Cuenta(
                 onclick: move |_| {
                     let Some(mut p) = yo() else { return };
                     let Some(r) = rlocal() else {
-                        err.set(Some("Elegí si pagás la obra o la construís.".into()));
+                        err.set(Some(lang_now().t("Elegí si pagás la obra o la construís.", "Choose whether you pay for the job or build it.").into()));
                         return;
                     };
                     match p.renombrar(nom()) {
                         Ok(()) => {
                             tema.set(tlocal());
+                            idioma.set(ilocal());
                             if let Some(nodo) = red() {
                                 nodo.actualizar_yo(p.clone());
                                 nodo.entrar_en_sala(r == Rol::Mandante);
-                                persistir(Some(p.clone()), Some(r), tlocal(), &nodo);
+                                persistir(Some(p.clone()), Some(r), tlocal(), ilocal().codigo().into(), &nodo);
                             }
                             nombre.set(nom());
                             rol.set(Some(r));
@@ -696,15 +715,15 @@ fn Cuenta(
                             err.set(None);
                             screen.set(Screen::Tablero);
                         }
-                        Err(e) => err.set(Some(e.to_string())),
+                        Err(e) => err.set(Some(lang_now().error(&e))),
                     }
                 },
-                "Guardar"
+                {lang.t("Guardar", "Save")}
             }
             button {
                 class: "btn btn-ghost",
                 onclick: move |_| screen.set(Screen::Tablero),
-                "Volver"
+                {lang.t("Volver", "Back")}
             }
         }
     }
@@ -726,6 +745,7 @@ fn Tablero(
     peers: Signal<usize>,
     garantia_acc: Signal<String>,
 ) -> Element {
+    let lang = use_context::<Signal<Idioma>>()();
     let mut buscando = use_signal(|| false);
     let mid = yo().map(|p| p.id).unwrap_or_default();
     let ocupadas: Vec<String> = obras()
@@ -755,36 +775,45 @@ fn Tablero(
         .cloned()
         .collect();
     let otros = otros_nombres(yo(), presentes(), peers());
-    let status = linea_red(tor(), peers(), &otros);
+    let status = lang.linea_red(tor(), peers(), &otros);
     let soy_m = rol() == Some(Rol::Mandante);
     let sin_ajenas = ajenas.is_empty();
     let sin_mias = mias.is_empty() && en_curso.is_empty();
-    let avisos = avisos_para(&mid, soy_m, &mis_obras, &ajenas);
+    let avisos = avisos_para(&mid, soy_m, &mis_obras, &ajenas, lang);
     let hint_contratista = if otros.is_empty() {
-        "No hay avisos. Don Dinero tiene que publicar, y vos podés tocar Buscar ofertas.".to_string()
+        lang.t(
+            "No hay avisos. Don Dinero tiene que publicar, y vos podés tocar Buscar ofertas.",
+            "No notices. The client has to post, and you can tap Search jobs.",
+        ).to_string()
     } else {
-        format!(
-            "{} está en la red. Si no ves el aviso, tocá Buscar ofertas.",
-            otros.join(", ")
-        )
+        match lang {
+            Idioma::Es => format!(
+                "{} está en la red. Si no ves el aviso, tocá Buscar ofertas.",
+                otros.join(", ")
+            ),
+            Idioma::En => format!(
+                "{} is on the network. If you do not see the notice, tap Search jobs.",
+                otros.join(", ")
+            ),
+        }
     };
     rsx! {
         div { class: "pane",
-            h1 { "Tablero" }
+            h1 { {lang.t("Tablero", "Board")} }
             p { class: "status",
-                "Red " code { "{RED}" } " · {status}"
+                {lang.t("Red", "Net")} " " code { "{RED}" } " · {status}"
             }
             if peers() == 0 {
                 p { class: "hint",
                     match tor() {
-                        EstadoTor::Arrancando { .. } => "Tor está subiendo. El mandante abre la sala; el contratista solo busca.",
-                        _ => "Nadie más todavía. En la misma PC, un segundo cargo run se engancha solo. En otra máquina, Don Dinero abre la sala y Chasquilla busca.",
+                        EstadoTor::Arrancando { .. } => lang.t("Tor está subiendo. El mandante abre la sala; el contratista solo busca.", "Tor is coming up. The client opens the room; the contractor only looks."),
+                        _ => lang.t("Nadie más todavía. En la misma PC, un segundo cargo run se engancha solo. En otra máquina, Don Dinero abre la sala y Chasquilla busca.", "Nobody else yet. On the same PC, a second cargo run joins on its own. On another machine, the client opens the room and the contractor searches."),
                     }
                 }
             }
 
             if !avisos.is_empty() {
-                p { class: "lead", "Te toca" }
+                p { class: "lead", {lang.t("Te toca", "Your turn")} }
                 div { class: "stack",
                     for a in avisos {
                         button {
@@ -807,7 +836,7 @@ fn Tablero(
                             },
                             div { class: "card-h",
                                 strong { "{a.texto}" }
-                                span { class: "chip chip-wait", "Te toca" }
+                                span { class: "chip chip-wait", {lang.t("Te toca", "Your turn")} }
                             }
                         }
                     }
@@ -817,20 +846,20 @@ fn Tablero(
 
             if soy_m {
                 p { class: "lead",
-                    "Publicá. El contratista no te ve a vos: ve el aviso en su tablero."
+                    {lang.t("Publicá. El contratista no te ve a vos: ve el aviso en su tablero.", "Post a job. The contractor does not see you: they see the notice on their board.")}
                 }
                 if sin_mias {
-                    p { class: "hint", "Todavía no publicaste nada." }
+                    p { class: "hint", {lang.t("Todavía no publicaste nada.", "You have not posted anything yet.")} }
                 }
                 div { class: "stack",
                     for o in mias {
                         div { class: "card static",
                             div { class: "card-h",
                                 strong { "{o.nombre}" }
-                                span { class: "chip chip-off", "Esperando contratista" }
+                                span { class: "chip chip-off", {lang.t("Esperando contratista", "Waiting for contractor")} }
                             }
                             p { class: "meta",
-                                "Trabajo {monto(o.trabajo)} · garantía {monto(o.garantia_sugerida)} · {o.n_partidas_sugeridas} partidas"
+                                {match lang { Idioma::Es => format!("Trabajo {} · garantía {} · {} partidas", monto(o.trabajo), monto(o.garantia_sugerida), o.n_partidas_sugeridas), Idioma::En => format!("Job {} · guarantee {} · {} stages", monto(o.trabajo), monto(o.garantia_sugerida), o.n_partidas_sugeridas) }}
                             }
                             if let Some(r) = resumen_detalles(&o.detalles) {
                                 p { class: "meta", "{r}" }
@@ -846,13 +875,13 @@ fn Tablero(
                             },
                             div { class: "card-h",
                                 strong { "{o.nombre}" }
-                                span { class: chip_estado(o.estado), "{label_estado(o.estado)}" }
+                                span { class: chip_estado(o.estado), "{lang.label_estado(o.estado)}" }
                             }
                             p { class: "meta",
-                                "Contratista {o.contratista.nombre} · {o.n_partidas} partidas · {monto(o.garantia)} por lado"
+                                {match lang { Idioma::Es => format!("Contratista {} · {} partidas · {} por lado", o.contratista.nombre, o.n_partidas, monto(o.garantia)), Idioma::En => format!("Contractor {} · {} stages · {} per side", o.contratista.nombre, o.n_partidas, monto(o.garantia)) }}
                             }
                             if o.estado == EstadoObra::Contra {
-                                p { class: "meta", "Te toca: contra de garantía" }
+                                p { class: "meta", {lang.t("Te toca: contra de garantía", "Your turn: guarantee counter")} }
                             }
                         }
                     }
@@ -861,11 +890,11 @@ fn Tablero(
                 button {
                     class: "btn btn-primary",
                     onclick: move |_| screen.set(Screen::Nueva),
-                    "Publicar obra"
+                    {lang.t("Publicar obra", "Post a job")}
                 }
             } else {
                 p { class: "lead",
-                    "Ofertas del mandante. Aceptás las condiciones o proponés otra garantía."
+                    {lang.t("Ofertas del mandante. Aceptás las condiciones o proponés otra garantía.", "Jobs from the client. Accept the terms or propose another guarantee.")}
                 }
                 button {
                     class: "btn btn-primary",
@@ -879,7 +908,7 @@ fn Tablero(
                             buscando.set(false);
                         });
                     },
-                    if buscando() { "Buscando…" } else { "Buscar ofertas" }
+                    if buscando() { {lang.t("Buscando…", "Searching…")} } else { {lang.t("Buscar ofertas", "Search jobs")} }
                 }
                 div { style: "height: 16px;" }
                 div { class: "stack",
@@ -893,11 +922,11 @@ fn Tablero(
                             },
                             div { class: "card-h",
                                 strong { "{o.nombre}" }
-                                span { class: "chip chip-off", "{o.n_partidas_sugeridas} partidas" }
+                                span { class: "chip chip-off", {match lang { Idioma::Es => format!("{} partidas", o.n_partidas_sugeridas), Idioma::En => format!("{} stages", o.n_partidas_sugeridas) }} }
                             }
-                            p { class: "meta", "Mandante: {o.mandante.nombre}" }
+                            p { class: "meta", "{lang.t(\"Mandante\", \"Client\")}: {o.mandante.nombre}" }
                             p { class: "meta",
-                                "Trabajo {monto(o.trabajo)} · garantía sugerida {monto(o.garantia_sugerida)}"
+                                {match lang { Idioma::Es => format!("Trabajo {} · garantía sugerida {}", monto(o.trabajo), monto(o.garantia_sugerida)), Idioma::En => format!("Job {} · suggested guarantee {}", monto(o.trabajo), monto(o.garantia_sugerida)) }}
                             }
                             if let Some(r) = resumen_detalles(&o.detalles) {
                                 p { class: "meta", "{r}" }
@@ -910,7 +939,7 @@ fn Tablero(
                 }
                 if !en_curso.is_empty() {
                     div { style: "height: 24px;" }
-                    p { class: "lead", "En curso" }
+                    p { class: "lead", {lang.t("En curso", "In progress")} }
                     div { class: "stack",
                         for o in en_curso {
                             button {
@@ -921,10 +950,10 @@ fn Tablero(
                                 },
                                 div { class: "card-h",
                                     strong { "{o.nombre}" }
-                                    span { class: chip_estado(o.estado), "{label_estado(o.estado)}" }
+                                    span { class: chip_estado(o.estado), "{lang.label_estado(o.estado)}" }
                                 }
                                 p { class: "meta",
-                                    "Mandante {o.mandante.nombre} · {o.n_partidas} partidas · {monto(o.garantia)} por lado"
+                                    {match lang { Idioma::Es => format!("Mandante {} · {} partidas · {} por lado", o.mandante.nombre, o.n_partidas, monto(o.garantia)), Idioma::En => format!("Client {} · {} stages · {} per side", o.mandante.nombre, o.n_partidas, monto(o.garantia)) }}
                                 }
                             }
                         }
@@ -959,23 +988,24 @@ fn Nueva(
             }
         }
     });
+    let lang = use_context::<Signal<Idioma>>()();
     rsx! {
         div { class: "pane narrow",
-            h1 { "Publicar obra" }
-            p { class: "lead", "Vos sos el mandante. El contratista va a ver esto en el tablero." }
-            label { class: "et", "NOMBRE" }
+            h1 { {lang.t("Publicar obra", "Post a job")} }
+            p { class: "lead", {lang.t("Vos sos el mandante. El contratista va a ver esto en el tablero.", "You are the client. The contractor will see this on the board.")} }
+            label { class: "et", {lang.t("NOMBRE", "NAME")} }
             input {
                 r#type: "text",
                 value: "{obra_nom}",
                 oninput: move |e| obra_nom.set(e.value()),
             }
-            label { class: "et", "TRABAJO" }
+            label { class: "et", {lang.t("TRABAJO", "JOB AMOUNT")} }
             input {
                 r#type: "text",
                 value: "{trabajo}",
                 oninput: move |e| trabajo.set(e.value()),
             }
-            label { class: "et", "GARANTÍA SUGERIDA" }
+            label { class: "et", {lang.t("GARANTÍA SUGERIDA", "SUGGESTED GUARANTEE")} }
             input {
                 r#type: "text",
                 value: "{garantia}",
@@ -983,18 +1013,18 @@ fn Nueva(
             }
             p { class: "hint",
                 match preview.clone() {
-                    Ok(n) => format!("{n} partidas. En cada una los dos encierran {g}."),
-                    Err(e) => e.to_string(),
+                    Ok(n) => match lang { Idioma::Es => format!("{n} partidas. En cada una los dos encierran {g}."), Idioma::En => format!("{n} stages. In each one both lock {g}.") },
+                    Err(e) => lang.error(&e),
                 }
             }
             if let Ok(n) = preview {
-                div { class: "paso", b { "3" } "Qué entra en cada partida" }
-                p { class: "hint", "Como en un presupuesto: cimientos, muros, techumbre. El texto es opcional." }
+                div { class: "paso", b { "3" } {lang.t("Qué entra en cada partida", "What each stage covers")} }
+                p { class: "hint", {lang.t("Como en un presupuesto: cimientos, muros, techumbre. El texto es opcional.", "Like a quote: foundations, walls, roof. The text is optional.")} }
                 for (i, d) in detalles().into_iter().enumerate() {
-                    label { class: "et", "PARTIDA {i + 1}" }
+                    label { class: "et", "{lang.t(\"PARTIDA\", \"STAGE\")} {i + 1}" }
                     input {
                         r#type: "text",
-                        placeholder: "{placeholder_partida(i, n)}",
+                        placeholder: "{lang.placeholder_partida(i, n)}",
                         value: "{d}",
                         oninput: move |e| {
                             let mut v = detalles();
@@ -1012,7 +1042,7 @@ fn Nueva(
                 onclick: move |_| {
                     let Some(m) = yo() else { return };
                     let Some(nodo) = red() else {
-                        err.set(Some("La red todavía no arrancó.".into()));
+                        err.set(Some(lang_now().t("La red todavía no arrancó.", "The network has not started yet.").into()));
                         return;
                     };
                     match Oferta::publicar(m, obra_nom(), t, g, detalles()) {
@@ -1021,10 +1051,10 @@ fn Nueva(
                             nodo.publicar(o);
                             screen.set(Screen::Tablero);
                         }
-                        Err(e) => err.set(Some(e.to_string())),
+                        Err(e) => err.set(Some(lang_now().error(&e))),
                     }
                 },
-                "Publicar en la red"
+                {lang.t("Publicar en la red", "Post to the network")}
             }
         }
     }
@@ -1039,6 +1069,7 @@ fn VerOferta(
     screen: Signal<Screen>,
     err: Signal<Option<String>>,
 ) -> Element {
+    let lang = use_context::<Signal<Idioma>>()();
     let mut detalles = use_signal(|| {
         sel_oferta()
             .map(|o| o.detalles.clone())
@@ -1062,7 +1093,7 @@ fn VerOferta(
         }
     });
     let Some(o) = sel_oferta() else {
-        return rsx! { p { "No hay oferta." } };
+        return rsx! { p { {lang.t("No hay oferta.", "There is no offer.")} } };
     };
     let g: u64 = garantia_acc().chars().filter(|c| c.is_ascii_digit()).collect::<String>().parse().unwrap_or(0);
     let preview = n_partidas(o.trabajo, g);
@@ -1071,9 +1102,9 @@ fn VerOferta(
         div { class: "pane narrow",
             h1 { "{o.nombre}" }
             p { class: "lead",
-                "{o.mandante.nombre} ofrece trabajo por {monto(o.trabajo)}. Garantía sugerida {monto(o.garantia_sugerida)} ({o.n_partidas_sugeridas} partidas)."
+                {match lang { Idioma::Es => format!("{} ofrece trabajo por {}. Garantía sugerida {} ({} partidas).", o.mandante.nombre, monto(o.trabajo), monto(o.garantia_sugerida), o.n_partidas_sugeridas), Idioma::En => format!("{} offers a job for {}. Suggested guarantee {} ({} stages).", o.mandante.nombre, monto(o.trabajo), monto(o.garantia_sugerida), o.n_partidas_sugeridas) }}
             }
-            label { class: "et", "TU GARANTÍA" }
+            label { class: "et", {lang.t("TU GARANTÍA", "YOUR GUARANTEE")} }
             input {
                 r#type: "text",
                 value: "{garantia_acc}",
@@ -1081,20 +1112,20 @@ fn VerOferta(
             }
             p { class: "hint",
                 match preview.clone() {
-                    Ok(n) if contra => format!("Contra: {n} partidas de {g}. El mandante tiene que confirmar."),
-                    Ok(n) => format!("Aceptás {n} partidas. Los dos encierran {g} en cada una."),
-                    Err(e) => e.to_string(),
+                    Ok(n) if contra => match lang { Idioma::Es => format!("Contra: {n} partidas de {g}. El mandante tiene que confirmar."), Idioma::En => format!("Counter: {n} stages of {g}. The client has to confirm.") },
+                    Ok(n) => match lang { Idioma::Es => format!("Aceptás {n} partidas. Los dos encierran {g} en cada una."), Idioma::En => format!("You accept {n} stages. Both lock {g} in each one.") },
+                    Err(e) => lang.error(&e),
                 }
             }
             if let Ok(n) = preview {
-                label { class: "et", "PARTIDAS" }
+                label { class: "et", {lang.t("PARTIDAS", "STAGES")} }
                 if contra {
-                    p { class: "hint", "Al cambiar la garantía, el número de partidas cambia. Completá o ajustá los textos." }
+                    p { class: "hint", {lang.t("Al cambiar la garantía, el número de partidas cambia. Completá o ajustá los textos.", "Changing the guarantee changes the number of stages. Fill in or adjust the texts.")} }
                     for (i, d) in detalles().into_iter().enumerate() {
-                        label { class: "et", "PARTIDA {i + 1}" }
+                        label { class: "et", "{lang.t(\"PARTIDA\", \"STAGE\")} {i + 1}" }
                         input {
                             r#type: "text",
-                            placeholder: "{placeholder_partida(i, n)}",
+                            placeholder: "{lang.placeholder_partida(i, n)}",
                             value: "{d}",
                             oninput: move |e| {
                                 let mut v = detalles();
@@ -1110,7 +1141,7 @@ fn VerOferta(
                         for (i, d) in o.detalles.iter().enumerate() {
                             div { class: "lista-part-item",
                                 b { "{i + 1}" }
-                                span { "{titulo_partida(i, d)}" }
+                                span { "{lang.titulo_partida(i, d)}" }
                             }
                         }
                     }
@@ -1132,12 +1163,12 @@ fn VerOferta(
                                 nodo.publicar_obra(obra);
                                 screen.set(Screen::Tablero);
                             }
-                            Err(e) => err.set(Some(e.to_string())),
+                            Err(e) => err.set(Some(lang_now().error(&e))),
                         },
-                        Err(e) => err.set(Some(e.to_string())),
+                        Err(e) => err.set(Some(lang_now().error(&e))),
                     }
                 },
-                if contra { "Proponer esta garantía" } else { "Aceptar condiciones" }
+                if contra { {lang.t("Proponer esta garantía", "Propose this guarantee")} } else { {lang.t("Aceptar condiciones", "Accept terms")} }
             }
         }
     }
@@ -1157,9 +1188,10 @@ fn Detalle(
     let mut export_msg = use_signal(|| None::<String>);
     let mut extra_nom = use_signal(String::new);
     let mut extra_monto = use_signal(String::new);
+    let lang = use_context::<Signal<Idioma>>()();
     let id = sel_obra().unwrap_or_default();
     let Some(obra) = obras().into_iter().find(|o| o.id == id) else {
-        return rsx! { p { "La obra todavía no llegó. Si la acabás de publicar, esperá al contratista." } };
+        return rsx! { p { {lang.t("La obra todavía no llegó. Si la acabás de publicar, esperá al contratista.", "The job has not arrived yet. If you just posted it, wait for the contractor.")} } };
     };
     let mid = yo().map(|p| p.id).unwrap_or_default();
     let soy_m = obra.mandante.id == mid;
@@ -1183,13 +1215,13 @@ fn Detalle(
         div { class: "pane",
             div { class: "card-h",
                 h1 { "{nom}" }
-                span { class: chip_estado(estado), "{label_estado(estado)}" }
+                span { class: chip_estado(estado), "{lang.label_estado(estado)}" }
             }
             p { class: "lead",
-                "Mandante {mnom} · contratista {cnom} · {n_part} partidas · trabajo {monto(obra.trabajo)}"
+                {match lang { Idioma::Es => format!("Mandante {mnom} · contratista {cnom} · {n_part} partidas · trabajo {}", monto(obra.trabajo)), Idioma::En => format!("Client {mnom} · contractor {cnom} · {n_part} stages · job {}", monto(obra.trabajo)) }}
             }
             if sincronizando {
-                p { class: "hint", "Sincronizando el trato… las acciones esperan a bajar el estado del otro." }
+                p { class: "hint", {lang.t("Sincronizando el trato… las acciones esperan a bajar el estado del otro.", "Syncing the deal… actions wait until the other side's state arrives.")} }
             }
             if let Some(m) = export_msg() {
                 p { class: "hint", "{m}" }
@@ -1199,30 +1231,30 @@ fn Detalle(
                 onclick: {
                     let obra = obra.clone();
                     move |_| {
-                        match export::guardar_txt(&obra) {
-                            Ok(p) => export_msg.set(Some(format!("Guardado en {}", p.display()))),
+                        match export::guardar_txt(&obra, lang_now()) {
+                            Ok(p) => export_msg.set(Some(format!("{} {}", lang_now().t("Guardado en", "Saved to"), p.display()))),
                             Err(e) => export_msg.set(Some(e)),
                         }
                     }
                 },
-                "Exportar texto"
+                {lang.t("Exportar texto", "Export text")}
             }
             button {
                 class: "btn btn-ghost",
                 onclick: {
                     let obra = obra.clone();
                     move |_| {
-                        match export::guardar_pdf(&obra) {
-                            Ok(p) => export_msg.set(Some(format!("Guardado en {}", p.display()))),
+                        match export::guardar_pdf(&obra, lang_now()) {
+                            Ok(p) => export_msg.set(Some(format!("{} {}", lang_now().t("Guardado en", "Saved to"), p.display()))),
                             Err(e) => export_msg.set(Some(e)),
                         }
                     }
                 },
-                "Exportar PDF"
+                {lang.t("Exportar PDF", "Export PDF")}
             }
             if contra {
                 p { class: "hint",
-                    "El contratista propone garantía {monto(garantia)} ({n_part} partidas)."
+                    {match lang { Idioma::Es => format!("El contratista propone garantía {} ({} partidas).", monto(garantia), n_part), Idioma::En => format!("The contractor proposes guarantee {} ({} stages).", monto(garantia), n_part) }}
                 }
                 if soy_m {
                     button {
@@ -1239,11 +1271,11 @@ fn Detalle(
                                     Ok(()) => {
                                         nodo.publicar_obra(obra.clone());
                                     }
-                                    Err(e) => err.set(Some(e.to_string())),
+                                    Err(e) => err.set(Some(lang_now().error(&e))),
                                 }
                             }
                         },
-                        "Confirmar contra"
+                        {lang.t("Confirmar contra", "Confirm counter")}
                     }
                     button {
                         class: "btn btn-ghost",
@@ -1278,25 +1310,25 @@ fn Detalle(
                                             nodo.publicar(oferta);
                                             screen.set(Screen::Tablero);
                                         }
-                                        Err(e) => err.set(Some(e.to_string())),
+                                        Err(e) => err.set(Some(lang_now().error(&e))),
                                     }
                                     }
-                                    Err(e) => err.set(Some(e.to_string())),
+                                    Err(e) => err.set(Some(lang_now().error(&e))),
                                 }
                             }
                         },
-                        "No aceptar esta garantía"
+                        {lang.t("No aceptar esta garantía", "Do not accept this guarantee")}
                     }
                 }
             }
             if estado == EstadoObra::Abandonada {
-                p { class: "hint", "Esta obra se abandonó. El trato quedó cortado." }
+                p { class: "hint", {lang.t("Esta obra se abandonó. El trato quedó cortado.", "This job was abandoned. The deal is cut.")} }
             }
             if let Some(cl) = obra.cierre.clone() {
                 if cl.id == mid {
-                    p { class: "hint", "Esperando que acepten cortar el trato." }
+                    p { class: "hint", {lang.t("Esperando que acepten cortar el trato.", "Waiting for them to accept ending the deal.")} }
                 } else if se_puede_abandonar {
-                    p { class: "lead", "{cl.nombre} quiere cortar el trato." }
+                    p { class: "lead", {match lang { Idioma::Es => format!("{} quiere cortar el trato.", cl.nombre), Idioma::En => format!("{} wants to end the deal.", cl.nombre) }} }
                     button {
                         class: "btn btn-primary",
                         onclick: {
@@ -1313,11 +1345,11 @@ fn Detalle(
                                         nodo.publicar_obra(obra.clone());
                                         screen.set(Screen::Tablero);
                                     }
-                                    Err(e) => err.set(Some(e.to_string())),
+                                    Err(e) => err.set(Some(lang_now().error(&e))),
                                 }
                             }
                         },
-                        "Aceptar cierre"
+                        {lang.t("Aceptar cierre", "Accept close")}
                     }
                     button {
                         class: "btn btn-ghost",
@@ -1334,20 +1366,20 @@ fn Detalle(
                                         err.set(None);
                                         nodo.publicar_obra(obra.clone());
                                     }
-                                    Err(e) => err.set(Some(e.to_string())),
+                                    Err(e) => err.set(Some(lang_now().error(&e))),
                                 }
                             }
                         },
-                        "Seguir con la obra"
+                        {lang.t("Seguir con la obra", "Keep going")}
                     }
                 }
             } else if abierta && se_puede_abandonar {
                 if confirma_abandono() {
                     p { class: "hint",
                         if obra.hay_riesgo() {
-                            "Hay partidas encerradas. El otro tiene que aceptar el cierre."
+                            {lang.t("Hay partidas encerradas. El otro tiene que aceptar el cierre.", "There are locked stages. The other person has to accept the close.")}
                         } else {
-                            "¿Abandonar? Se corta el trato y no se puede deshacer."
+                            {lang.t("¿Abandonar? Se corta el trato y no se puede deshacer.", "Abandon? The deal is cut and cannot be undone.")}
                         }
                     }
                     button {
@@ -1369,32 +1401,32 @@ fn Detalle(
                                             screen.set(Screen::Tablero);
                                         }
                                     }
-                                    Err(e) => err.set(Some(e.to_string())),
+                                    Err(e) => err.set(Some(lang_now().error(&e))),
                                 }
                             }
                         },
-                        if obra.hay_riesgo() { "Proponer cierre" } else { "Sí, abandonar" }
+                        if obra.hay_riesgo() { {lang.t("Proponer cierre", "Propose close")} } else { {lang.t("Sí, abandonar", "Yes, abandon")} }
                     }
                     button {
                         class: "btn btn-ghost",
                         onclick: move |_| confirma_abandono.set(false),
-                        "No"
+                        {lang.t("No", "No")}
                     }
                 } else {
                     button {
                         class: "btn btn-ghost",
                         onclick: move |_| confirma_abandono.set(true),
-                        "Abandonar esta obra"
+                        {lang.t("Abandonar esta obra", "Abandon this job")}
                     }
                 }
             }
-            p { class: "hint", "Entrá a cada partida para avisar que terminó, tratar el porcentaje y ver el hilo." }
+            p { class: "hint", {lang.t("Entrá a cada partida para avisar que terminó, tratar el porcentaje y ver el hilo.", "Open each stage to report finish, deal the percentage and see the thread.")} }
             div { style: "height: 16px;" }
             for (i, p) in partidas.iter().enumerate() {
                 {
                     let on = activa == Some(i);
-                    let titulo = titulo_partida(i, &p.detalle);
-                    let label = label_partida(p);
+                    let titulo = lang.titulo_partida(i, &p.detalle);
+                    let label = lang.label_partida(p);
                     let kind = chip_partida(p.estado);
                     rsx! {
                         button {
@@ -1405,7 +1437,7 @@ fn Detalle(
                             },
                             div { class: "txt",
                                 strong { "{i + 1}  {titulo}" }
-                                span { "{monto(p.capital(garantia))} por lado" }
+                                span { "{monto(p.capital(garantia))} {lang.t(\"por lado\", \"per side\")}" }
                             }
                             span { class: kind, "{label}" }
                         }
@@ -1416,9 +1448,9 @@ fn Detalle(
                 if !abierta {}
                 else if let Some(ex) = obra.extra.clone() {
                     if ex.por.id == mid {
-                        p { class: "hint", "Esperando extra: {ex.detalle} ({monto(ex.monto)} por lado)" }
+                        p { class: "hint", {match lang { Idioma::Es => format!("Esperando extra: {} ({} por lado)", ex.detalle, monto(ex.monto)), Idioma::En => format!("Waiting on extra: {} ({} per side)", ex.detalle, monto(ex.monto)) }} }
                     } else {
-                        p { class: "hint", "{ex.por.nombre} propone extra: {ex.detalle} (+{monto(ex.monto)} por lado)" }
+                        p { class: "hint", {match lang { Idioma::Es => format!("{} propone extra: {} (+{} por lado)", ex.por.nombre, ex.detalle, monto(ex.monto)), Idioma::En => format!("{} proposes extra: {} (+{} per side)", ex.por.nombre, ex.detalle, monto(ex.monto)) }} }
                         button {
                             class: "btn btn-primary",
                             onclick: {
@@ -1434,11 +1466,11 @@ fn Detalle(
                                             err.set(None);
                                             nodo.publicar_obra(obra.clone());
                                         }
-                                        Err(e) => err.set(Some(e.to_string())),
+                                        Err(e) => err.set(Some(lang_now().error(&e))),
                                     }
                                 }
                             },
-                            "Aceptar extra"
+                            {lang.t("Aceptar extra", "Accept extra")}
                         }
                         button {
                             class: "btn btn-ghost",
@@ -1455,25 +1487,25 @@ fn Detalle(
                                             err.set(None);
                                             nodo.publicar_obra(obra.clone());
                                         }
-                                        Err(e) => err.set(Some(e.to_string())),
+                                        Err(e) => err.set(Some(lang_now().error(&e))),
                                     }
                                 }
                             },
-                            "No agregar"
+                            {lang.t("No agregar", "Do not add")}
                         }
                     }
                 } else if abierta && se_puede_abandonar && estado != EstadoObra::Contra {
-                    label { class: "et", "PARTIDA EXTRA (OPCIONAL)" }
+                    label { class: "et", {lang.t("PARTIDA EXTRA (OPCIONAL)", "EXTRA STAGE (OPTIONAL)")} }
                     input {
                         r#type: "text",
-                        placeholder: "P. ej. Techumbre extra",
+                        placeholder: lang.t("P. ej. Techumbre extra", "E.g. Extra roof"),
                         value: "{extra_nom}",
                         oninput: move |e| extra_nom.set(e.value()),
                     }
-                    label { class: "et", "MONTO POR LADO" }
+                    label { class: "et", {lang.t("MONTO POR LADO", "AMOUNT PER SIDE")} }
                     input {
                         r#type: "text",
-                        placeholder: "P. ej. 3000",
+                        placeholder: lang.t("P. ej. 3000", "E.g. 3000"),
                         value: "{extra_monto}",
                         oninput: move |e| extra_monto.set(e.value()),
                     }
@@ -1492,7 +1524,7 @@ fn Detalle(
                                     .parse()
                                     .unwrap_or(0);
                                 if m == 0 {
-                                    err.set(Some("La extra lleva un monto mayor a cero.".into()));
+                                    err.set(Some(lang_now().t("La extra lleva un monto mayor a cero.", "The extra needs an amount greater than zero.").into()));
                                     return;
                                 }
                                 if !exigir_sesion(red, yo, &obra, err) {
@@ -1507,11 +1539,11 @@ fn Detalle(
                                         extra_monto.set(String::new());
                                         nodo.publicar_obra(obra.clone());
                                     }
-                                    Err(e) => err.set(Some(e.to_string())),
+                                    Err(e) => err.set(Some(lang_now().error(&e))),
                                 }
                             }
                         },
-                        "Proponer extra"
+                        {lang.t("Proponer extra", "Propose extra")}
                     }
                 }
             }
@@ -1533,6 +1565,7 @@ fn VerPartida(
     let mut nota = use_signal(String::new);
     let mut confirma_encerrar = use_signal(|| false);
     let mut detalle_edit = use_signal(String::new);
+    let lang = use_context::<Signal<Idioma>>()();
     use_effect(move || {
         let id = sel_obra();
         let idx = sel_partida();
@@ -1548,13 +1581,13 @@ fn VerPartida(
     });
     let id = sel_obra().unwrap_or_default();
     let Some(obra) = obras().into_iter().find(|o| o.id == id) else {
-        return rsx! { p { "No está esa obra." } };
+        return rsx! { p { {lang.t("No está esa obra.", "That job is not here.")} } };
     };
     let Some(i) = sel_partida() else {
-        return rsx! { p { "Elegí una partida." } };
+        return rsx! { p { {lang.t("Elegí una partida.", "Pick a stage.")} } };
     };
     let Some(p) = obra.partidas.get(i).cloned() else {
-        return rsx! { p { "No está esa partida." } };
+        return rsx! { p { {lang.t("No está esa partida.", "That stage is not here.")} } };
     };
     let mid = yo().map(|x| x.id).unwrap_or_default();
     let soy_m = obra.mandante.id == mid;
@@ -1568,8 +1601,8 @@ fn VerPartida(
         Some(Rol::Contratista) => obra.contratista.nombre.clone(),
         None => String::new(),
     };
-    let titulo = titulo_partida(i, &p.detalle);
-    let label = label_partida(&p);
+    let titulo = lang.titulo_partida(i, &p.detalle);
+    let label = lang.label_partida(&p);
     let activa = obra.activa() == Some(i);
     let contra = obra.estado == EstadoObra::Contra;
     let garantia = obra.garantia;
@@ -1591,20 +1624,20 @@ fn VerPartida(
             button {
                 class: "btn btn-ghost",
                 onclick: move |_| screen.set(Screen::Detalle),
-                "Volver a la obra"
+                {lang.t("Volver a la obra", "Back to the job")}
             }
             div { class: "card-h",
                 h1 { "{i + 1}  {titulo}" }
                 span { class: chip_partida(p.estado), "{label}" }
             }
             p { class: "lead",
-                "{monto(p.capital(garantia))} por lado. Mandante {obra.mandante.nombre} · contratista {obra.contratista.nombre}"
+                {match lang { Idioma::Es => format!("{} por lado. Mandante {} · contratista {}", monto(p.capital(garantia)), obra.mandante.nombre, obra.contratista.nombre), Idioma::En => format!("{} per side. Client {} · contractor {}", monto(p.capital(garantia)), obra.mandante.nombre, obra.contratista.nombre) }}
             }
             if sincronizando {
-                p { class: "hint", "Sincronizando el trato… las acciones esperan a bajar el estado del otro." }
+                p { class: "hint", {lang.t("Sincronizando el trato… las acciones esperan a bajar el estado del otro.", "Syncing the deal… actions wait until the other side's state arrives.")} }
             }
             if !cortada && p.estado == PartidaEstado::Pendiente && (soy_m || soy_c) {
-                label { class: "et", "TEXTO" }
+                label { class: "et", {lang.t("TEXTO", "TEXT")} }
                 input {
                     r#type: "text",
                     value: "{detalle_edit}",
@@ -1622,33 +1655,33 @@ fn VerPartida(
                                     err.set(None);
                                     nodo.publicar_obra(obra.clone());
                                 }
-                                Err(e) => err.set(Some(e.to_string())),
+                                Err(e) => err.set(Some(lang_now().error(&e))),
                             }
                         }
                     },
-                    "Guardar texto"
+                    {lang.t("Guardar texto", "Save text")}
                 }
             }
             if cerrado {
                 if let Some(r) = p.recibo.as_ref() {
                     div { class: "recibo",
-                        strong { "Recibo · {r.titulo}" }
-                        p { "Pagó {r.porcentaje}% · {monto(r.monto)} · aceptó {r.acepto_nombre} · {fmt_cuando(r.cuando)}" }
+                        strong { "{lang.t(\"Recibo\", \"Receipt\")} · {r.titulo}" }
+                        p { {match lang { Idioma::Es => format!("Pagó {}% · {} · aceptó {} · {}", r.porcentaje, monto(r.monto), r.acepto_nombre, lang.fmt_cuando(r.cuando)), Idioma::En => format!("Paid {}% · {} · accepted by {} · {}", r.porcentaje, monto(r.monto), r.acepto_nombre, lang.fmt_cuando(r.cuando)) }} }
                     }
                 } else {
                     p { class: "hint",
-                        "Cerró al {p.pago.unwrap_or(0)}% ({monto(monto_pct(garantia, p.pago.unwrap_or(0)))}). El hilo quedó guardado."
+                        {match lang { Idioma::Es => format!("Cerró al {}% ({}). El hilo quedó guardado.", p.pago.unwrap_or(0), monto(monto_pct(garantia, p.pago.unwrap_or(0)))), Idioma::En => format!("Closed at {}% ({}). The thread was saved.", p.pago.unwrap_or(0), monto(monto_pct(garantia, p.pago.unwrap_or(0)))) }}
                     }
                 }
             }
             if let Some(q) = p.encerrado_por.as_ref() {
-                p { class: "meta", "Encerró {q.nombre} · {fmt_cuando(p.encerrado_cuando)}" }
+                p { class: "meta", {match lang { Idioma::Es => format!("Encerró {} · {}", q.nombre, lang.fmt_cuando(p.encerrado_cuando)), Idioma::En => format!("Locked by {} · {}", q.nombre, lang.fmt_cuando(p.encerrado_cuando)) }} }
             }
             if !p.notas.is_empty() {
                 div { class: "notas",
                     for n in p.notas.iter() {
                         div { class: "nota",
-                            strong { "{n.autor_nombre} · {n.porcentaje}% · {fmt_cuando(n.cuando)}" }
+                            strong { "{n.autor_nombre} · {n.porcentaje}% · {lang.fmt_cuando(n.cuando)}" }
                             if !n.texto.is_empty() {
                                 p { "{n.texto}" }
                             }
@@ -1658,11 +1691,11 @@ fn VerPartida(
             }
             if !cortada && p.estado == PartidaEstado::Pendiente {
                 if contra {
-                    p { class: "hint", "Primero hay que confirmar la contra de la obra." }
+                    p { class: "hint", {lang.t("Primero hay que confirmar la contra de la obra.", "The job counter has to be confirmed first.")} }
                 } else if !activa {
-                    p { class: "hint", "Todavía no toca. Cerrá la partida que está en curso." }
+                    p { class: "hint", {lang.t("Todavía no toca. Cerrá la partida que está en curso.", "Not this one yet. Close the stage that is underway.")} }
                 } else if confirma_encerrar() {
-                    p { class: "hint", "Los dos tienen que confirmar el encierre. El otro tiene que estar en línea." }
+                    p { class: "hint", {lang.t("Los dos tienen que confirmar el encierre. El otro tiene que estar en línea.", "Both have to confirm the lock. The other person has to be online.")} }
                     button {
                         class: "btn btn-primary",
                         onclick: {
@@ -1679,29 +1712,29 @@ fn VerPartida(
                                         confirma_encerrar.set(false);
                                         nodo.publicar_obra(obra.clone());
                                     }
-                                    Err(e) => err.set(Some(e.to_string())),
+                                    Err(e) => err.set(Some(lang_now().error(&e))),
                                 }
                             }
                         },
-                        "Proponer encerrar"
+                        {lang.t("Proponer encerrar", "Propose lock")}
                     }
                     button {
                         class: "btn btn-ghost",
                         onclick: move |_| confirma_encerrar.set(false),
-                        "No"
+                        {lang.t("No", "No")}
                     }
                 } else {
                     div { style: "height: 16px;" }
                     button {
                         class: "btn btn-primary",
                         onclick: move |_| confirma_encerrar.set(true),
-                        "Encerrar esta partida (stub XMR)"
+                        {lang.t("Encerrar esta partida (stub XMR)", "Lock this stage (XMR stub)")}
                     }
                 }
             }
             if !cortada && p.estado == PartidaEstado::Encerrando {
                 if soy_prop_enc {
-                    p { class: "hint", "Esperando que el otro confirme el encierre." }
+                    p { class: "hint", {lang.t("Esperando que el otro confirme el encierre.", "Waiting for the other person to confirm the lock.")} }
                     button {
                         class: "btn btn-ghost",
                         onclick: {
@@ -1717,14 +1750,14 @@ fn VerPartida(
                                         err.set(None);
                                         nodo.publicar_obra(obra.clone());
                                     }
-                                    Err(e) => err.set(Some(e.to_string())),
+                                    Err(e) => err.set(Some(lang_now().error(&e))),
                                 }
                             }
                         },
-                        "Cancelar propuesta"
+                        {lang.t("Cancelar propuesta", "Cancel proposal")}
                     }
                 } else {
-                    p { class: "lead", "El otro quiere encerrar esta partida. Los dos tienen que confirmar." }
+                    p { class: "lead", {lang.t("El otro quiere encerrar esta partida. Los dos tienen que confirmar.", "The other person wants to lock this stage. Both have to confirm.")} }
                     button {
                         class: "btn btn-primary",
                         onclick: {
@@ -1740,11 +1773,11 @@ fn VerPartida(
                                         err.set(None);
                                         nodo.publicar_obra(obra.clone());
                                     }
-                                    Err(e) => err.set(Some(e.to_string())),
+                                    Err(e) => err.set(Some(lang_now().error(&e))),
                                 }
                             }
                         },
-                        "Confirmar encierre"
+                        {lang.t("Confirmar encierre", "Confirm lock")}
                     }
                     button {
                         class: "btn btn-ghost",
@@ -1761,25 +1794,25 @@ fn VerPartida(
                                         err.set(None);
                                         nodo.publicar_obra(obra.clone());
                                     }
-                                    Err(e) => err.set(Some(e.to_string())),
+                                    Err(e) => err.set(Some(lang_now().error(&e))),
                                 }
                             }
                         },
-                        "No encerrar"
+                        {lang.t("No encerrar", "Do not lock")}
                     }
                 }
             }
             if !cortada && p.estado == PartidaEstado::Encerrada && soy_c {
-                label { class: "et", "PORCENTAJE A COBRAR" }
+                label { class: "et", {lang.t("PORCENTAJE A COBRAR", "PERCENT TO CHARGE")} }
                 input {
                     r#type: "text",
                     value: "{pct}",
                     oninput: move |e| pct.set(e.value()),
                 }
-                label { class: "et", "NOTA ({n_nota}/{MAX_NOTA})" }
+                label { class: "et", "{lang.t(\"NOTA\", \"NOTE\")} ({n_nota}/{MAX_NOTA})" }
                 input {
                     r#type: "text",
-                    placeholder: "Terminé las fundaciones",
+                    placeholder: lang.t("Terminé las fundaciones", "Foundations are done"),
                     value: "{nota}",
                     oninput: move |e| nota.set(recorta_nota(e.value())),
                 }
@@ -1799,22 +1832,22 @@ fn VerPartida(
                                     err.set(None);
                                     nodo.publicar_obra(obra.clone());
                                 }
-                                Err(e) => err.set(Some(e.to_string())),
+                                Err(e) => err.set(Some(lang_now().error(&e))),
                             }
                         }
                     },
-                    "Avisar que terminé"
+                    {lang.t("Avisar que terminé", "Report that I finished")}
                 }
             }
             if !cortada && p.estado == PartidaEstado::Encerrada && soy_m {
-                p { class: "hint", "El contratista avisa cuando termina y propone cuánto se paga." }
+                p { class: "hint", {lang.t("El contratista avisa cuando termina y propone cuánto se paga.", "The contractor reports when they finish and proposes how much is paid.")} }
             }
             if !cortada && p.estado == PartidaEstado::EnTrato {
                 if let Some(n) = propuesto {
-                    p { class: "lead", "Sobre la mesa: {n}% ({monto(monto_pct(garantia, n))})." }
+                    p { class: "lead", {match lang { Idioma::Es => format!("Sobre la mesa: {n}% ({}).", monto(monto_pct(garantia, n))), Idioma::En => format!("On the table: {n}% ({}).", monto(monto_pct(garantia, n))) }} }
                 }
                 if mi_turno == Some(false) {
-                    p { class: "hint", "Esperando a {espera_nom}." }
+                    p { class: "hint", {match lang { Idioma::Es => format!("Esperando a {espera_nom}."), Idioma::En => format!("Waiting for {espera_nom}.") }} }
                 }
                 if mi_turno == Some(true) {
                     div { style: "height: 12px;" }
@@ -1833,22 +1866,22 @@ fn VerPartida(
                                         err.set(None);
                                         nodo.publicar_obra(obra.clone());
                                     }
-                                    Err(e) => err.set(Some(e.to_string())),
+                                    Err(e) => err.set(Some(lang_now().error(&e))),
                                 }
                             }
                         },
-                        "Aceptar {propuesto.unwrap_or(0)}%"
+                        {match lang { Idioma::Es => format!("Aceptar {}%", propuesto.unwrap_or(0)), Idioma::En => format!("Accept {}%", propuesto.unwrap_or(0)) }}
                     }
-                    label { class: "et", "OTRO PORCENTAJE" }
+                    label { class: "et", {lang.t("OTRO PORCENTAJE", "OTHER PERCENT")} }
                     input {
                         r#type: "text",
                         value: "{pct}",
                         oninput: move |e| pct.set(e.value()),
                     }
-                    label { class: "et", "NOTA ({n_nota}/{MAX_NOTA})" }
+                    label { class: "et", "{lang.t(\"NOTA\", \"NOTE\")} ({n_nota}/{MAX_NOTA})" }
                     input {
                         r#type: "text",
-                        placeholder: "Falta la entrada de auto",
+                        placeholder: lang.t("Falta la entrada de auto", "The driveway is missing"),
                         value: "{nota}",
                         oninput: move |e| nota.set(recorta_nota(e.value())),
                     }
@@ -1867,11 +1900,11 @@ fn VerPartida(
                                         err.set(None);
                                         nodo.publicar_obra(obra.clone());
                                     }
-                                    Err(e) => err.set(Some(e.to_string())),
+                                    Err(e) => err.set(Some(lang_now().error(&e))),
                                 }
                             }
                         },
-                        "Proponer este porcentaje"
+                        {lang.t("Proponer este porcentaje", "Propose this percentage")}
                     }
                 }
             }

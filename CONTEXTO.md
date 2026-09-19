@@ -2,7 +2,7 @@
 
 Producto de escritorio (Dioxus) para un **trato de obra entre dos personas**, sin servidor. No es un chat. El mandante publica un aviso; el contratista lo ve y acepta o contraoferta. Monero sigue en stub (`2+2` en `xmr-joint`). No hay Bitcoin.
 
-Hablamos en español. UI rioplatense/chilena (“Poné”, “te toca”).
+Hablamos en español. UI rioplatense/chilena (“Poné”, “te toca”) por defecto; el usuario puede pasar a **English** (ES/EN en la barra y en Cuenta). El trato no cambia.
 
 ## Crates
 
@@ -10,7 +10,7 @@ Hablamos en español. UI rioplatense/chilena (“Poné”, “te toca”).
 |---|---|
 | `konstruado-core` | Dominio: persona, oferta, obra, partidas, contra, extra, recibo, fusión. Sin UI ni Tor. |
 | `konstruado-net` | Encuentro: TCP local `17432`, gossip DHT, Tor propio + onion horneado. |
-| `konstruado` | Ventana: pantallas, persistir, exportar, temas. |
+| `konstruado` | Ventana: pantallas, persistir, exportar, temas, idioma. |
 | `xmr-joint` | Stub de encierro. No implementar cripto a menos que se pida. |
 
 El split está bien. No hace falta un refactor grande. `main.rs` es largo; partir pantallas solo si duele.
@@ -41,8 +41,8 @@ No son un chat de usuarios: se ven **obras y avisos**, no una lista tipo WhatsAp
 ## Persistencia y UI
 
 - `~/.konstruado/estado.json` (override `KONSTRUADO_DATOS`). Dos ventanas en un PC: **dos dirs**.
-- Campos nuevos en JSON llevan `#[serde(default)]`. Si el parse falla, se copia a `estado.json.bak` y no se debe entrar como usuario nuevo hasta revisar.
-- Click en el nombre → cuenta: cambiar nombre/rol (el **id** no cambia), tema **Vivo** (default) / **Calma**.
+- Campos nuevos en JSON llevan `#[serde(default)]` (`tema` → vivo, `idioma` → es). Si el parse falla, se copia a `estado.json.bak` y no se debe entrar como usuario nuevo hasta revisar.
+- Click en el nombre → cuenta: cambiar nombre/rol (el **id** no cambia), tema **Vivo** (default) / **Calma**, idioma **Español** (default) / **English**. ES/EN también está en la barra de arriba (incluso en la bienvenida).
 - Tablero central = solo **activas** (avisos sin tomar + obras en curso). Sidebar **Mis obras** = historial en las que participás, más reciente arriba (`actualizado`).
 - **Te toca** = interacción de un trato abierto (contra, %, extra), no “alguien publicó”.
 - Exportar constancia: `.txt` y `.pdf` desde el detalle de la obra.

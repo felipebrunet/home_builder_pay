@@ -77,8 +77,26 @@ body {
   cursor: pointer;
 }
 
-.quien {
+.lang {
   margin-left: auto;
+  display: flex;
+  gap: 4px;
+}
+.lang-opt {
+  background: none;
+  border: 0;
+  padding: 4px 8px;
+  font-size: 13px;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  color: var(--apagado);
+  cursor: pointer;
+  font-family: inherit;
+}
+.lang-opt.on { color: var(--tinta); }
+.lang-opt:hover { color: var(--tinta); }
+
+.quien {
   color: var(--apagado);
   font-size: 15px;
   background: none;

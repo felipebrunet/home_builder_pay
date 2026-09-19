@@ -16,10 +16,16 @@ pub struct EstadoDisco {
     pub presentes: Vec<Persona>,
     #[serde(default = "tema_vivo")]
     pub tema: String,
+    #[serde(default = "idioma_es")]
+    pub idioma: String,
 }
 
 fn tema_vivo() -> String {
     "vivo".into()
+}
+
+fn idioma_es() -> String {
+    "es".into()
 }
 
 impl EstadoDisco {
@@ -89,12 +95,14 @@ mod tests {
             obras: vec![],
             presentes: vec![yo.clone()],
             tema: "vivo".into(),
+            idioma: "en".into(),
         };
         guardar(&e);
         let b = cargar();
         assert_eq!(b.yo.unwrap().nombre, "Don Dinero");
         assert_eq!(b.rol, Some(Rol::Mandante));
         assert_eq!(b.tema, "vivo");
+        assert_eq!(b.idioma, "en");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
