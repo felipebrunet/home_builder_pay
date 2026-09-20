@@ -64,6 +64,7 @@ Primero mandante (esperar `sala abierta`). Después contratista. La primera vez 
 ## Qué no hacer sin que lo pidan
 
 - Implementar Monero o Bitcoin.
+- Android / APK. Otro proyecto (Orbot, mandante en PC).
 - Reescribir iced/Tauri.
 - Meter un servidor o un keyword que el usuario tipeé.
 - Refactor cosmético de `main.rs`.
