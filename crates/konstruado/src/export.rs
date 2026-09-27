@@ -1,10 +1,10 @@
 use std::path::PathBuf;
 
-use konstruado_core::{monto, Obra, PartidaEstado};
+use konstruado_core::{monto, Obra, PartidaEstado, TextoLeido};
 
 use crate::i18n::Idioma;
 
-pub fn constancia(obra: &Obra, lang: Idioma) -> String {
+pub fn constancia(obra: &Obra, lang: Idioma, sec: &str) -> String {
     let mut s = String::new();
     s.push_str(lang.t(
         "KONSTRUADO — constancia de obra\n",
@@ -44,11 +44,15 @@ pub fn constancia(obra: &Obra, lang: Idioma) -> String {
         obra.n_partidas
     ));
     if let Some(ex) = obra.extra.as_ref() {
+        let detalle = match obra.leer_extra(sec) {
+            TextoLeido::Plano(t) => t,
+            TextoLeido::Cerrado => lang.t("Texto cifrado", "Encrypted text").into(),
+        };
         s.push_str(&format!(
             "{} {}: {} ({})\n",
             lang.t("Partida extra propuesta por", "Extra stage proposed by"),
             ex.por.nombre,
-            ex.detalle,
+            detalle,
             monto(ex.monto)
         ));
     }
@@ -86,8 +90,12 @@ pub fn constancia(obra: &Obra, lang: Idioma) -> String {
                     n.autor_nombre,
                     n.porcentaje
                 ));
-                if !n.texto.is_empty() {
-                    s.push_str(&format!("    {}\n", n.texto));
+                let cuerpo = match obra.leer_nota(n, sec) {
+                    TextoLeido::Plano(t) => t,
+                    TextoLeido::Cerrado => lang.t("Nota cifrada", "Encrypted note").into(),
+                };
+                if !cuerpo.is_empty() {
+                    s.push_str(&format!("    {cuerpo}\n"));
                 }
             }
         }
@@ -109,9 +117,9 @@ pub fn constancia(obra: &Obra, lang: Idioma) -> String {
     s
 }
 
-pub fn guardar_txt(obra: &Obra, lang: Idioma) -> Result<PathBuf, String> {
+pub fn guardar_txt(obra: &Obra, lang: Idioma, sec: &str) -> Result<PathBuf, String> {
     let suggested = format!("konstruado-{}.txt", slug(&obra.nombre));
-    let texto = constancia(obra, lang);
+    let texto = constancia(obra, lang, sec);
     if let Some(path) = rfd::FileDialog::new()
         .set_title(lang.t("Exportar constancia", "Export record"))
         .set_file_name(&suggested)
@@ -122,11 +130,14 @@ pub fn guardar_txt(obra: &Obra, lang: Idioma) -> Result<PathBuf, String> {
         return Ok(path);
     }
     Err(lang
-        .t("No se eligió dónde guardar.", "No save location was chosen.")
+        .t(
+            "No se eligió dónde guardar.",
+            "No save location was chosen.",
+        )
         .into())
 }
 
-pub fn guardar_pdf(obra: &Obra, lang: Idioma) -> Result<PathBuf, String> {
+pub fn guardar_pdf(obra: &Obra, lang: Idioma, sec: &str) -> Result<PathBuf, String> {
     let suggested = format!("konstruado-{}.pdf", slug(&obra.nombre));
     let Some(path) = rfd::FileDialog::new()
         .set_title(lang.t("Exportar PDF", "Export PDF"))
@@ -135,21 +146,24 @@ pub fn guardar_pdf(obra: &Obra, lang: Idioma) -> Result<PathBuf, String> {
         .save_file()
     else {
         return Err(lang
-            .t("No se eligió dónde guardar.", "No save location was chosen.")
+            .t(
+                "No se eligió dónde guardar.",
+                "No save location was chosen.",
+            )
             .into());
     };
-    let bytes = pdf_bytes(obra, lang)?;
+    let bytes = pdf_bytes(obra, lang, sec)?;
     std::fs::write(&path, bytes).map_err(|e| e.to_string())?;
     Ok(path)
 }
 
-fn pdf_bytes(obra: &Obra, lang: Idioma) -> Result<Vec<u8>, String> {
+fn pdf_bytes(obra: &Obra, lang: Idioma, sec: &str) -> Result<Vec<u8>, String> {
     use printpdf::*;
     use std::io::Cursor;
 
     let (doc, page1, layer1) = PdfDocument::new("Konstruado", Mm(210.0), Mm(297.0), "Layer");
     let font = pdf_font(&doc)?;
-    let lines = wrap_lines(&constancia(obra, lang), 92);
+    let lines = wrap_lines(&constancia(obra, lang, sec), 92);
     let mut pages: Vec<(PdfPageIndex, PdfLayerIndex)> = vec![(page1, layer1)];
     let mut page_i = 0usize;
     let mut y = 280.0;
@@ -258,17 +272,23 @@ mod tests {
     fn constancia_lleva_nombres() {
         let m = Persona::nueva("Don Dinero").unwrap();
         let c = Persona::nueva("Don Chasquilla").unwrap();
-        let o = Oferta::publicar(m, "Casa El Quisco", 10_000, 5_000, vec!["Fundaciones".into()])
-            .unwrap();
+        let o = Oferta::publicar(
+            m,
+            "Casa El Quisco",
+            10_000,
+            5_000,
+            vec!["Fundaciones".into()],
+        )
+        .unwrap();
         let a = Aceptacion::de(&o, c, 5_000).unwrap();
         let obra = konstruado_core::Obra::desde_oferta(o, a).unwrap();
-        let t = constancia(&obra, Idioma::Es);
+        let t = constancia(&obra, Idioma::Es, "");
         assert!(t.contains("Casa El Quisco"));
         assert!(t.contains("Don Dinero"));
         assert!(t.contains("Don Chasquilla"));
         assert!(t.contains("Fundaciones"));
         assert!(t.contains("2"));
-        let en = constancia(&obra, Idioma::En);
+        let en = constancia(&obra, Idioma::En, "");
         assert!(en.contains("job record"));
         assert!(en.contains("Client"));
     }

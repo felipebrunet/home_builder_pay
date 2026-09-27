@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
-use konstruado_core::{Oferta, Obra, Persona, Rol};
+use konstruado_core::{Obra, Oferta, Persona, Rol};
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct EstadoDisco {
@@ -18,6 +18,9 @@ pub struct EstadoDisco {
     pub tema: String,
     #[serde(default = "idioma_es")]
     pub idioma: String,
+    /// X25519 secret, base64. Stays in this data dir. Never gossiped.
+    #[serde(default)]
+    pub clave_sec: String,
 }
 
 fn tema_vivo() -> String {
@@ -96,6 +99,7 @@ mod tests {
             presentes: vec![yo.clone()],
             tema: "vivo".into(),
             idioma: "en".into(),
+            clave_sec: String::new(),
         };
         guardar(&e);
         let b = cargar();

@@ -1,5 +1,12 @@
 use super::*;
 
+fn par(nombre: &str) -> (Persona, String) {
+    let mut p = Persona::nueva(nombre).unwrap();
+    let (sec, pubk) = generar_clave();
+    p.clave_pub = pubk;
+    (p, sec)
+}
+
 #[test]
 fn renombrar_conserva_id() {
     let mut p = Persona::nueva("José").unwrap();
@@ -334,6 +341,85 @@ fn rechazar_extra_no_vuelve_con_el_chisme() {
     assert!(mandante.extra.is_none());
     mandante.fusionar(propuesta);
     assert!(mandante.extra.is_none());
+}
+
+#[test]
+fn obra_en_curso_sale_del_tablero() {
+    let (m, _) = par("Alice");
+    let (c, _) = par("Bob");
+    let o = Oferta::publicar(m.clone(), "Casa", 10_000, 2_000, vec![]).unwrap();
+    let id = o.id.clone();
+    assert!(oferta_en_tablero(&id, &[]));
+    let a = Aceptacion::de(&o, c, 1_000).unwrap();
+    let mut obra = Obra::desde_oferta(o, a).unwrap();
+    assert_eq!(obra.estado, EstadoObra::Contra);
+    assert!(!oferta_en_tablero(&id, std::slice::from_ref(&obra)));
+    assert!(obra.participa(&m.id));
+    assert!(!obra.participa("carol"));
+    obra.rechazar_contra(&m.id).unwrap();
+    assert!(oferta_en_tablero(&id, std::slice::from_ref(&obra)));
+}
+
+#[test]
+fn carol_ve_la_caja_y_no_el_texto() {
+    let (m, ms) = par("Alice");
+    let (c, cs) = par("Bob");
+    let (_carol, carol_s) = par("Carol");
+    let o = Oferta::publicar(m.clone(), "Casa", 10_000, 2_000, vec!["Muro".into()]).unwrap();
+    let a = Aceptacion::de(&o, c.clone(), 2_000).unwrap();
+    let mut obra = Obra::desde_oferta(o, a).unwrap();
+    obra.encerrar_proponer(0, &m).unwrap();
+    obra.encerrar_confirmar(0, &c).unwrap();
+    obra.avisar_termino(0, &c, 100, "Terminé el muro").unwrap();
+    obra.preparar_para_red(&c.id, &c.clave_pub, &cs).unwrap();
+    assert!(!obra.partidas[0].notas[0].caja.contains("Terminé"));
+    assert!(obra.partidas[0].notas[0].texto.is_empty());
+    assert!(!obra.partidas[0].notas[0].caja.is_empty());
+    match obra.leer_nota(&obra.partidas[0].notas[0], &cs) {
+        TextoLeido::Plano(t) => assert_eq!(t, "Terminé el muro"),
+        TextoLeido::Cerrado => panic!("bob no pudo abrir su nota"),
+    }
+    match obra.leer_nota(&obra.partidas[0].notas[0], &ms) {
+        TextoLeido::Plano(t) => assert_eq!(t, "Terminé el muro"),
+        TextoLeido::Cerrado => panic!("alice no pudo abrir la nota"),
+    }
+    match obra.leer_nota(&obra.partidas[0].notas[0], &carol_s) {
+        TextoLeido::Cerrado => {}
+        TextoLeido::Plano(t) => panic!("carol leyó {t}"),
+    }
+
+    let mut clara = obra.clone();
+    clara.partidas[0].notas[0].caja.clear();
+    clara.partidas[0].notas[0].texto = "Terminé el muro".into();
+    clara.fusionar(obra.clone());
+    assert!(clara.partidas[0].notas[0].texto.is_empty());
+    assert!(!clara.partidas[0].notas[0].caja.is_empty());
+}
+
+#[test]
+fn extra_cifrada_vuelve_al_aceptar() {
+    let (m, ms) = par("Alice");
+    let (c, cs) = par("Bob");
+    let o = Oferta::publicar(m.clone(), "Casa", 100, 50, vec![]).unwrap();
+    let a = Aceptacion::de(&o, c.clone(), 50).unwrap();
+    let mut obra = Obra::desde_oferta(o, a).unwrap();
+    obra.proponer_extra(&c, "Techumbre extra", 30).unwrap();
+    obra.preparar_para_red(&c.id, &c.clave_pub, &cs).unwrap();
+    assert!(obra.extra.as_ref().unwrap().detalle.is_empty());
+    assert!(!obra
+        .extra
+        .as_ref()
+        .unwrap()
+        .detalle_caja
+        .contains("Techumbre"));
+    match obra.leer_extra(&ms) {
+        TextoLeido::Plano(t) => assert_eq!(t, "Techumbre extra"),
+        TextoLeido::Cerrado => panic!("alice no pudo abrir el extra"),
+    }
+    obra.abrir_extra(&ms).unwrap();
+    obra.aceptar_extra(&m).unwrap();
+    assert_eq!(obra.partidas.last().unwrap().detalle, "Techumbre extra");
+    assert_eq!(obra.trabajo, 130);
 }
 
 #[test]

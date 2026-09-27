@@ -10,6 +10,9 @@ pub struct Persona {
     pub nombre: String,
     #[serde(default)]
     pub visto: i64,
+    /// X25519 public key, base64. The secret never leaves this machine.
+    #[serde(default)]
+    pub clave_pub: String,
 }
 
 impl Persona {
@@ -19,6 +22,7 @@ impl Persona {
             id: Uuid::new_v4().to_string(),
             nombre,
             visto: 0,
+            clave_pub: String::new(),
         })
     }
 
@@ -81,6 +85,9 @@ pub struct NotaPartida {
     pub texto: String,
     #[serde(default)]
     pub cuando: i64,
+    /// Sealed `texto`. Empty on notes written before sealing existed.
+    #[serde(default)]
+    pub caja: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -161,6 +168,7 @@ impl Partida {
     }
 
     pub fn fusionar(&mut self, otra: Partida) {
+        let notas_src = otra.notas.clone();
         if self.detalle.is_empty() && !otra.detalle.is_empty() {
             self.detalle = otra.detalle.clone();
         }
@@ -189,6 +197,7 @@ impl Partida {
             if otra.recibo.is_some() {
                 self.recibo = otra.recibo;
             }
+            elevar_cajas(&mut self.notas, &notas_src);
             return;
         }
         if otra.estado == self.estado {
@@ -222,6 +231,19 @@ impl Partida {
             && !otra.detalle.is_empty()
         {
             self.detalle = otra.detalle;
+        }
+        elevar_cajas(&mut self.notas, &notas_src);
+    }
+}
+
+fn elevar_cajas(dst: &mut [NotaPartida], src: &[NotaPartida]) {
+    for (a, b) in dst.iter_mut().zip(src.iter()) {
+        if a.caja.is_empty() && !b.caja.is_empty() {
+            a.caja = b.caja.clone();
+            a.texto.clear();
+        }
+        if !a.caja.is_empty() {
+            a.texto.clear();
         }
     }
 }
@@ -348,6 +370,9 @@ pub struct ExtraPartida {
     #[serde(default)]
     pub monto: u64,
     pub por: Persona,
+    /// Sealed `detalle`. The amount stays in the clear.
+    #[serde(default)]
+    pub detalle_caja: String,
 }
 
 impl Obra {
@@ -521,6 +546,7 @@ impl Obra {
             porcentaje: pct,
             texto,
             cuando: ahora(),
+            caja: String::new(),
         });
         p.propuesto = Some(pct);
         p.turno = Some(Rol::Mandante);
@@ -553,6 +579,7 @@ impl Obra {
             porcentaje: pct,
             texto,
             cuando: ahora(),
+            caja: String::new(),
         });
         p.propuesto = Some(pct);
         p.turno = Some(match rol {
@@ -647,6 +674,7 @@ impl Obra {
             detalle,
             monto,
             por: quien.clone(),
+            detalle_caja: String::new(),
         });
         self.tocar();
         Ok(())
@@ -744,6 +772,162 @@ impl Obra {
             .position(|s| s.estado != PartidaEstado::Pagada)
     }
 
+    pub fn participa(&self, id: &str) -> bool {
+        id == self.mandante.id || id == self.contratista.id
+    }
+
+    /// Fill this party's public key when the obra copy still has it empty.
+    pub fn estampar_clave(&mut self, mi_id: &str, mi_pub: &str) {
+        if mi_pub.is_empty() {
+            return;
+        }
+        let p = if self.mandante.id == mi_id {
+            Some(&mut self.mandante)
+        } else if self.contratista.id == mi_id {
+            Some(&mut self.contratista)
+        } else {
+            None
+        };
+        if let Some(p) = p {
+            if p.clave_pub.is_empty() {
+                p.clave_pub = mi_pub.to_string();
+            }
+        }
+    }
+
+    /// Seal plaintext notes and the pending extra. Already-sealed text stays.
+    pub fn preparar_para_red(&mut self, mi_id: &str, mi_pub: &str, mi_sec: &str) -> Result<(), Error> {
+        self.estampar_clave(mi_id, mi_pub);
+        self.sellar(mi_sec)
+    }
+
+    pub fn sellar(&mut self, mi_sec: &str) -> Result<(), Error> {
+        if !self.hay_texto_claro() {
+            self.limpiar_claro_sellado();
+            return Ok(());
+        }
+        let mi_pub = crate::caja::pub_de(mi_sec).ok_or(Error::SinClave)?;
+        let otro = self.pub_otro(&mi_pub)?;
+        if otro.is_empty() {
+            return Err(Error::SinClave);
+        }
+        let id = self.id.clone();
+        for p in &mut self.partidas {
+            for n in &mut p.notas {
+                if n.caja.is_empty() && !n.texto.is_empty() {
+                    n.caja = crate::caja::sellar(mi_sec, &otro, &format!("{id}:nota"), &n.texto)?;
+                    n.texto.clear();
+                }
+            }
+        }
+        if let Some(ex) = self.extra.as_mut() {
+            if ex.detalle_caja.is_empty() && !ex.detalle.is_empty() {
+                ex.detalle_caja =
+                    crate::caja::sellar(mi_sec, &otro, &format!("{id}:extra"), &ex.detalle)?;
+                ex.detalle.clear();
+            }
+        }
+        Ok(())
+    }
+
+    /// Put the extra text back in `detalle` so accepting it can name the stage.
+    pub fn abrir_extra(&mut self, mi_sec: &str) -> Result<(), Error> {
+        let Some(ex) = self.extra.as_ref() else {
+            return Ok(());
+        };
+        if !ex.detalle.is_empty() || ex.detalle_caja.is_empty() {
+            return Ok(());
+        }
+        let mi_pub = crate::caja::pub_de(mi_sec).ok_or(Error::SinClave)?;
+        let otro = self.pub_otro(&mi_pub)?;
+        if otro.is_empty() {
+            return Err(Error::SinClave);
+        }
+        let id = self.id.clone();
+        let plano = crate::caja::abrir(mi_sec, &otro, &format!("{id}:extra"), &ex.detalle_caja)?;
+        if let Some(ex) = self.extra.as_mut() {
+            ex.detalle = plano;
+        }
+        Ok(())
+    }
+
+    pub fn leer_nota(&self, nota: &NotaPartida, mi_sec: &str) -> TextoLeido {
+        if nota.caja.is_empty() {
+            return TextoLeido::Plano(nota.texto.clone());
+        }
+        let Ok(mi_pub) = crate::caja::pub_de(mi_sec).ok_or(Error::SinClave) else {
+            return TextoLeido::Cerrado;
+        };
+        let Ok(otro) = self.pub_otro(&mi_pub) else {
+            return TextoLeido::Cerrado;
+        };
+        if otro.is_empty() {
+            return TextoLeido::Cerrado;
+        }
+        match crate::caja::abrir(mi_sec, &otro, &format!("{}:nota", self.id), &nota.caja) {
+            Ok(t) => TextoLeido::Plano(t),
+            Err(_) => TextoLeido::Cerrado,
+        }
+    }
+
+    pub fn leer_extra(&self, mi_sec: &str) -> TextoLeido {
+        let Some(ex) = self.extra.as_ref() else {
+            return TextoLeido::Plano(String::new());
+        };
+        if ex.detalle_caja.is_empty() {
+            return TextoLeido::Plano(ex.detalle.clone());
+        }
+        let Ok(mi_pub) = crate::caja::pub_de(mi_sec).ok_or(Error::SinClave) else {
+            return TextoLeido::Cerrado;
+        };
+        let Ok(otro) = self.pub_otro(&mi_pub) else {
+            return TextoLeido::Cerrado;
+        };
+        if otro.is_empty() {
+            return TextoLeido::Cerrado;
+        }
+        match crate::caja::abrir(mi_sec, &otro, &format!("{}:extra", self.id), &ex.detalle_caja) {
+            Ok(t) => TextoLeido::Plano(t),
+            Err(_) => TextoLeido::Cerrado,
+        }
+    }
+
+    fn hay_texto_claro(&self) -> bool {
+        self.partidas.iter().any(|p| {
+            p.notas
+                .iter()
+                .any(|n| n.caja.is_empty() && !n.texto.is_empty())
+        }) || self
+            .extra
+            .as_ref()
+            .is_some_and(|e| e.detalle_caja.is_empty() && !e.detalle.is_empty())
+    }
+
+    fn limpiar_claro_sellado(&mut self) {
+        for p in &mut self.partidas {
+            for n in &mut p.notas {
+                if !n.caja.is_empty() {
+                    n.texto.clear();
+                }
+            }
+        }
+        if let Some(ex) = self.extra.as_mut() {
+            if !ex.detalle_caja.is_empty() {
+                ex.detalle.clear();
+            }
+        }
+    }
+
+    fn pub_otro(&self, mi_pub: &str) -> Result<String, Error> {
+        if self.mandante.clave_pub == mi_pub {
+            Ok(self.contratista.clave_pub.clone())
+        } else if self.contratista.clave_pub == mi_pub {
+            Ok(self.mandante.clave_pub.clone())
+        } else {
+            Err(Error::SinClave)
+        }
+    }
+
     fn rol_de(&self, id: &str) -> Result<Rol, Error> {
         if self.mandante.id == id {
             Ok(Rol::Mandante)
@@ -757,6 +941,8 @@ impl Obra {
     /// Gossip must not roll a job backwards. Encerrar/pagar on one
     /// node wins over a stale copy on the other.
     pub fn fusionar(&mut self, mut otra: Obra) {
+        llenar_clave(&mut self.mandante, &otra.mandante);
+        llenar_clave(&mut self.contratista, &otra.contratista);
         let extra_otra = otra.extra.take();
         let seq_otra = otra.extra_seq;
         if otra.estado.rango() > self.estado.rango() {
@@ -804,6 +990,13 @@ impl Obra {
         } else if seq_otra > self.extra_seq {
             self.extra = extra_otra;
             self.extra_seq = seq_otra;
+        } else if seq_otra == self.extra_seq {
+            if let (Some(dst), Some(src)) = (self.extra.as_mut(), extra_otra.as_ref()) {
+                if dst.detalle_caja.is_empty() && !src.detalle_caja.is_empty() {
+                    dst.detalle_caja = src.detalle_caja.clone();
+                    dst.detalle.clear();
+                }
+            }
         }
         if matches!(
             self.estado,
@@ -846,6 +1039,26 @@ impl Obra {
             a.fusionar(b);
         }
     }
+}
+
+fn llenar_clave(dst: &mut Persona, src: &Persona) {
+    if dst.id == src.id && dst.clave_pub.is_empty() && !src.clave_pub.is_empty() {
+        dst.clave_pub = src.clave_pub.clone();
+    }
+}
+
+/// An open notice stays on the board until two people have a live job for it.
+/// A rejected counter puts the notice back.
+pub fn oferta_en_tablero(oferta_id: &str, obras: &[Obra]) -> bool {
+    !obras
+        .iter()
+        .any(|o| o.id == oferta_id && o.estado != EstadoObra::Rechazada)
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum TextoLeido {
+    Plano(String),
+    Cerrado,
 }
 
 fn xmr_hook() -> u32 {

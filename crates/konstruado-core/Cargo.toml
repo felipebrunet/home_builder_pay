@@ -7,6 +7,8 @@ repository.workspace = true
 description = "Construction escrow domain: offers, equal-capital installments"
 
 [dependencies]
+base64 = "0.22"
+crypto_box = { version = "0.9", features = ["chacha20"] }
 serde = { version = "1", features = ["derive"] }
 uuid = { version = "1", features = ["v4", "serde"] }
 xmr-joint.workspace = true

@@ -7,8 +7,8 @@ use std::time::Duration;
 
 use dioxus::prelude::*;
 use konstruado_core::{
-    monto, monto_pct, n_partidas, Aceptacion, EstadoObra, Oferta, Obra, PartidaEstado, Persona, Rol,
-    MAX_NOTA,
+    asegurar_clave, monto, monto_pct, n_partidas, oferta_en_tablero, Aceptacion, EstadoObra, Oferta,
+    Obra, PartidaEstado, Persona, Rol, TextoLeido, MAX_NOTA,
 };
 use konstruado_net::{EstadoTor, Nodo, RED};
 use i18n::Idioma;
@@ -61,7 +61,17 @@ pub(crate) enum Screen {
     Help,
 }
 
-fn persistir(yo: Option<Persona>, rol: Option<Rol>, tema: String, idioma: String, n: &Nodo) {
+#[derive(Clone)]
+struct ClaveSec(String);
+
+fn persistir(
+    yo: Option<Persona>,
+    rol: Option<Rol>,
+    tema: String,
+    idioma: String,
+    clave_sec: String,
+    n: &Nodo,
+) {
     persist::guardar(&persist::EstadoDisco {
         yo,
         rol,
@@ -70,7 +80,39 @@ fn persistir(yo: Option<Persona>, rol: Option<Rol>, tema: String, idioma: String
         presentes: n.presentes(),
         tema,
         idioma,
+        clave_sec,
     });
+}
+
+fn publicar_trato(
+    nodo: &Nodo,
+    mut obra: Obra,
+    quien: Option<Persona>,
+    mut err: Signal<Option<String>>,
+) -> bool {
+    let sec = consume_context::<Signal<ClaveSec>>()().0;
+    let Some(q) = quien else {
+        err.set(Some(
+            lang_now()
+                .t(
+                    "Entrá con tu nombre para cifrar la nota.",
+                    "Sign in with your name to seal the note.",
+                )
+                .into(),
+        ));
+        return false;
+    };
+    match obra.preparar_para_red(&q.id, &q.clave_pub, &sec) {
+        Ok(()) => {
+            nodo.publicar_obra(obra);
+            err.set(None);
+            true
+        }
+        Err(e) => {
+            err.set(Some(lang_now().error(&e)));
+            false
+        }
+    }
 }
 
 fn lang_now() -> Idioma {
@@ -79,7 +121,20 @@ fn lang_now() -> Idioma {
 
 #[component]
 fn App() -> Element {
-    let guardado = use_hook(persist::cargar);
+    let guardado = use_hook(|| {
+        let mut g = persist::cargar();
+        if let Some(yo) = g.yo.as_mut() {
+            let (sec, pubk) = asegurar_clave(&g.clave_sec, &yo.clave_pub);
+            let changed = g.clave_sec != sec || yo.clave_pub != pubk;
+            yo.clave_pub = pubk;
+            g.clave_sec = sec;
+            if changed {
+                persist::guardar(&g);
+            }
+        }
+        g
+    });
+    let clave_sec = use_context_provider(|| Signal::new(ClaveSec(guardado.clave_sec.clone())));
     let mut screen = use_signal(|| {
         if guardado.adentro() {
             Screen::Tablero
@@ -133,7 +188,15 @@ fn App() -> Element {
 
     use_future(move || {
         let ofertas0 = guardado.ofertas.clone();
-        let obras0 = guardado.obras.clone();
+        let mut obras0 = guardado.obras.clone();
+        let sec0 = guardado.clave_sec.clone();
+        if let Some(p) = guardado.yo.clone() {
+            for o in &mut obras0 {
+                if o.participa(&p.id) {
+                    let _ = o.preparar_para_red(&p.id, &p.clave_pub, &sec0);
+                }
+            }
+        }
         let yo_id = guardado.yo.as_ref().map(|p| p.id.clone());
         let presentes0: Vec<Persona> = guardado
             .presentes
@@ -145,6 +208,9 @@ fn App() -> Element {
         match Nodo::arrancar().await {
             Ok(n) => {
                 n.hidratar(ofertas0, obras0, presentes0);
+                if let Some(p) = yo() {
+                    n.actualizar_yo(p);
+                }
                 red.set(Some(n.clone()));
                 loop {
                     tor.set(n.estado_tor());
@@ -158,7 +224,14 @@ fn App() -> Element {
                     presentes.set(n.presentes());
                     ofertas.set(n.tablero());
                     obras.set(n.obras());
-                    persistir(yo(), rol(), tema(), idioma().codigo().into(), &n);
+                    persistir(
+                        yo(),
+                        rol(),
+                        tema(),
+                        idioma().codigo().into(),
+                        clave_sec().0,
+                        &n,
+                    );
                     n.esperar(Duration::from_secs(1)).await;
                 }
             }
@@ -175,7 +248,7 @@ fn App() -> Element {
     let mut mis_obras: Vec<Obra> = obras()
         .into_iter()
         .filter(|o| o.estado != EstadoObra::Rechazada)
-        .filter(|o| o.mandante.id == mid || o.contratista.id == mid)
+        .filter(|o| o.participa(&mid))
         .collect();
     mis_obras.sort_by(|a, b| b.actualizado.cmp(&a.actualizado).then(b.id.cmp(&a.id)));
 
@@ -398,7 +471,14 @@ struct Aviso {
     partida: Option<usize>,
 }
 
-fn avisos_para(mid: &str, _soy_m: bool, obras: &[Obra], _ofertas: &[Oferta], lang: Idioma) -> Vec<Aviso> {
+fn avisos_para(
+    mid: &str,
+    _soy_m: bool,
+    obras: &[Obra],
+    _ofertas: &[Oferta],
+    lang: Idioma,
+    sec: &str,
+) -> Vec<Aviso> {
     let mut out = Vec::new();
     for obra in obras {
         if obra.mandante.id != mid && obra.contratista.id != mid {
@@ -433,15 +513,19 @@ fn avisos_para(mid: &str, _soy_m: bool, obras: &[Obra], _ofertas: &[Oferta], lan
         }
         if let Some(ex) = obra.extra.as_ref() {
             if ex.por.id != mid {
+                let detalle = match obra.leer_extra(sec) {
+                    TextoLeido::Plano(t) => t,
+                    TextoLeido::Cerrado => lang.t("Texto cifrado", "Encrypted text").into(),
+                };
                 out.push(Aviso {
                     texto: match lang {
                         Idioma::Es => format!(
                             "{}: {} propone extra {} ({})",
-                            obra.nombre, ex.por.nombre, ex.detalle, monto(ex.monto)
+                            obra.nombre, ex.por.nombre, detalle, monto(ex.monto)
                         ),
                         Idioma::En => format!(
                             "{}: {} proposes extra {} ({})",
-                            obra.nombre, ex.por.nombre, ex.detalle, monto(ex.monto)
+                            obra.nombre, ex.por.nombre, detalle, monto(ex.monto)
                         ),
                     },
                     obra_id: obra.id.clone(),
@@ -621,7 +705,10 @@ fn Bienvenida(
                         return;
                     };
                     match Persona::nueva(nombre()) {
-                        Ok(p) => {
+                        Ok(mut p) => {
+                            let (sec, pubk) = konstruado_core::generar_clave();
+                            p.clave_pub = pubk;
+                            consume_context::<Signal<ClaveSec>>().set(ClaveSec(sec));
                             if let Some(nodo) = red() {
                                 nodo.entrar_en_sala(rol() == Some(Rol::Mandante));
                             }
@@ -726,7 +813,14 @@ fn Cuenta(
                             if let Some(nodo) = red() {
                                 nodo.actualizar_yo(p.clone());
                                 nodo.entrar_en_sala(r == Rol::Mandante);
-                                persistir(Some(p.clone()), Some(r), tlocal(), ilocal().codigo().into(), &nodo);
+                                persistir(
+                                    Some(p.clone()),
+                                    Some(r),
+                                    tlocal(),
+                                    ilocal().codigo().into(),
+                                    consume_context::<Signal<ClaveSec>>()().0,
+                                    &nodo,
+                                );
                             }
                             nombre.set(nom());
                             rol.set(Some(r));
@@ -765,27 +859,25 @@ fn Tablero(
     garantia_acc: Signal<String>,
 ) -> Element {
     let lang = use_context::<Signal<Idioma>>()();
+    let sec = use_context::<Signal<ClaveSec>>()().0;
     let mut buscando = use_signal(|| false);
     let mid = yo().map(|p| p.id).unwrap_or_default();
-    let ocupadas: Vec<String> = obras()
-        .into_iter()
-        .filter(|o| o.estado != EstadoObra::Rechazada)
-        .map(|o| o.id)
-        .collect();
+    let todas = obras();
     let mut mias: Vec<Oferta> = ofertas()
         .into_iter()
-        .filter(|o| o.mandante.id == mid && !ocupadas.contains(&o.id))
+        .filter(|o| o.mandante.id == mid && oferta_en_tablero(&o.id, &todas))
         .collect();
     mias.sort_by(|a, b| b.actualizado.cmp(&a.actualizado).then(b.id.cmp(&a.id)));
     let mut ajenas: Vec<Oferta> = ofertas()
         .into_iter()
-        .filter(|o| o.mandante.id != mid && !ocupadas.contains(&o.id))
+        .filter(|o| o.mandante.id != mid && oferta_en_tablero(&o.id, &todas))
         .collect();
     ajenas.sort_by(|a, b| b.actualizado.cmp(&a.actualizado).then(b.id.cmp(&a.id)));
-    let mut mis_obras: Vec<Obra> = obras()
-        .into_iter()
+    let mut mis_obras: Vec<Obra> = todas
+        .iter()
+        .cloned()
         .filter(|o| o.estado != EstadoObra::Rechazada)
-        .filter(|o| o.mandante.id == mid || o.contratista.id == mid)
+        .filter(|o| o.participa(&mid))
         .collect();
     mis_obras.sort_by(|a, b| b.actualizado.cmp(&a.actualizado).then(b.id.cmp(&a.id)));
     let en_curso: Vec<Obra> = mis_obras
@@ -798,7 +890,7 @@ fn Tablero(
     let soy_m = rol() == Some(Rol::Mandante);
     let sin_ajenas = ajenas.is_empty();
     let sin_mias = mias.is_empty() && en_curso.is_empty();
-    let avisos = avisos_para(&mid, soy_m, &mis_obras, &ajenas, lang);
+    let avisos = avisos_para(&mid, soy_m, &mis_obras, &ajenas, lang, &sec);
     let hint_contratista = if otros.is_empty() {
         lang.t(
             "No hay avisos. Don Dinero tiene que publicar, y vos podés tocar Buscar ofertas.",
@@ -1177,10 +1269,11 @@ fn VerOferta(
                     match Aceptacion::de_con(&oferta, c, g, dets) {
                         Ok(acc) => match Obra::desde_oferta(oferta, acc) {
                             Ok(obra) => {
-                                err.set(None);
-                                nodo.quitar(&obra.id);
-                                nodo.publicar_obra(obra);
-                                screen.set(Screen::Tablero);
+                                let id = obra.id.clone();
+                                if publicar_trato(&nodo, obra, yo(), err) {
+                                    nodo.quitar(&id);
+                                    screen.set(Screen::Tablero);
+                                }
                             }
                             Err(e) => err.set(Some(lang_now().error(&e))),
                         },
@@ -1208,11 +1301,15 @@ fn Detalle(
     let mut extra_nom = use_signal(String::new);
     let mut extra_monto = use_signal(String::new);
     let lang = use_context::<Signal<Idioma>>()();
+    let sec = use_context::<Signal<ClaveSec>>()().0;
     let id = sel_obra().unwrap_or_default();
     let Some(obra) = obras().into_iter().find(|o| o.id == id) else {
         return rsx! { p { {lang.t("La obra todavía no llegó. Si la acabás de publicar, esperá al contratista.", "The job has not arrived yet. If you just posted it, wait for the contractor.")} } };
     };
     let mid = yo().map(|p| p.id).unwrap_or_default();
+    if !obra.participa(&mid) {
+        return rsx! { p { {lang.t("Esta obra es de otras dos personas.", "This job belongs to two other people.")} } };
+    }
     let soy_m = obra.mandante.id == mid;
     let estado = obra.estado;
     let activa = obra.activa();
@@ -1230,6 +1327,10 @@ fn Detalle(
         EstadoObra::Cerrada | EstadoObra::Rechazada | EstadoObra::Abandonada
     );
     let sincronizando = abierta && sincronizando_trato(red, yo, &obra);
+    let extra_label = match obra.leer_extra(&sec) {
+        TextoLeido::Plano(t) => t,
+        TextoLeido::Cerrado => lang.t("Texto cifrado", "Encrypted text").into(),
+    };
     rsx! {
         div { class: "pane",
             div { class: "card-h",
@@ -1249,8 +1350,9 @@ fn Detalle(
                 class: "btn btn-ghost",
                 onclick: {
                     let obra = obra.clone();
+                    let sec = sec.clone();
                     move |_| {
-                        match export::guardar_txt(&obra, lang_now()) {
+                        match export::guardar_txt(&obra, lang_now(), &sec) {
                             Ok(p) => export_msg.set(Some(format!("{} {}", lang_now().t("Guardado en", "Saved to"), p.display()))),
                             Err(e) => export_msg.set(Some(e)),
                         }
@@ -1262,8 +1364,9 @@ fn Detalle(
                 class: "btn btn-ghost",
                 onclick: {
                     let obra = obra.clone();
+                    let sec = sec.clone();
                     move |_| {
-                        match export::guardar_pdf(&obra, lang_now()) {
+                        match export::guardar_pdf(&obra, lang_now(), &sec) {
                             Ok(p) => export_msg.set(Some(format!("{} {}", lang_now().t("Guardado en", "Saved to"), p.display()))),
                             Err(e) => export_msg.set(Some(e)),
                         }
@@ -1288,7 +1391,7 @@ fn Detalle(
                                 let Some(nodo) = red() else { return };
                                 match obra.confirmar_contra(&mid) {
                                     Ok(()) => {
-                                        nodo.publicar_obra(obra.clone());
+                                        publicar_trato(&nodo, obra.clone(), yo(), err);
                                     }
                                     Err(e) => err.set(Some(lang_now().error(&e))),
                                 }
@@ -1325,7 +1428,7 @@ fn Detalle(
                                         Ok(mut oferta) => {
                                             oferta.id = obra.id.clone();
                                             err.set(None);
-                                            nodo.publicar_obra(obra.clone());
+                                            publicar_trato(&nodo, obra.clone(), yo(), err);
                                             nodo.publicar(oferta);
                                             screen.set(Screen::Tablero);
                                         }
@@ -1361,7 +1464,7 @@ fn Detalle(
                                 match obra.aceptar_cierre(&quien) {
                                     Ok(()) => {
                                         err.set(None);
-                                        nodo.publicar_obra(obra.clone());
+                                        publicar_trato(&nodo, obra.clone(), yo(), err);
                                         screen.set(Screen::Tablero);
                                     }
                                     Err(e) => err.set(Some(lang_now().error(&e))),
@@ -1383,7 +1486,7 @@ fn Detalle(
                                 match obra.rechazar_cierre(&quien) {
                                     Ok(()) => {
                                         err.set(None);
-                                        nodo.publicar_obra(obra.clone());
+                                        publicar_trato(&nodo, obra.clone(), yo(), err);
                                     }
                                     Err(e) => err.set(Some(lang_now().error(&e))),
                                 }
@@ -1415,7 +1518,7 @@ fn Detalle(
                                     Ok(()) => {
                                         err.set(None);
                                         confirma_abandono.set(false);
-                                        nodo.publicar_obra(obra.clone());
+                                        publicar_trato(&nodo, obra.clone(), yo(), err);
                                         if !obra.hay_riesgo() || obra.estado == EstadoObra::Abandonada {
                                             screen.set(Screen::Tablero);
                                         }
@@ -1467,9 +1570,9 @@ fn Detalle(
                 if !abierta {}
                 else if let Some(ex) = obra.extra.clone() {
                     if ex.por.id == mid {
-                        p { class: "hint", {match lang { Idioma::Es => format!("Esperando extra: {} ({} por lado)", ex.detalle, monto(ex.monto)), Idioma::En => format!("Waiting on extra: {} ({} per side)", ex.detalle, monto(ex.monto)) }} }
+                        p { class: "hint", {match lang { Idioma::Es => format!("Esperando extra: {} ({} por lado)", extra_label, monto(ex.monto)), Idioma::En => format!("Waiting on extra: {} ({} per side)", extra_label, monto(ex.monto)) }} }
                     } else {
-                        p { class: "hint", {match lang { Idioma::Es => format!("{} propone extra: {} (+{} por lado)", ex.por.nombre, ex.detalle, monto(ex.monto)), Idioma::En => format!("{} proposes extra: {} (+{} per side)", ex.por.nombre, ex.detalle, monto(ex.monto)) }} }
+                        p { class: "hint", {match lang { Idioma::Es => format!("{} propone extra: {} (+{} por lado)", ex.por.nombre, extra_label, monto(ex.monto)), Idioma::En => format!("{} proposes extra: {} (+{} per side)", ex.por.nombre, extra_label, monto(ex.monto)) }} }
                         button {
                             class: "btn btn-primary",
                             onclick: {
@@ -1480,10 +1583,15 @@ fn Detalle(
                                     }
                                     let Some(quien) = yo() else { return };
                                     let Some(nodo) = red() else { return };
+                                    let sec = consume_context::<Signal<ClaveSec>>()().0;
+                                    if let Err(e) = obra.abrir_extra(&sec) {
+                                        err.set(Some(lang_now().error(&e)));
+                                        return;
+                                    }
                                     match obra.aceptar_extra(&quien) {
                                         Ok(()) => {
                                             err.set(None);
-                                            nodo.publicar_obra(obra.clone());
+                                            publicar_trato(&nodo, obra.clone(), yo(), err);
                                         }
                                         Err(e) => err.set(Some(lang_now().error(&e))),
                                     }
@@ -1504,7 +1612,7 @@ fn Detalle(
                                     match obra.rechazar_extra(&quien) {
                                         Ok(()) => {
                                             err.set(None);
-                                            nodo.publicar_obra(obra.clone());
+                                            publicar_trato(&nodo, obra.clone(), yo(), err);
                                         }
                                         Err(e) => err.set(Some(lang_now().error(&e))),
                                     }
@@ -1556,7 +1664,7 @@ fn Detalle(
                                         err.set(None);
                                         extra_nom.set(String::new());
                                         extra_monto.set(String::new());
-                                        nodo.publicar_obra(obra.clone());
+                                        publicar_trato(&nodo, obra.clone(), yo(), err);
                                     }
                                     Err(e) => err.set(Some(lang_now().error(&e))),
                                 }
@@ -1585,6 +1693,7 @@ fn VerPartida(
     let mut confirma_encerrar = use_signal(|| false);
     let mut detalle_edit = use_signal(String::new);
     let lang = use_context::<Signal<Idioma>>()();
+    let sec = use_context::<Signal<ClaveSec>>()().0;
     use_effect(move || {
         let id = sel_obra();
         let idx = sel_partida();
@@ -1609,6 +1718,9 @@ fn VerPartida(
         return rsx! { p { {lang.t("No está esa partida.", "That stage is not here.")} } };
     };
     let mid = yo().map(|x| x.id).unwrap_or_default();
+    if !obra.participa(&mid) {
+        return rsx! { p { {lang.t("Esta obra es de otras dos personas.", "This job belongs to two other people.")} } };
+    }
     let soy_m = obra.mandante.id == mid;
     let soy_c = obra.contratista.id == mid;
     let mi_turno = p.turno.map(|r| match r {
@@ -1638,6 +1750,26 @@ fn VerPartida(
         .map(|q| q.id == mid)
         .unwrap_or(false);
     let sincronizando = !cortada && sincronizando_trato(red, yo, &obra);
+    let notas_vis: Vec<(String, String, bool)> = p
+        .notas
+        .iter()
+        .map(|n| {
+            let cabeza = format!(
+                "{} · {}% · {}",
+                n.autor_nombre,
+                n.porcentaje,
+                lang.fmt_cuando(n.cuando)
+            );
+            match obra.leer_nota(n, &sec) {
+                TextoLeido::Plano(t) => (cabeza, t, false),
+                TextoLeido::Cerrado => (
+                    cabeza,
+                    lang.t("Nota cifrada", "Encrypted note").into(),
+                    true,
+                ),
+            }
+        })
+        .collect();
     rsx! {
         div { class: "pane narrow",
             button {
@@ -1672,7 +1804,7 @@ fn VerPartida(
                             match obra.editar_detalle(i, &quien, detalle_edit()) {
                                 Ok(()) => {
                                     err.set(None);
-                                    nodo.publicar_obra(obra.clone());
+                                    publicar_trato(&nodo, obra.clone(), yo(), err);
                                 }
                                 Err(e) => err.set(Some(lang_now().error(&e))),
                             }
@@ -1696,13 +1828,15 @@ fn VerPartida(
             if let Some(q) = p.encerrado_por.as_ref() {
                 p { class: "meta", {match lang { Idioma::Es => format!("Encerró {} · {}", q.nombre, lang.fmt_cuando(p.encerrado_cuando)), Idioma::En => format!("Locked by {} · {}", q.nombre, lang.fmt_cuando(p.encerrado_cuando)) }} }
             }
-            if !p.notas.is_empty() {
+            if !notas_vis.is_empty() {
                 div { class: "notas",
-                    for n in p.notas.iter() {
+                    for (cabeza, cuerpo, cifrada) in notas_vis {
                         div { class: "nota",
-                            strong { "{n.autor_nombre} · {n.porcentaje}% · {lang.fmt_cuando(n.cuando)}" }
-                            if !n.texto.is_empty() {
-                                p { "{n.texto}" }
+                            strong { "{cabeza}" }
+                            if cifrada {
+                                p { class: "hint", "{cuerpo}" }
+                            } else if !cuerpo.is_empty() {
+                                p { "{cuerpo}" }
                             }
                         }
                     }
@@ -1729,7 +1863,7 @@ fn VerPartida(
                                     Ok(()) => {
                                         err.set(None);
                                         confirma_encerrar.set(false);
-                                        nodo.publicar_obra(obra.clone());
+                                        publicar_trato(&nodo, obra.clone(), yo(), err);
                                     }
                                     Err(e) => err.set(Some(lang_now().error(&e))),
                                 }
@@ -1767,7 +1901,7 @@ fn VerPartida(
                                 match obra.encerrar_cancelar(i, &quien) {
                                     Ok(()) => {
                                         err.set(None);
-                                        nodo.publicar_obra(obra.clone());
+                                        publicar_trato(&nodo, obra.clone(), yo(), err);
                                     }
                                     Err(e) => err.set(Some(lang_now().error(&e))),
                                 }
@@ -1790,7 +1924,7 @@ fn VerPartida(
                                 match obra.encerrar_confirmar(i, &quien) {
                                     Ok(()) => {
                                         err.set(None);
-                                        nodo.publicar_obra(obra.clone());
+                                        publicar_trato(&nodo, obra.clone(), yo(), err);
                                     }
                                     Err(e) => err.set(Some(lang_now().error(&e))),
                                 }
@@ -1811,7 +1945,7 @@ fn VerPartida(
                                 match obra.encerrar_cancelar(i, &quien) {
                                     Ok(()) => {
                                         err.set(None);
-                                        nodo.publicar_obra(obra.clone());
+                                        publicar_trato(&nodo, obra.clone(), yo(), err);
                                     }
                                     Err(e) => err.set(Some(lang_now().error(&e))),
                                 }
@@ -1849,7 +1983,7 @@ fn VerPartida(
                             match obra.avisar_termino(i, &quien, parse_pct(&pct()), nota()) {
                                 Ok(()) => {
                                     err.set(None);
-                                    nodo.publicar_obra(obra.clone());
+                                    publicar_trato(&nodo, obra.clone(), yo(), err);
                                 }
                                 Err(e) => err.set(Some(lang_now().error(&e))),
                             }
@@ -1883,7 +2017,7 @@ fn VerPartida(
                                 match obra.aceptar_pago(i, &quien) {
                                     Ok(()) => {
                                         err.set(None);
-                                        nodo.publicar_obra(obra.clone());
+                                        publicar_trato(&nodo, obra.clone(), yo(), err);
                                     }
                                     Err(e) => err.set(Some(lang_now().error(&e))),
                                 }
@@ -1917,7 +2051,7 @@ fn VerPartida(
                                 match obra.contra_pago(i, &quien, parse_pct(&pct()), nota()) {
                                     Ok(()) => {
                                         err.set(None);
-                                        nodo.publicar_obra(obra.clone());
+                                        publicar_trato(&nodo, obra.clone(), yo(), err);
                                     }
                                     Err(e) => err.set(Some(lang_now().error(&e))),
                                 }

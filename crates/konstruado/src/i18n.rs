@@ -133,6 +133,9 @@ impl Idioma {
             (Self::En, Error::Desconectado) => {
                 "The other person is offline. They need Konstruado open.".into()
             }
+            (Self::En, Error::SinClave) => {
+                "The other person's key is missing, so the note cannot be sealed. Wait until they come online.".into()
+            }
         }
     }
 
