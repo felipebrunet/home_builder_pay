@@ -13,6 +13,9 @@ pub struct Persona {
     /// X25519 public key, base64. The secret never leaves this machine.
     #[serde(default)]
     pub clave_pub: String,
+    /// Dirección stagenet de la hot wallet. La spend queda en el disco local.
+    #[serde(default)]
+    pub direccion: String,
 }
 
 impl Persona {
@@ -23,6 +26,7 @@ impl Persona {
             nombre,
             visto: 0,
             clave_pub: String::new(),
+            direccion: String::new(),
         })
     }
 

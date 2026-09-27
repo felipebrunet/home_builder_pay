@@ -21,6 +21,9 @@ pub struct EstadoDisco {
     /// X25519 secret, base64. Stays in this data dir. Never gossiped.
     #[serde(default)]
     pub clave_sec: String,
+    /// Spend key of the stagenet hot wallet, hex. Never gossiped.
+    #[serde(default)]
+    pub spend_sec: String,
 }
 
 fn tema_vivo() -> String {
@@ -100,6 +103,7 @@ mod tests {
             tema: "vivo".into(),
             idioma: "en".into(),
             clave_sec: String::new(),
+            spend_sec: String::new(),
         };
         guardar(&e);
         let b = cargar();

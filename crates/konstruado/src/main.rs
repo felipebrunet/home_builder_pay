@@ -12,6 +12,7 @@ use konstruado_core::{
 };
 use konstruado_net::{EstadoTor, Nodo, RED};
 use i18n::Idioma;
+use xmr_joint::{red_laboratorio, HotWallet};
 
 const CSS: &str = include_str!("ui.css");
 
@@ -64,12 +65,16 @@ pub(crate) enum Screen {
 #[derive(Clone)]
 struct ClaveSec(String);
 
+#[derive(Clone)]
+struct SpendSec(String);
+
 fn persistir(
     yo: Option<Persona>,
     rol: Option<Rol>,
     tema: String,
     idioma: String,
     clave_sec: String,
+    spend_sec: String,
     n: &Nodo,
 ) {
     persist::guardar(&persist::EstadoDisco {
@@ -81,6 +86,7 @@ fn persistir(
         tema,
         idioma,
         clave_sec,
+        spend_sec,
     });
 }
 
@@ -125,9 +131,20 @@ fn App() -> Element {
         let mut g = persist::cargar();
         if let Some(yo) = g.yo.as_mut() {
             let (sec, pubk) = asegurar_clave(&g.clave_sec, &yo.clave_pub);
-            let changed = g.clave_sec != sec || yo.clave_pub != pubk;
+            let mut changed = g.clave_sec != sec || yo.clave_pub != pubk;
             yo.clave_pub = pubk;
             g.clave_sec = sec;
+            if g.spend_sec.is_empty() {
+                let hot = HotWallet::generar(red_laboratorio());
+                yo.direccion = hot.address.clone();
+                g.spend_sec = hot.spend_hex();
+                changed = true;
+            } else if yo.direccion.is_empty() {
+                if let Ok(hot) = HotWallet::desde_spend_hex(&g.spend_sec, red_laboratorio()) {
+                    yo.direccion = hot.address;
+                    changed = true;
+                }
+            }
             if changed {
                 persist::guardar(&g);
             }
@@ -135,6 +152,7 @@ fn App() -> Element {
         g
     });
     let clave_sec = use_context_provider(|| Signal::new(ClaveSec(guardado.clave_sec.clone())));
+    let spend_sec = use_context_provider(|| Signal::new(SpendSec(guardado.spend_sec.clone())));
     let mut screen = use_signal(|| {
         if guardado.adentro() {
             Screen::Tablero
@@ -230,6 +248,7 @@ fn App() -> Element {
                         tema(),
                         idioma().codigo().into(),
                         clave_sec().0,
+                        spend_sec().0,
                         &n,
                     );
                     n.esperar(Duration::from_secs(1)).await;
@@ -708,7 +727,10 @@ fn Bienvenida(
                         Ok(mut p) => {
                             let (sec, pubk) = konstruado_core::generar_clave();
                             p.clave_pub = pubk;
+                            let hot = HotWallet::generar(red_laboratorio());
+                            p.direccion = hot.address.clone();
                             consume_context::<Signal<ClaveSec>>().set(ClaveSec(sec));
+                            consume_context::<Signal<SpendSec>>().set(SpendSec(hot.spend_hex()));
                             if let Some(nodo) = red() {
                                 nodo.entrar_en_sala(rol() == Some(Rol::Mandante));
                             }
@@ -746,6 +768,10 @@ fn Cuenta(
             h1 { {lang.t("Tu cuenta", "Your account")} }
             p { class: "lead",
                 {lang.t("El nombre y el rol se pueden cambiar. Las obras no se borran. El mandante abre la sala; el contratista solo busca.", "Name and role can be changed. Jobs are not deleted. The client opens the room; the contractor only looks.")}
+            }
+            if let Some(dir) = yo().and_then(|p| if p.direccion.is_empty() { None } else { Some(p.direccion) }) {
+                p { class: "hint", {lang.t("Hot wallet stagenet", "Stagenet hot wallet")} }
+                p { class: "meta", "{dir}" }
             }
             label { class: "et", {lang.t("NOMBRE", "NAME")} }
             input {
@@ -819,6 +845,7 @@ fn Cuenta(
                                     tlocal(),
                                     ilocal().codigo().into(),
                                     consume_context::<Signal<ClaveSec>>()().0,
+                                    consume_context::<Signal<SpendSec>>()().0,
                                     &nodo,
                                 );
                             }

@@ -12,3 +12,11 @@
 .konstruado/
 crates/konstruado/fonts/
 konstruado-tor-*/
+
+# Lab Monero material. Stagenet shares and view keys stay out of git.
+artifacts/
+artifacts-*/
+**/threshold_keys.bin
+**/*view_private*
+**/*shared_view*
+*.raw
