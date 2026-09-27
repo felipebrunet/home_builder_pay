@@ -23,7 +23,15 @@ Rendezvous is hardcoded (`konstruado-red-1` plus a baked Tor v3 onion). Each nod
 | 2-of-2 box (PedPoP / FROST) | Library and test. Not exchanged over the gossip when a job is accepted. |
 | Stage funding and payout | Amounts and the two-signature gate are tested. No chain transaction: that needs real rings from a daemon, and stock `monero-wallet` 0.2 signs every input with one spend key. |
 
-`cargo test -p xmr-joint` checks keys, the DKG, and the split. It does not talk to stagenet.
+`cargo test -p xmr-joint` checks keys, the DKG, and the split. It does not talk to a daemon.
+
+The chain sanity test is separate. It needs a local `monerod` and is ignored unless you ask for it. Scenario 1 (fund one stage, pay 100% with FROST) is the one that runs. The rest of the list is in `crates/xmr-joint/ESCENARIOS.md`.
+
+```bash
+MONEROD=/path/to/monerod ./scripts/sanidad.sh
+```
+
+That script runs the project tests and then the 100% regtest payment. If `monerod` is already on `PATH`, `MONEROD` can be omitted.
 
 ## How Monero pays a stage
 
@@ -50,7 +58,7 @@ Needs Rust 1.89 or newer (`monero-wallet` 0.2), GTK3, WebKitGTK 4.1, `libxdo-dev
 
 ```bash
 sudo apt install tor libgtk-3-0 libwebkit2gtk-4.1-0 libxdo-dev
-cargo test --workspace
+cargo test --workspace --exclude dkg-pedpop
 cargo run
 ```
 

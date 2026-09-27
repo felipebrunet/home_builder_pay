@@ -37,6 +37,16 @@ impl ShareLocal {
         self.keys.serialize().to_vec()
     }
 
+    pub fn claves(&self) -> ThresholdKeys<Ed25519> {
+        self.keys.clone()
+    }
+
+    pub fn par(&self) -> Result<monero_wallet::ViewPair, Error> {
+        let punto = punto_de_hex(&self.spend_pub_hex)?;
+        let view = crate::hot::scalar_de_hex(&self.view_sec_hex)?;
+        monero_wallet::ViewPair::new(punto, view).map_err(|_| Error::Clave)
+    }
+
     pub fn desde_bytes(bytes: &[u8]) -> Result<Self, Error> {
         let keys = ThresholdKeys::<Ed25519>::read(&mut &bytes[..]).map_err(|_| Error::Caja)?;
         let spend_pub_hex = spend_hex(&keys)?;

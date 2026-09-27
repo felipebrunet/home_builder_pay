@@ -79,7 +79,17 @@ Por qué no hay tx: hace falta un daemon de stagenet para los anillos, y `monero
 
 No commitear shares, views ni `.raw` de laboratorio, aunque sean stagenet. `.gitignore` tapa `artifacts/`, `threshold_keys.bin`, `*view_private*`, `*shared_view*` y `*.raw`.
 
-Siguiente paso, si lo piden: pasar las rondas del DKG por el gossip al aceptar, y recién después armar la tx con un daemon.
+Regtest local (escenario 1, pago al 100%) está en `crates/xmr-joint/tests/regtest_pago.rs` y la lista de los que faltan en `crates/xmr-joint/ESCENARIOS.md`. No corre con `cargo test` pelado.
+
+```bash
+MONEROD=/ruta/monerod ./scripts/sanidad.sh
+```
+
+Ese script corre los tests del proyecto (sin los tests propios del `dkg-pedpop` vendido) y después el pago al 100%. Si `monerod` está en el `PATH`, `MONEROD` no hace falta.
+
+Ese test fondea con dos transferencias (una por hot wallet) y el pago sí es FROST 2-de-2. El encierre de una sola tx sigue bloqueado por la firma de un solo spend key.
+
+Siguiente paso, si lo piden: los escenarios 2–10 de esa lista, o pasar las rondas del DKG por el gossip.
 
 ## Qué no hacer sin que lo pidan
 

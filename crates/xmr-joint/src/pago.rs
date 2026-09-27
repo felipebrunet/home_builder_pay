@@ -84,6 +84,22 @@ impl Gasto {
 }
 
 /// Marca de los dos shares sobre el reparto. No es la transacción de la cadena.
+/// Un pago solo puede ir a las dos hot wallets, y ninguna salida es de cero.
+pub fn exigir_pago(destinos: &[(&str, u64)], mandante: &str, contratista: &str) -> Result<(), Error> {
+    if destinos.is_empty() {
+        return Err(Error::Monto);
+    }
+    for (dir, monto) in destinos {
+        if *monto == 0 || dir.is_empty() {
+            return Err(Error::Monto);
+        }
+        if *dir != mandante && *dir != contratista {
+            return Err(Error::Protocolo);
+        }
+    }
+    Ok(())
+}
+
 pub fn firmar_reparto(reparto: &Reparto, share_bytes: &[u8]) -> Vec<u8> {
     let mut out = share_bytes.to_vec();
     out.extend(reparto.porcentaje.to_le_bytes());
@@ -110,6 +126,19 @@ mod tests {
         assert_eq!(r.al_contratista, 1_800);
         assert_eq!(r.al_mandante, 200);
         assert_eq!(r.al_contratista + r.al_mandante, r.pot);
+    }
+
+    #[test]
+    fn el_polvo_y_un_tercero_no_pasan() {
+        assert_eq!(
+            exigir_pago(&[("alice", 0)], "alice", "bob"),
+            Err(Error::Monto)
+        );
+        assert_eq!(
+            exigir_pago(&[("carol", 10)], "alice", "bob"),
+            Err(Error::Protocolo)
+        );
+        assert!(exigir_pago(&[("bob", 1_800), ("alice", 200)], "alice", "bob").is_ok());
     }
 
     #[test]

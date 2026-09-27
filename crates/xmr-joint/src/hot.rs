@@ -44,6 +44,16 @@ impl HotWallet {
         hex::encode(<[u8; 32]>::from((*self.view).clone()))
     }
 
+    pub fn spend(&self) -> Zeroizing<Scalar> {
+        self.spend.clone()
+    }
+
+    pub fn par(&self) -> ViewPair {
+        let dalek: curve25519_dalek::Scalar = (*self.spend).clone().into();
+        let spend_pub = Point::from(ED25519_BASEPOINT_POINT * dalek);
+        ViewPair::new(spend_pub, self.view.clone()).expect("par de la hot wallet")
+    }
+
     fn armar(
         spend: Zeroizing<Scalar>,
         view: Zeroizing<Scalar>,
@@ -62,7 +72,7 @@ fn view_de_spend(spend: &Scalar) -> Scalar {
     Scalar::hash(bytes)
 }
 
-fn scalar_de_hex(s: &str) -> Result<Zeroizing<Scalar>, Error> {
+pub(crate) fn scalar_de_hex(s: &str) -> Result<Zeroizing<Scalar>, Error> {
     let raw = hex::decode(s.trim()).map_err(|_| Error::Clave)?;
     if raw.len() != 32 {
         return Err(Error::Clave);

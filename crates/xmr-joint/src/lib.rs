@@ -14,7 +14,7 @@ pub use error::Error;
 pub use dkg::{cerrar_dkg, contexto_obra, ronda_compromiso, ronda_shares, RolCaja, ShareLocal};
 pub use funding::{plan_encierre, PlanEncierre, SesionEncierre};
 pub use hot::{red_laboratorio, HotWallet};
-pub use pago::{firmar_reparto, repartir, Gasto, Reparto};
+pub use pago::{exigir_pago, firmar_reparto, repartir, Gasto, Reparto};
 
 /// Lo llama el dominio al encerrar y al pagar. Sigue siendo 4: la cadena
 /// todavía no se emite desde acá.
