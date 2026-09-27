@@ -1,6 +1,6 @@
 # Konstruado — contexto para una sesión nueva
 
-Producto de escritorio (Dioxus) para un **trato de obra entre dos personas**, sin servidor. No es un chat. El mandante publica un aviso; el contratista lo ve y acepta o contraoferta. Monero sigue en stub (`2+2` en `xmr-joint`). No hay Bitcoin.
+Producto de escritorio (Dioxus) para un **trato de obra entre dos personas**, sin servidor. No es un chat. El mandante publica un aviso; el contratista lo ve y acepta o contraoferta. El trato y la sala Tor funcionan. Monero está a medias: ver **Estado**. No hay Bitcoin.
 
 Hablamos en español. UI rioplatense/chilena (“Poné”, “te toca”) por defecto; el usuario puede pasar a **English** (ES/EN en la barra y en Cuenta). El trato no cambia.
 
@@ -11,7 +11,7 @@ Hablamos en español. UI rioplatense/chilena (“Poné”, “te toca”) por de
 | `konstruado-core` | Dominio: persona, oferta, obra, partidas, contra, extra, recibo, fusión. Sin UI ni Tor. |
 | `konstruado-net` | Encuentro: TCP local `17432`, gossip DHT, Tor propio + onion horneado. |
 | `konstruado` | Ventana: pantallas, persistir, exportar, temas, idioma. |
-| `xmr-joint` | Stub de encierro. No implementar cripto a menos que se pida. |
+| `xmr-joint` | Hot wallet, DKG 2-de-2, plan de encierre y reparto. No emite una tx. |
 
 El split está bien. No hace falta un refactor grande. `main.rs` es largo; partir pantallas solo si duele.
 
@@ -61,9 +61,29 @@ Clone del notebook: `git clone git@github.com-hbp:felipebrunet/home_builder_pay.
 
 Primero mandante (esperar `sala abierta`). Después contratista. La primera vez Tor puede tardar en bootstrap.
 
+## Estado (2026-09-26)
+
+Lo que la ventana ya hace:
+
+- Trato, tablero, Tor, dos dirs de datos, constancia.
+- Notas y texto del extra van cifrados entre las dos personas (X25519 + ChaCha20-Poly1305, una clave por persona). El contexto `{obra}:nota` / `{obra}:extra` ata la caja a esa obra. Un tercero ve el bloque y no el texto. La obra en curso no aparece en su tablero. El nodo igual reenvía el JSON para que los dos se alcancen.
+- Al entrar se crea una hot wallet de **stagenet**. La dirección está en la persona y se ve en Cuenta. La spend (`spend_sec`, hex) queda en `estado.json` y no se publica. La view sale de `keccak256(spend)`.
+
+Lo que está en `xmr-joint` y tiene tests, y **no** está enganchado al botón de aceptar ni al de pagar:
+
+- DKG PedPoP 2-de-2 (`dkg-pedpop` vendido en `crates/xmr-joint/vendor/dkg-pedpop`, parche multiexp 0.5). Tres mensajes: compromiso, share cifrado, view que inventa el mandante. Cada nodo guarda solo su `ThresholdKeys`. Los dos llegan a la misma dirección. `cargo test -p xmr-joint`.
+- Encierre de una partida: una salida de `2 × garantía` a esa dirección. La sesión no cierra si falta un lado. Todavía no hay CLSAG.
+- Pago: 100% manda el pot al contratista; 80% le deja `1.8 × garantía` y devuelve `0.2 × garantía` al mandante. Hacen falta los dos shares. Todavía no es `SignableTransaction::multisig`.
+
+Por qué no hay tx: hace falta un daemon de stagenet para los anillos, y `monero-wallet` 0.2 firma todos los inputs con una sola spend. El funding en dos máquinas necesita `Clsag::sign_input_with_mask` y `sum_output_masks` público. Esos parches no están en crates.io.
+
+No commitear shares, views ni `.raw` de laboratorio, aunque sean stagenet. `.gitignore` tapa `artifacts/`, `threshold_keys.bin`, `*view_private*`, `*shared_view*` y `*.raw`.
+
+Siguiente paso, si lo piden: pasar las rondas del DKG por el gossip al aceptar, y recién después armar la tx con un daemon.
+
 ## Qué no hacer sin que lo pidan
 
-- Implementar Monero o Bitcoin.
+- Dar por emitida una transacción Monero, o meter Bitcoin.
 - Android / APK. Otro proyecto (Orbot, mandante en PC).
 - Reescribir iced/Tauri.
 - Meter un servidor o un keyword que el usuario tipeé.
