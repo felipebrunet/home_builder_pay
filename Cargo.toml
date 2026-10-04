@@ -6,6 +6,28 @@ members = [
     "crates/konstruado-net",
     "crates/konstruado",
 ]
+# Path deps live in the tree. Without this, cargo los adopta como miembros
+# y `cargo test --workspace` corre los tests de oxide y del DKG.
+exclude = [
+    "crates/xmr-joint/vendor/dkg-pedpop",
+    "crates/xmr-joint/vendor/monero-seed",
+    "third_party/monero-oxide/monero-oxide",
+    "third_party/monero-oxide/monero-oxide/io",
+    "third_party/monero-oxide/monero-oxide/ed25519",
+    "third_party/monero-oxide/monero-oxide/primitives",
+    "third_party/monero-oxide/monero-oxide/epee",
+    "third_party/monero-oxide/monero-oxide/interface",
+    "third_party/monero-oxide/monero-oxide/interface/daemon",
+    "third_party/monero-oxide/monero-oxide/interface/daemon/simple-request",
+    "third_party/monero-oxide/monero-oxide/wallet",
+    "third_party/monero-oxide/monero-oxide/wallet/address",
+    "third_party/monero-oxide/monero-oxide/wallet/base58",
+    "third_party/monero-oxide/monero-oxide/ringct/clsag",
+    "third_party/monero-oxide/monero-oxide/ringct/mlsag",
+    "third_party/monero-oxide/monero-oxide/ringct/borromean",
+    "third_party/monero-oxide/monero-oxide/ringct/bulletproofs",
+    "third_party/monero-oxide/monero-oxide/ringct/bulletproofs/generators",
+]
 default-members = ["crates/konstruado"]
 
 [workspace.package]
@@ -15,6 +37,28 @@ repository = "https://github.com/felipebrunet/home_builder_pay"
 
 [profile.release]
 strip = true
+
+# Igual que el workspace de monero-oxide: en debug estas crates van optimizadas.
+# Si no, armar una transacción de stagenet tarda minutos.
+[profile.dev.package]
+subtle = { opt-level = 3 }
+sha3 = { opt-level = 3 }
+blake2 = { opt-level = 3 }
+curve25519-dalek = { opt-level = 3 }
+ff = { opt-level = 3 }
+group = { opt-level = 3 }
+crypto-bigint = { opt-level = 3 }
+dalek-ff-group = { opt-level = 3 }
+multiexp = { opt-level = 3 }
+monero-io = { opt-level = 3 }
+monero-primitives = { opt-level = 3 }
+monero-ed25519 = { opt-level = 3 }
+monero-mlsag = { opt-level = 3 }
+monero-clsag = { opt-level = 3 }
+monero-borromean = { opt-level = 3 }
+monero-bulletproofs-generators = { opt-level = 3 }
+monero-bulletproofs = { opt-level = 3 }
+monero-oxide = { opt-level = 3 }
 
 [workspace.dependencies]
 xmr-joint = { path = "crates/xmr-joint" }

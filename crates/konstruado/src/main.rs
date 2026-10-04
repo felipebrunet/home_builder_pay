@@ -1,3 +1,4 @@
+mod caja;
 mod export;
 mod help;
 mod i18n;
@@ -58,6 +59,7 @@ pub(crate) enum Screen {
     Detalle,
     VerPartida,
     Cuenta,
+    Billetera,
     Help,
 }
 
@@ -119,6 +121,9 @@ fn App() -> Element {
     });
     let idioma = use_context_provider(|| Signal::new(Idioma::parse(&guardado.idioma)));
     let mut help_vista = use_signal(|| help::Vista::About);
+    let caja_motor = use_hook(caja::Caja::nueva);
+    let caja_ui = caja_motor.clone();
+    let mut vista_caja = use_signal(caja::CajaVista::vacia);
     dioxus::desktop::use_muda_event_handler(move |evt| match evt.id().0.as_str() {
         help::ID_ABOUT => {
             help_vista.set(help::Vista::About);
@@ -132,6 +137,7 @@ fn App() -> Element {
     });
 
     use_future(move || {
+        let caja_motor = caja_motor.clone();
         let ofertas0 = guardado.ofertas.clone();
         let obras0 = guardado.obras.clone();
         let yo_id = guardado.yo.as_ref().map(|p| p.id.clone());
@@ -149,7 +155,12 @@ fn App() -> Element {
                 loop {
                     tor.set(n.estado_tor());
                     if let Some(p) = yo() {
-                        n.anunciar(p);
+                        n.fijar_persona(&p.id);
+                        n.anunciar(p.clone());
+                        n.anunciar_persona();
+                        let hechos = caja_motor.tick(&n, &p, &n.obras());
+                        aplicar_monero(&n, &p, &hechos);
+                        vista_caja.set(caja_motor.vista());
                     }
                     if let Some(r) = rol() {
                         n.entrar_en_sala(r == Rol::Mandante);
@@ -195,6 +206,11 @@ fn App() -> Element {
                 LangSwitch {}
                 if adentro {
                     button {
+                        class: "top-billetera",
+                        onclick: move |_| screen.set(Screen::Billetera),
+                        {lang.t("Billetera", "Wallet")}
+                    }
+                    button {
                         class: "quien",
                         onclick: move |_| screen.set(Screen::Cuenta),
                         "{quien} · {rol_txt}"
@@ -204,6 +220,11 @@ fn App() -> Element {
             div { class: "shell",
                 if adentro {
                     aside { class: "side",
+                        button {
+                            class: "side-wallet",
+                            onclick: move |_| screen.set(Screen::Billetera),
+                            {lang.t("Billetera", "Wallet")}
+                        }
                         h2 { {lang.t("Mis obras", "My jobs")} }
                         div { class: "side-list",
                             for o in mis_obras {
@@ -252,13 +273,16 @@ fn App() -> Element {
                             }
                         },
                         Screen::Detalle => rsx! {
-                            Detalle { yo, red, obras, sel_obra, sel_partida, screen, err }
+                            Detalle { yo, red, obras, sel_obra, sel_partida, screen, err, vista: vista_caja }
                         },
                         Screen::VerPartida => rsx! {
-                            VerPartida { yo, red, obras, sel_obra, sel_partida, screen, err }
+                            VerPartida { yo, red, obras, sel_obra, sel_partida, screen, err, caja: caja_ui.clone(), vista: vista_caja }
                         },
                         Screen::Cuenta => rsx! {
-                            Cuenta { nombre, rol, yo, red, screen, err, tema }
+                            Cuenta { nombre, rol, yo, red, screen, err, tema, caja: caja_ui.clone(), vista: vista_caja }
+                        },
+                        Screen::Billetera => rsx! {
+                            Billetera { screen, err, caja: caja_ui.clone(), vista: vista_caja }
                         },
                         Screen::Help => rsx! {
                             help::Help { yo, screen, vista: help_vista() }
@@ -355,6 +379,43 @@ fn exigir_sesion(
             ).into(),
         ));
         false
+    }
+}
+
+fn aplicar_monero(nodo: &Nodo, yo: &Persona, hechos: &[caja::Hecho]) {
+    for h in hechos {
+        let mut obras = nodo.obras();
+        let Some(obra) = obras.iter_mut().find(|o| o.id == h.obra) else {
+            continue;
+        };
+        let otro = if yo.id == obra.mandante.id {
+            obra.contratista.id.clone()
+        } else {
+            obra.mandante.id.clone()
+        };
+        if !nodo.trato_alineado(&yo.id, &otro) {
+            continue;
+        }
+        let mut publico = false;
+        if let Some(txid) = &h.fondeo {
+            let confirma = obra.partidas.get(h.partida).is_some_and(|p| {
+                p.estado == PartidaEstado::Encerrando
+                    && p.encerrado_por.as_ref().is_some_and(|q| q.id != yo.id)
+            });
+            if confirma && obra.encerrar_confirmar(h.partida, yo).is_ok() {
+                obra.partidas[h.partida].fondeo_txid = Some(txid.clone());
+                publico = true;
+            }
+        }
+        if let Some(txid) = &h.pago {
+            if obra.aceptar_pago(h.partida, yo).is_ok() {
+                obra.partidas[h.partida].pago_txid = Some(txid.clone());
+                publico = true;
+            }
+        }
+        if publico {
+            nodo.publicar_obra(obra.clone());
+        }
     }
 }
 
@@ -647,6 +708,8 @@ fn Cuenta(
     screen: Signal<Screen>,
     err: Signal<Option<String>>,
     tema: Signal<String>,
+    caja: caja::Caja,
+    vista: Signal<caja::CajaVista>,
 ) -> Element {
     let mut nom = use_signal(|| nombre());
     let mut rlocal = use_signal(|| rol());
@@ -654,6 +717,8 @@ fn Cuenta(
     let mut idioma = use_context::<Signal<Idioma>>();
     let mut ilocal = use_signal(|| idioma());
     let lang = idioma();
+    let caja_palabras = caja.clone();
+    let caja_crear = caja.clone();
     rsx! {
         div { class: "pane narrow",
             h1 { {lang.t("Tu cuenta", "Your account")} }
@@ -711,6 +776,47 @@ fn Cuenta(
                     span { {lang.t("English. The deal does not change.", "English. The deal does not change.")} }
                 }
             }
+            div { class: "paso", b { "5" } "Stagenet" }
+            p { class: "hint", "{vista().daemon}" }
+            button {
+                class: "btn btn-ghost",
+                onclick: move |_| screen.set(Screen::Billetera),
+                {lang.t("Abrir billetera", "Open wallet")}
+            }
+            if let Some(tip) = vista().tip {
+                p { class: "meta", {match lang { Idioma::Es => format!("Punta del nodo: {tip}"), Idioma::En => format!("Node tip: {tip}") }} }
+            }
+            p { class: "hint", "{caja::escala(matches!(lang, Idioma::Es))}" }
+            if let Some(addr) = vista().personal.clone() {
+                p { class: "meta", "{addr}" }
+                button {
+                    class: "btn btn-ghost",
+                    onclick: move |_| {
+                        let Some(path) = rfd::FileDialog::new()
+                            .set_file_name("konstruado-semilla.txt")
+                            .save_file()
+                        else {
+                            return;
+                        };
+                        match caja_palabras.guardar_palabras(&path) {
+                            Ok(()) => err.set(None),
+                            Err(e) => err.set(Some(e)),
+                        }
+                    },
+                    {lang.t("Guardar las 25 palabras", "Save the 25 words")}
+                }
+            } else {
+                button {
+                    class: "btn btn-primary",
+                    onclick: move |_| {
+                        match caja_crear.crear_semilla() {
+                            Ok(_) => err.set(None),
+                            Err(e) => err.set(Some(e)),
+                        }
+                    },
+                    {lang.t("Crear billetera de stagenet", "Create stagenet wallet")}
+                }
+            }
             button {
                 class: "btn btn-primary",
                 onclick: move |_| {
@@ -738,6 +844,247 @@ fn Cuenta(
                     }
                 },
                 {lang.t("Guardar", "Save")}
+            }
+            button {
+                class: "btn btn-ghost",
+                onclick: move |_| screen.set(Screen::Tablero),
+                {lang.t("Volver", "Back")}
+            }
+        }
+    }
+}
+
+#[component]
+fn Billetera(
+    screen: Signal<Screen>,
+    mut err: Signal<Option<String>>,
+    caja: caja::Caja,
+    vista: Signal<caja::CajaVista>,
+) -> Element {
+    let mut destino = use_signal(String::new);
+    let mut monto = use_signal(String::new);
+    let lang = use_context::<Signal<Idioma>>()();
+    let b = vista().billetera.clone();
+    let addr = vista().personal.clone();
+    let caja_palabras = caja.clone();
+    let caja_envio = caja.clone();
+    let caja_act = caja.clone();
+    let caja_atras = caja.clone();
+    let caja_crear = caja.clone();
+    rsx! {
+        div { class: "pane narrow",
+            h1 { {lang.t("Billetera", "Wallet")} }
+            p { class: "lead",
+                {lang.t(
+                    "Tu Monero personal de stagenet. La caja de una obra es otra dirección, de las dos personas.",
+                    "Your personal stagenet Monero. A job's box is a different address, shared by both people.",
+                )}
+            }
+            p { class: "hint", "{vista().daemon}" }
+            if let Some(addr) = addr {
+                p { class: "saldo",
+                    "{caja::fmt_xmr(b.total)}"
+                    small { "XMR" }
+                }
+                p { class: "meta",
+                    {match lang {
+                        Idioma::Es => format!(
+                            "Libre {} · trabado {} (10 bloques)",
+                            caja::fmt_xmr(b.libre),
+                            caja::fmt_xmr(b.trabado),
+                        ),
+                        Idioma::En => format!(
+                            "Unlocked {} · locked {} (10 blocks)",
+                            caja::fmt_xmr(b.libre),
+                            caja::fmt_xmr(b.trabado),
+                        ),
+                    }}
+                }
+                if let Some(tip) = vista().tip {
+                    p { class: "meta",
+                        {match lang {
+                            Idioma::Es => format!("Punta del nodo: {tip}"),
+                            Idioma::En => format!("Node tip: {tip}"),
+                        }}
+                    }
+                }
+                if let (Some(desde), Some(hasta)) = (b.desde, b.hasta) {
+                    p { class: "hint",
+                        {match lang {
+                            Idioma::Es => format!("Visto desde el bloque {desde} hasta el {hasta}."),
+                            Idioma::En => format!("Scanned from block {desde} through {hasta}."),
+                        }}
+                    }
+                } else {
+                    p { class: "hint",
+                        {lang.t(
+                            "Todavía no miré la cadena. Arranco por los últimos 40 bloques.",
+                            "I have not scanned the chain yet. I start with the last 40 blocks.",
+                        )}
+                    }
+                }
+                if b.buscando {
+                    p { class: "hint", {lang.t("Mirando la cadena…", "Scanning the chain…")} }
+                }
+                if b.enviando {
+                    p { class: "hint", {lang.t("Firmando y publicando…", "Signing and publishing…")} }
+                }
+                if b.retro > 0 {
+                    p { class: "hint",
+                        {match lang {
+                            Idioma::Es => format!("Quedan {} bloques por mirar hacia atrás.", b.retro),
+                            Idioma::En => format!("{} blocks left to scan backward.", b.retro),
+                        }}
+                    }
+                }
+                if let Some(aviso) = b.aviso.clone() {
+                    p { class: "hint", "{aviso}" }
+                }
+                if let Some(tx) = b.ultimo.clone() {
+                    p { class: "meta",
+                        {match lang {
+                            Idioma::Es => format!(
+                                "Último envío {tx}. Fee {} XMR. Cambio {} XMR, vuelve en el próximo bloque.",
+                                caja::fmt_xmr(b.ultimo_fee.unwrap_or(0)),
+                                caja::fmt_xmr(b.ultimo_cambio.unwrap_or(0)),
+                            ),
+                            Idioma::En => format!(
+                                "Last send {tx}. Fee {} XMR. Change {} XMR, it returns in the next block.",
+                                caja::fmt_xmr(b.ultimo_fee.unwrap_or(0)),
+                                caja::fmt_xmr(b.ultimo_cambio.unwrap_or(0)),
+                            ),
+                        }}
+                    }
+                }
+                if !b.movs.is_empty() {
+                    div { class: "paso", b { "·" } {lang.t("Entradas", "Outputs")} }
+                    for mov in b.movs.iter() {
+                        div { class: "mov",
+                            span { "{caja::fmt_xmr(mov.monto)} XMR" }
+                            span { class: "hint",
+                                {match lang {
+                                    Idioma::Es => format!(
+                                        "bloque {} · {}",
+                                        mov.altura,
+                                        if mov.libre { "libre" } else { "trabado" }
+                                    ),
+                                    Idioma::En => format!(
+                                        "block {} · {}",
+                                        mov.altura,
+                                        if mov.libre { "unlocked" } else { "locked" }
+                                    ),
+                                }}
+                            }
+                        }
+                    }
+                }
+                div { class: "paso", b { "1" } {lang.t("Recibir", "Receive")} }
+                input {
+                    class: "addr",
+                    r#type: "text",
+                    readonly: true,
+                    value: "{addr}",
+                }
+                p { class: "hint",
+                    {lang.t(
+                        "Seleccioná la dirección y copiala. El scan no ve monedas que tengan más de lo que ya miramos: si el faucet es viejo, pedí mirar más atrás.",
+                        "Select the address and copy it. The scan misses coins older than what we already looked at: if the faucet is old, scan further back.",
+                    )}
+                }
+                button {
+                    class: "btn btn-ghost",
+                    onclick: move |_| {
+                        let Some(path) = rfd::FileDialog::new()
+                            .set_file_name("konstruado-semilla.txt")
+                            .save_file()
+                        else {
+                            return;
+                        };
+                        match caja_palabras.guardar_palabras(&path) {
+                            Ok(()) => err.set(None),
+                            Err(e) => err.set(Some(e)),
+                        }
+                    },
+                    {lang.t("Guardar las 25 palabras", "Save the 25 words")}
+                }
+                div { class: "paso", b { "2" } {lang.t("Enviar", "Send")} }
+                label { class: "et", {lang.t("DESTINO", "DESTINATION")} }
+                input {
+                    r#type: "text",
+                    value: "{destino}",
+                    placeholder: lang.t("Dirección de stagenet", "Stagenet address"),
+                    oninput: move |e| destino.set(e.value()),
+                }
+                label { class: "et", {lang.t("MONTO EN XMR", "AMOUNT IN XMR")} }
+                input {
+                    r#type: "text",
+                    value: "{monto}",
+                    placeholder: "0.04",
+                    oninput: move |e| monto.set(e.value()),
+                }
+                p { class: "hint",
+                    {lang.t(
+                        "El cambio vuelve a esta billetera. Se reserva 0,001 XMR para el fee. Hace falta al menos 1 piconero de cambio.",
+                        "Change comes back to this wallet. 0.001 XMR is set aside for the fee. At least 1 piconero of change is required.",
+                    )}
+                }
+                button {
+                    class: "btn btn-ghost",
+                    onclick: move |_| {
+                        match caja::maximo_envio(vista().billetera.libre) {
+                            Some(texto) => {
+                                monto.set(texto);
+                                err.set(None);
+                            }
+                            None => err.set(Some(lang_now().t(
+                                "No hay saldo libre suficiente para el fee.",
+                                "There is not enough unlocked balance for the fee.",
+                            ).into())),
+                        }
+                    },
+                    {lang.t("Usar el máximo", "Use the maximum")}
+                }
+                button {
+                    class: "btn btn-primary",
+                    onclick: move |_| {
+                        match caja_envio.pedir_envio(&destino(), &monto()) {
+                            Ok(()) => err.set(None),
+                            Err(e) => err.set(Some(e)),
+                        }
+                    },
+                    {lang.t("Enviar", "Send")}
+                }
+                button {
+                    class: "btn btn-ghost",
+                    onclick: move |_| caja_act.pedir_actualizacion(),
+                    {lang.t("Actualizar saldo", "Refresh balance")}
+                }
+                button {
+                    class: "btn btn-ghost",
+                    onclick: move |_| caja_atras.pedir_atras(),
+                    {lang.t("Mirar 200 bloques más atrás", "Scan 200 blocks further back")}
+                }
+            } else {
+                p { class: "hint", "{caja::escala(matches!(lang, Idioma::Es))}" }
+                p { class: "hint",
+                    {lang.t(
+                        "Todavía no hay semilla en este equipo. Se crean 25 palabras nuevas y quedan en la carpeta de datos.",
+                        "This machine has no seed yet. This creates 25 new words and keeps them in the data folder.",
+                    )}
+                }
+                button {
+                    class: "btn btn-primary",
+                    onclick: move |_| {
+                        match caja_crear.crear_semilla() {
+                            Ok(_) => {
+                                err.set(None);
+                                vista.set(caja_crear.vista());
+                            }
+                            Err(e) => err.set(Some(e)),
+                        }
+                    },
+                    {lang.t("Crear billetera de stagenet", "Create stagenet wallet")}
+                }
             }
             button {
                 class: "btn btn-ghost",
@@ -1202,6 +1549,7 @@ fn Detalle(
     sel_partida: Signal<Option<usize>>,
     screen: Signal<Screen>,
     err: Signal<Option<String>>,
+    vista: Signal<caja::CajaVista>,
 ) -> Element {
     let mut confirma_abandono = use_signal(|| false);
     let mut export_msg = use_signal(|| None::<String>);
@@ -1238,6 +1586,11 @@ fn Detalle(
             }
             p { class: "lead",
                 {match lang { Idioma::Es => format!("Mandante {mnom} · contratista {cnom} · {n_part} partidas · trabajo {}", monto(obra.trabajo)), Idioma::En => format!("Client {mnom} · contractor {cnom} · {n_part} stages · job {}", monto(obra.trabajo)) }}
+            }
+            if let Some(addr) = vista().caja_de(&obra.id) {
+                p { class: "meta", {match lang { Idioma::Es => format!("Caja stagenet {addr}"), Idioma::En => format!("Stagenet box {addr}") }} }
+            } else if matches!(estado, EstadoObra::Acordada | EstadoObra::EnMarcha) && (soy_m || soy_c) {
+                p { class: "hint", {lang.t("Armando la caja 2-de-2. Los dos tienen que seguir en línea.", "Building the 2-of-2 box. Both have to stay online.")} }
             }
             if sincronizando {
                 p { class: "hint", {lang.t("Sincronizando el trato… las acciones esperan a bajar el estado del otro.", "Syncing the deal… actions wait until the other side's state arrives.")} }
@@ -1579,6 +1932,8 @@ fn VerPartida(
     sel_partida: Signal<Option<usize>>,
     screen: Signal<Screen>,
     err: Signal<Option<String>>,
+    caja: caja::Caja,
+    vista: Signal<caja::CajaVista>,
 ) -> Element {
     let mut pct = use_signal(|| "100".to_string());
     let mut nota = use_signal(String::new);
@@ -1651,6 +2006,18 @@ fn VerPartida(
             }
             p { class: "lead",
                 {match lang { Idioma::Es => format!("{} por lado. Mandante {} · contratista {}", monto(p.capital(garantia)), obra.mandante.nombre, obra.contratista.nombre), Idioma::En => format!("{} per side. Client {} · contractor {}", monto(p.capital(garantia)), obra.mandante.nombre, obra.contratista.nombre) }}
+            }
+            if let Some(pico) = caja::a_piconero(p.capital(garantia)) {
+                p { class: "hint", {match lang { Idioma::Es => format!("{} XMR por lado en stagenet.", caja::fmt_xmr(pico)), Idioma::En => format!("{} XMR per side on stagenet.", caja::fmt_xmr(pico)) }} }
+            }
+            if let Some(tx) = p.fondeo_txid.as_ref() {
+                p { class: "meta", {match lang { Idioma::Es => format!("Fondeo {tx}"), Idioma::En => format!("Funding {tx}") }} }
+            }
+            if let Some(tx) = p.pago_txid.as_ref() {
+                p { class: "meta", {match lang { Idioma::Es => format!("Pago {tx}"), Idioma::En => format!("Payment {tx}") }} }
+            }
+            if let Some(txt) = vista().linea(&obra.id, i).cloned() {
+                p { class: "hint", "{txt.mostrar(matches!(lang, Idioma::Es))}" }
             }
             if sincronizando {
                 p { class: "hint", {lang.t("Sincronizando el trato… las acciones esperan a bajar el estado del otro.", "Syncing the deal… actions wait until the other side's state arrives.")} }
@@ -1747,7 +2114,7 @@ fn VerPartida(
                     button {
                         class: "btn btn-primary",
                         onclick: move |_| confirma_encerrar.set(true),
-                        {lang.t("Encerrar esta partida (stub XMR)", "Lock this stage (XMR stub)")}
+                        {lang.t("Encerrar esta partida", "Lock this stage")}
                     }
                 }
             }
@@ -1780,23 +2147,20 @@ fn VerPartida(
                     button {
                         class: "btn btn-primary",
                         onclick: {
-                            let mut obra = obra.clone();
+                            let obra = obra.clone();
+                            let caja = caja.clone();
                             move |_| {
                                 if !exigir_sesion(red, yo, &obra, err) {
                                     return;
                                 }
                                 let Some(quien) = yo() else { return };
-                                let Some(nodo) = red() else { return };
-                                match obra.encerrar_confirmar(i, &quien) {
-                                    Ok(()) => {
-                                        err.set(None);
-                                        nodo.publicar_obra(obra.clone());
-                                    }
-                                    Err(e) => err.set(Some(lang_now().error(&e))),
+                                match caja.pedir_fondeo(&obra, i, &quien) {
+                                    Ok(()) => err.set(None),
+                                    Err(e) => err.set(Some(e)),
                                 }
                             }
                         },
-                        {lang.t("Confirmar encierre", "Confirm lock")}
+                        {lang.t("Confirmar y fondear", "Confirm and fund")}
                     }
                     button {
                         class: "btn btn-ghost",
@@ -1873,23 +2237,20 @@ fn VerPartida(
                     button {
                         class: "btn btn-primary",
                         onclick: {
-                            let mut obra = obra.clone();
+                            let obra = obra.clone();
+                            let caja = caja.clone();
                             move |_| {
                                 if !exigir_sesion(red, yo, &obra, err) {
                                     return;
                                 }
                                 let Some(quien) = yo() else { return };
-                                let Some(nodo) = red() else { return };
-                                match obra.aceptar_pago(i, &quien) {
-                                    Ok(()) => {
-                                        err.set(None);
-                                        nodo.publicar_obra(obra.clone());
-                                    }
-                                    Err(e) => err.set(Some(lang_now().error(&e))),
+                                match caja.pedir_gasto(&obra, i, &quien) {
+                                    Ok(()) => err.set(None),
+                                    Err(e) => err.set(Some(e)),
                                 }
                             }
                         },
-                        {match lang { Idioma::Es => format!("Aceptar {}%", propuesto.unwrap_or(0)), Idioma::En => format!("Accept {}%", propuesto.unwrap_or(0)) }}
+                        {match lang { Idioma::Es => format!("Aceptar {}% y pagar", propuesto.unwrap_or(0)), Idioma::En => format!("Accept {}% and pay", propuesto.unwrap_or(0)) }}
                     }
                     label { class: "et", {lang.t("OTRO PORCENTAJE", "OTHER PERCENT")} }
                     input {

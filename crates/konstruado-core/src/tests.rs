@@ -117,6 +117,22 @@ fn encerrar_y_pagar_usa_stub_xmr() {
     assert_eq!(rec.acepto_nombre, "Felipe");
     assert!(rec.cuando > 0);
     assert_eq!(obra.partidas[0].encerrado_por.as_ref().unwrap().nombre, "Felipe");
+    assert!(obra.partidas[0].fondeo_txid.is_none());
+}
+
+#[test]
+fn fusionar_copia_el_txid_y_no_lo_pisa() {
+    let mut local = Partida::pendiente("muro");
+    let mut remota = Partida::pendiente("muro");
+    remota.fondeo_txid = Some("abc".into());
+    local.fusionar(remota);
+    assert_eq!(local.fondeo_txid.as_deref(), Some("abc"));
+    let mut otra = Partida::pendiente("muro");
+    otra.fondeo_txid = Some("zzz".into());
+    otra.pago_txid = Some("pago".into());
+    local.fusionar(otra);
+    assert_eq!(local.fondeo_txid.as_deref(), Some("abc"));
+    assert_eq!(local.pago_txid.as_deref(), Some("pago"));
 }
 
 #[test]

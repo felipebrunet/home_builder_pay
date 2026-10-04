@@ -9,7 +9,7 @@ mod rendezvous;
 mod tor;
 
 pub use dht::Nodo;
-pub use proto::{Msg, PeerAddr};
+pub use proto::{CajaMsg, Msg, PeerAddr};
 pub use rendezvous::RENDEZVOUS_ONION;
 pub use tor::{EstadoTor, Tor};
 

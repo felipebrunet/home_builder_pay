@@ -500,3 +500,61 @@ button { -webkit-tap-highlight-color: transparent; }
 }
 
 .hint { color: var(--apagado); font-size: 15px; margin-top: 8px; }
+
+.saldo {
+  margin: 12px 0 0;
+  font-size: 42px;
+  font-weight: 650;
+  letter-spacing: -0.02em;
+  line-height: 1.1;
+}
+
+.saldo small {
+  font-size: 18px;
+  font-weight: 650;
+  color: var(--apagado);
+  margin-left: 6px;
+}
+
+input.addr {
+  font-family: ui-monospace, monospace;
+  font-size: 13px;
+}
+
+.mov {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--linea);
+  font-size: 15px;
+}
+
+.top-billetera,
+.side-wallet {
+  background: var(--card);
+  border: 1.5px solid var(--linea);
+  color: var(--tinta);
+  cursor: pointer;
+  font-family: inherit;
+  font-weight: 650;
+}
+
+.top-billetera {
+  border-radius: 999px;
+  padding: 6px 12px;
+  font-size: 14px;
+}
+
+.side-wallet {
+  display: block;
+  width: 100%;
+  border-radius: 10px;
+  padding: 12px 14px;
+  font-size: 16px;
+  margin-bottom: 16px;
+  text-align: left;
+}
+
+.top-billetera:hover,
+.side-wallet:hover { border-color: var(--tinta); }

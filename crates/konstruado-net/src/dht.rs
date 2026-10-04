@@ -11,7 +11,7 @@ use konstruado_core::{ahora, Oferta, Obra, Persona};
 
 use crate::proto::{
     decode_obras, decode_presentes, decode_tablero, encode_obras, encode_presentes, encode_tablero,
-    key_hex, Msg, PeerAddr,
+    key_hex, CajaMsg, Msg, PeerAddr,
 };
 use crate::tor::{EstadoTor, Tor};
 use crate::{clave_obras, clave_presentes, clave_tablero, PUERTO_LOCAL, RED};
@@ -29,6 +29,12 @@ struct Inner {
     rol_sala: Option<bool>,
     /// Unix time of last inbound dump (Hola/Put/Peers from a peer).
     sync_at: i64,
+    /// Persona local. La caja solo se acepta si `para` coincide.
+    persona: Option<String>,
+    /// Persona anunciada → id de nodo.
+    personas: HashMap<String, String>,
+    /// Bandeja de la caja. No se replica.
+    caja: Vec<CajaMsg>,
 }
 
 #[derive(Clone)]
@@ -72,6 +78,9 @@ impl Nodo {
                 halt: halt.clone(),
                 rol_sala: None,
                 sync_at: 0,
+                persona: None,
+                personas: HashMap::new(),
+                caja: Vec::new(),
             })),
             handle: handle.clone(),
         };
@@ -250,6 +259,74 @@ impl Nodo {
 
     pub fn n_peers(&self) -> usize {
         self.inner.lock().unwrap().peers.len()
+    }
+
+    /// La persona de esta ventana. Sin esto, la caja que llega se descarta.
+    pub fn fijar_persona(&self, id: &str) {
+        if id.is_empty() {
+            return;
+        }
+        self.inner.lock().unwrap().persona = Some(id.to_string());
+    }
+
+    /// Avisa la persona a los pares que ya conocemos. No se guarda en el DHT.
+    pub fn anunciar_persona(&self) {
+        let (persona, node, peers) = {
+            let g = self.inner.lock().unwrap();
+            let Some(persona) = g.persona.clone() else {
+                return;
+            };
+            let peers: Vec<_> = g.peers.values().cloned().collect();
+            (persona, g.id.clone(), peers)
+        };
+        if peers.is_empty() {
+            return;
+        }
+        let msg = Msg::Soy { node, persona };
+        let n = self.clone();
+        self.handle.spawn(async move {
+            for addr in peers {
+                let _ = n.send(&addr, &msg).await;
+            }
+        });
+    }
+
+    /// Manda bytes de la caja solo al nodo que anunció `para`. False si todavía no lo vimos.
+    pub fn enviar_caja(&self, obra: &str, para: &str, de: &str, paso: &str, cuerpo: &[u8]) -> bool {
+        let addr = {
+            let g = self.inner.lock().unwrap();
+            let Some(node) = g.personas.get(para) else {
+                return false;
+            };
+            g.peers.get(node).cloned()
+        };
+        let Some(addr) = addr else {
+            return false;
+        };
+        let msg = Msg::Caja {
+            obra: obra.to_string(),
+            para: para.to_string(),
+            de: de.to_string(),
+            paso: paso.to_string(),
+            cuerpo: hex::encode(cuerpo),
+        };
+        let n = self.clone();
+        self.handle.spawn(async move {
+            let _ = n.send(&addr, &msg).await;
+        });
+        true
+    }
+
+    pub fn tomar_caja(&self) -> Vec<CajaMsg> {
+        let mut g = self.inner.lock().unwrap();
+        std::mem::take(&mut g.caja)
+    }
+
+    pub fn conoce_persona(&self, id: &str) -> bool {
+        let g = self.inner.lock().unwrap();
+        g.personas
+            .get(id)
+            .is_some_and(|node| g.peers.contains_key(node))
     }
 
     pub fn sesion_viva(&self, _yo_id: &str, otro_id: &str) -> bool {
@@ -630,6 +707,42 @@ impl Nodo {
             }
             Msg::Ping => vec![Msg::Pong],
             Msg::Pong => Vec::new(),
+            Msg::Soy { node, persona } => {
+                if node.is_empty() || persona.is_empty() {
+                    return Vec::new();
+                }
+                let mut g = self.inner.lock().unwrap();
+                if node != g.id {
+                    g.personas.insert(persona, node);
+                }
+                Vec::new()
+            }
+            Msg::Caja {
+                obra,
+                para,
+                de,
+                paso,
+                cuerpo,
+            } => {
+                let mut g = self.inner.lock().unwrap();
+                let mia = g.persona.as_deref() == Some(para.as_str());
+                if mia {
+                    if let Ok(bytes) = hex::decode(cuerpo) {
+                        if bytes.len() <= 900_000 {
+                            if g.caja.len() >= 32 {
+                                g.caja.remove(0);
+                            }
+                            g.caja.push(CajaMsg {
+                                obra,
+                                de,
+                                paso,
+                                cuerpo: bytes,
+                            });
+                        }
+                    }
+                }
+                Vec::new()
+            }
         }
     }
 }
@@ -770,6 +883,50 @@ mod tests {
             }
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
+        a.parar();
+        b.parar();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn la_caja_llega_al_otro_y_no_al_dht() {
+        let bootstrap = puerto_libre();
+        let a = Nodo::arrancar_en(bootstrap).await.unwrap();
+        tokio::time::sleep(Duration::from_millis(80)).await;
+        let b = Nodo::arrancar_en(bootstrap).await.unwrap();
+        let jose = Persona::nueva("José").unwrap();
+        let juan = Persona::nueva("Juan").unwrap();
+        a.fijar_persona(&jose.id);
+        b.fijar_persona(&juan.id);
+        a.anunciar(jose.clone());
+        b.anunciar(juan.clone());
+
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(4);
+        loop {
+            a.anunciar_persona();
+            b.anunciar_persona();
+            if a.conoce_persona(&juan.id) && b.conoce_persona(&jose.id) {
+                break;
+            }
+            if tokio::time::Instant::now() > deadline {
+                panic!("no se anunciaron las personas");
+            }
+            tokio::time::sleep(Duration::from_millis(40)).await;
+        }
+        assert!(a.enviar_caja("obra-1", &juan.id, &jose.id, "dkg-commit", b"hola-caja"));
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(4);
+        loop {
+            let caja = b.tomar_caja();
+            if caja.iter().any(|m| m.cuerpo == b"hola-caja" && m.paso == "dkg-commit" && m.de == jose.id)
+            {
+                break;
+            }
+            if tokio::time::Instant::now() > deadline {
+                panic!("la caja no llegó");
+            }
+            tokio::time::sleep(Duration::from_millis(40)).await;
+        }
+        assert!(a.tomar_caja().is_empty());
+        assert!(b.obras().is_empty());
         a.parar();
         b.parar();
     }

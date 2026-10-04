@@ -1,0 +1,18 @@
+Vendored snapshot of https://github.com/monero-oxide/monero-oxide
+commit 731657ae3385be667abb556266369a497bc86f13 (2026-08-07).
+
+Konstruado patches, not upstream:
+
+1. monero-oxide/ringct/clsag/src/lib.rs
+   Clsag::sign_input_with_mask — one CLSAG with a caller-chosen pseudo-out mask.
+2. monero-oxide/wallet/src/send/tx_keys.rs
+   SignableTransaction::sum_output_masks is public.
+3. monero-oxide/wallet/src/send/mod.rs
+   SignableTransaction::input_sum and external_payments.
+   Re-export TransactionPreprocess and TransactionSignatureShare.
+
+Do not put wallet seeds or multisig shares in this tree.
+
+The package manifests no longer say `[lints] workspace = true`. Nested
+workspaces are ignored when this tree is a path dependency of
+home_builder_pay, and that workspace does not define the oxide lints.

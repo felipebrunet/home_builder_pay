@@ -4,4 +4,31 @@ version = "0.1.0"
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Monero logic for Konstruado"
+description = "Monero 2-of-2 for Konstruado. Stagenet skeleton: seed, DKG, atomic fund, spend."
+
+[features]
+default = ["serde-wire"]
+# Enables bincode envelopes in the cooperative fund protocol.
+serde-wire = []
+
+[dependencies]
+bincode = "1.3"
+curve25519-dalek = { version = "4", default-features = false, features = ["alloc", "zeroize", "precomputed-tables"] }
+dkg-pedpop = { path = "./vendor/dkg-pedpop" }
+frost = { package = "modular-frost", version = "0.11", default-features = false, features = ["ed25519"] }
+hex = "0.4"
+monero-clsag = { path = "../../third_party/monero-oxide/monero-oxide/ringct/clsag" }
+monero-seed = { path = "./vendor/monero-seed" }
+monero-simple-request-rpc = { path = "../../third_party/monero-oxide/monero-oxide/interface/daemon/simple-request", features = ["webpki-roots"] }
+monero-wallet = { path = "../../third_party/monero-oxide/monero-oxide/wallet", features = ["multisig"] }
+rand_core = { version = "0.6", features = ["getrandom"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+thiserror = "2"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "time", "net"] }
+zeroize = { version = "1", features = ["derive", "std"] }
+
+[[bin]]
+name = "stagenet"
+path = "src/bin/stagenet.rs"

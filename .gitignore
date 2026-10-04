@@ -1,5 +1,8 @@
 /target
 /dist
+third_party/**/target
+# PDFs de auditoría de oxide. No hacen falta para compilar.
+third_party/**/audits/
 *~
 *.swp
 .DS_Store
@@ -9,6 +12,11 @@
 *.ttf
 *.woff
 *.woff2
+# Datos locales. .konstruado-dinero y similares llevan semilla y estado.
 .konstruado/
+.konstruado-*/
+semilla.txt
+libro.json
+*.share
 crates/konstruado/fonts/
 konstruado-tor-*/

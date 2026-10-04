@@ -115,6 +115,12 @@ pub struct Partida {
     pub monto: u64,
     #[serde(default)]
     pub encerrar_seq: u32,
+    /// Transacción de fondeo vista en un bloque. Vacío hasta que la ventana la observa.
+    #[serde(default)]
+    pub fondeo_txid: Option<String>,
+    /// Transacción de pago vista en un bloque.
+    #[serde(default)]
+    pub pago_txid: Option<String>,
 }
 
 impl PartidaEstado {
@@ -143,6 +149,8 @@ impl Partida {
             recibo: None,
             monto: 0,
             encerrar_seq: 0,
+            fondeo_txid: None,
+            pago_txid: None,
         }
     }
 
@@ -189,6 +197,8 @@ impl Partida {
             if otra.recibo.is_some() {
                 self.recibo = otra.recibo;
             }
+            llenar_txid(&mut self.fondeo_txid, &otra.fondeo_txid);
+            llenar_txid(&mut self.pago_txid, &otra.pago_txid);
             return;
         }
         if otra.estado == self.estado {
@@ -223,6 +233,14 @@ impl Partida {
         {
             self.detalle = otra.detalle;
         }
+        llenar_txid(&mut self.fondeo_txid, &otra.fondeo_txid);
+        llenar_txid(&mut self.pago_txid, &otra.pago_txid);
+    }
+}
+
+fn llenar_txid(dst: &mut Option<String>, src: &Option<String>) {
+    if dst.is_none() {
+        *dst = src.clone();
     }
 }
 

@@ -40,6 +40,25 @@ pub enum Msg {
     },
     Ping,
     Pong,
+    /// Persona de este nodo. No entra al DHT.
+    Soy { node: String, persona: String },
+    /// Protocolo de la caja, solo para `para`. `cuerpo` es hex. No entra al DHT.
+    Caja {
+        obra: String,
+        para: String,
+        de: String,
+        paso: String,
+        cuerpo: String,
+    },
+}
+
+/// Mensaje de caja ya decodificado. El hex inválido se tira.
+#[derive(Clone, Debug)]
+pub struct CajaMsg {
+    pub obra: String,
+    pub de: String,
+    pub paso: String,
+    pub cuerpo: Vec<u8>,
 }
 
 pub fn encode_tablero(ofertas: &[Oferta]) -> Vec<u8> {
