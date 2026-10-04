@@ -11,6 +11,7 @@ pub enum Error {
     Porcentaje,
     Detalle,
     Desconectado,
+    SinClave,
 }
 
 impl std::fmt::Display for Error {
@@ -32,6 +33,10 @@ impl std::fmt::Display for Error {
             Error::Desconectado => write!(
                 f,
                 "El otro no está en línea. Tiene que tener Konstruado abierto."
+            ),
+            Error::SinClave => write!(
+                f,
+                "Falta la clave del otro para cifrar la nota. Esperá a que entre."
             ),
         }
     }

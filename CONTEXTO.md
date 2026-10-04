@@ -1,6 +1,6 @@
 # Konstruado — contexto para una sesión nueva
 
-Producto de escritorio (Dioxus) para un **trato de obra entre dos personas**, sin servidor. No es un chat. El mandante publica un aviso; el contratista lo ve y acepta o contraoferta. Monero vive en `xmr-joint` y la ventana lo usa en stagenet contra `https://stagenet.xmr.kernal.eu:38089`. `monero_fn` sigue en 4: el dominio no finge el fondeo. Encerrada y Pagada se marcan cuando un scan local ve la transacción en un bloque. No hay Bitcoin. No se probó un broadcast.
+Producto de escritorio (Dioxus) para un **trato de obra entre dos personas**, sin servidor. No es un chat. El mandante publica un aviso; el contratista lo ve y acepta o contraoferta. Las notas del trato van cifradas entre los dos (X25519 + ChaCha20-Poly1305). Monero vive en `xmr-joint` y la ventana lo usa en stagenet contra `https://stagenet.xmr.kernal.eu:38089`. `monero_fn` sigue en 4: el dominio no finge el fondeo. Encerrada y Pagada se marcan cuando un scan local ve la transacción en un bloque. No hay Bitcoin. No se probó un broadcast.
 
 Hablamos en español. UI rioplatense/chilena (“Poné”, “te toca”) por defecto; el usuario puede pasar a **English** (ES/EN en la barra y en Cuenta). El trato no cambia.
 
@@ -8,7 +8,7 @@ Hablamos en español. UI rioplatense/chilena (“Poné”, “te toca”) por de
 
 | Crate | Rol |
 |---|---|
-| `konstruado-core` | Dominio: persona, oferta, obra, partidas, contra, extra, recibo, fusión. Sin UI ni Tor. |
+| `konstruado-core` | Dominio: persona, oferta, obra, partidas, contra, extra, recibo, fusión, notas cifradas. Sin UI ni Tor. |
 | `konstruado-net` | Encuentro: TCP local `17432`, gossip DHT, Tor propio + onion horneado. |
 | `konstruado` | Ventana: pantallas, persistir, exportar, temas, idioma. |
 | `xmr-joint` | Semilla de 25 palabras, DKG 2-de-2, fondeo atómico y gasto con dos destinos. La ventana lo llama desde `caja.rs`. |
@@ -26,6 +26,7 @@ El split está bien. No hace falta un refactor grande. `main.rs` es largo; parti
 - **Sesión viva + catch-up:** pagar, contra, extra, encerrar y cierre cooperativo piden par reciente (~25 s) **y** un dump de estado reciente (~30 s). Si Tor aún arranca o no bajó lo último: “Sincronizando el trato…”. Publicar, exportar, tema y editar texto pendiente no.
 - **Extra:** cualquiera propone texto **y monto propio**. El otro acepta o rechaza. El rechazo no se puede pisar con gossip (`extra_seq`). Extra congelada si la obra está abandonada/cerrada/rechazada.
 - **Abandonar** corta el trato. Cerradas/abandonadas no viven en el tablero central.
+- **Notas:** el texto se sella para los dos antes de publicarse. Un tercero ve la caja y no las palabras. La obra en curso no aparece en su tablero.
 
 No son un chat de usuarios: se ven **obras y avisos**, no una lista tipo WhatsApp.
 
@@ -59,7 +60,7 @@ cargo run
 
 Clone del notebook: `git clone git@github.com-hbp:felipebrunet/home_builder_pay.git` (alias SSH `hbp_deploy`). En el notebook hay que tener GTK/WebKit/`libxdo-dev`/`tor`.
 
-Primero mandante (esperar `sala abierta`). Después contratista. La primera vez Tor puede tardar en bootstrap.
+Primero mandante (esperar `sala abierta`). Después contratista. La primera vez Tor puede tardar en bootstrap. En la otra máquina se crea una semilla nueva (Cuenta o Billetera). No se copia `xmr/semilla.txt`.
 
 ## Monero (stagenet)
 

@@ -2,7 +2,7 @@
 
 For a new Grok session, read `CONTEXTO.md` first.
 
-Peer-to-peer construction escrow on Monero (crypto still a stub). Desktop is Dioxus.
+Peer-to-peer construction escrow. Desktop is Dioxus. The deal, the meeting room, and a stagenet wallet are in the window. A broadcast to the public stagenet daemon has not been proven.
 
 The two people do not see each other like a chat. Roles:
 
@@ -13,9 +13,37 @@ Guarantee must divide the job amount exactly: 10 000 / 2 000 → 5 stages. I
 
 Rendezvous is hardcoded (`konstruado-red-1` plus a baked Tor v3 onion). Each node starts its own `tor` process, publishes a personal hidden service, and also hosts/dials that shared onion so two machines meet without exchanging addresses. Two copies on one PC still find each other on port 17432 without waiting for Tor.
 
+## Status
+
+| Piece | Where it stands |
+|---|---|
+| Deal, board, Tor rendezvous, two data dirs | In the window. |
+| Notes and extra text between the two parties | Sealed. A third person on the swarm can see the box, not the words. A live job leaves their board. |
+| Personal stagenet wallet | **Billetera** in the top bar, or the account screen. Create it there. The 25-word seed is `xmr/semilla.txt` (mode 0600), not `estado.json`. |
+| 2-of-2 box | Built when the job is agreed. Messages go to the other person, not the DHT. Each side keeps `xmr/{obra}.share`. |
+| Stage funding and payout | The buttons build the transaction. Encerrada and Pagada flip only after a local scan sees it in a block. A live publish can still be rejected by the node. |
+
+The daemon is fixed: `https://stagenet.xmr.kernal.eu:38089`. There is no field to change it. Oxide is vendored under `third_party/monero-oxide` with the CLSAG patches this crate needs.
+
+`cargo test --workspace` does not talk to that daemon.
+
+## How Monero pays a stage
+
+One personal wallet per machine, then one shared box per job, then one transaction in and one transaction out. The box is an ordinary stagenet address. Its spend key exists only as two FROST shares.
+
+**1. Personal wallet.** Cuenta or Billetera runs **Crear billetera de stagenet**. The address to fund is on Billetera. Balance scan starts 40 blocks back; **Mirar 200 bloques más atrás** walks further. The mempool does not count. Outputs stay locked for about 10 blocks. The other PC creates its own seed. Do not copy `semilla.txt`.
+
+**2. One 2-of-2 box when the two match.** The client is FROST index 1 and pays the funding fee. The contractor is index 2. The DKG context includes the job id. Neither side holds the full spend scalar. The shared view is sent once and stored in the share file.
+
+**3. Funding one stage.** **Confirmar y fondear** builds one transaction whose output is `2 × guarantee` to the box. Both personal wallets contribute. Encerrada is set when the scan sees that transaction in a block.
+
+**4. Paying the stage.** The pot is `2 × guarantee`. The contractor receives the agreed percent of the payment plus their own guarantee. The client receives the rest. The fee comes from the client's remainder first. At 100% the contractor receives the pot minus the fee.
+
+Both shares have to sign. One share is not a transaction. 1 domain unit = 0.00002 XMR, so a guarantee of 2000 is 0.04 XMR per side.
+
 ## Build from source
 
-Needs Rust, GTK3, WebKitGTK 4.1, `libxdo-dev`, and the `tor` package.
+Needs Rust 1.89 or newer (`monero-wallet` 0.2), GTK3, WebKitGTK 4.1, `libxdo-dev`, and the `tor` package.
 
 ```bash
 sudo apt install tor libgtk-3-0 libwebkit2gtk-4.1-0 libxdo-dev
@@ -25,7 +53,7 @@ cargo run
 
 The UI is Spanish by default. Switch to English with **ES / EN** in the top bar (or in the account screen). The deal itself does not change.
 
-State is saved in `~/.konstruado/estado.json` (override with `KONSTRUADO_DATOS`). Closing the app keeps name, role, language, and jobs.
+State is saved in `~/.konstruado/estado.json` (override with `KONSTRUADO_DATOS`). The seed and the per-job share are under `xmr/` in that same directory, mode 0600, and are not inside `estado.json`.
 
 Two users on one PC need two data dirs:
 
