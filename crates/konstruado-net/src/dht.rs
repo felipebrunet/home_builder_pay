@@ -532,13 +532,7 @@ impl Nodo {
 
     fn puts(&self) -> Vec<Msg> {
         let g = self.inner.lock().unwrap();
-        g.store
-            .iter()
-            .map(|(k, v)| Msg::Put {
-                key: k.clone(),
-                val: v.clone(),
-            })
-            .collect()
+        g.store.iter().map(|(k, v)| put_de(k, v)).collect()
     }
 
     async fn gossip(&self) {
@@ -548,14 +542,7 @@ impl Nodo {
                 PeerAddr::Tcp { port, .. } | PeerAddr::Onion { port, .. } => *port,
             };
             let peers: Vec<_> = g.peers.values().cloned().collect();
-            let puts: Vec<_> = g
-                .store
-                .iter()
-                .map(|(k, v)| Msg::Put {
-                    key: k.clone(),
-                    val: v.clone(),
-                })
-                .collect();
+            let puts: Vec<_> = g.store.iter().map(|(k, v)| put_de(k, v)).collect();
             (peers, puts, port, g.bootstrap)
         };
         if peers.is_empty() && port != bootstrap {
@@ -650,14 +637,7 @@ impl Nodo {
                     .map(|(k, v)| (k.clone(), v.clone()))
                     .chain(std::iter::once((g.id.clone(), g.addr.clone())))
                     .collect();
-                let puts: Vec<Msg> = g
-                    .store
-                    .iter()
-                    .map(|(k, v)| Msg::Put {
-                        key: k.clone(),
-                        val: v.clone(),
-                    })
-                    .collect();
+                let puts: Vec<Msg> = g.store.iter().map(|(k, v)| put_de(k, v)).collect();
                 drop(g);
                 if foreign {
                     self.marcar_sync();
@@ -747,6 +727,25 @@ impl Nodo {
     }
 }
 
+fn put_de(key: &str, val: &[u8]) -> Msg {
+    Msg::Put {
+        key: key.to_string(),
+        val: valor_para_red(key, val),
+    }
+}
+
+/// El almacén local puede guardar la nota en claro. El anuncio no la lleva.
+fn valor_para_red(key: &str, val: &[u8]) -> Vec<u8> {
+    if key == key_hex(&clave_obras()) {
+        let obras: Vec<_> = decode_obras(val)
+            .into_iter()
+            .map(|o| o.sin_texto_claro())
+            .collect();
+        return encode_obras(&obras);
+    }
+    val.to_vec()
+}
+
 fn merge_store(store: &mut HashMap<String, Vec<u8>>, key: String, val: Vec<u8>) {
     if key == key_hex(&crate::clave_tablero()) {
         let mut a = store
@@ -826,7 +825,39 @@ async fn read_msg(s: &mut TcpStream) -> std::io::Result<Msg> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use konstruado_core::{Oferta, Persona};
+    use konstruado_core::{Aceptacion, ExtraPartida, NotaPartida, Oferta, Persona};
+
+    #[test]
+    fn el_anuncio_no_lleva_la_nota_en_claro() {
+        let m = Persona::nueva("Alice").unwrap();
+        let c = Persona::nueva("Bob").unwrap();
+        let o = Oferta::publicar(m, "Casa", 10_000, 2_000, vec!["Muro".into()]).unwrap();
+        let a = Aceptacion::de(&o, c.clone(), 2_000).unwrap();
+        let mut obra = Obra::desde_oferta(o, a).unwrap();
+        obra.partidas[0].notas.push(NotaPartida {
+            autor_id: c.id.clone(),
+            autor_nombre: c.nombre.clone(),
+            porcentaje: 80,
+            texto: "Terminé el muro".into(),
+            cuando: 0,
+            caja: String::new(),
+        });
+        obra.extra = Some(ExtraPartida {
+            detalle: "Techumbre secreta".into(),
+            monto: 30,
+            por: c,
+            detalle_caja: String::new(),
+        });
+        let key = key_hex(&clave_obras());
+        let out = valor_para_red(&key, &encode_obras(&[obra]));
+        let texto = String::from_utf8(out.clone()).unwrap();
+        assert!(!texto.contains("Terminé el muro"));
+        assert!(!texto.contains("Techumbre secreta"));
+        assert!(texto.contains("Muro"));
+        let vuelta = decode_obras(&out);
+        assert!(vuelta[0].partidas[0].notas[0].texto.is_empty());
+        assert!(vuelta[0].extra.as_ref().unwrap().detalle.is_empty());
+    }
 
     #[test]
     fn merge_une_tableros() {

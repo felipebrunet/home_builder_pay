@@ -26,7 +26,7 @@ El split está bien. No hace falta un refactor grande. `main.rs` es largo; parti
 - **Sesión viva + catch-up:** pagar, contra, extra, encerrar y cierre cooperativo piden par reciente (~25 s) **y** un dump de estado reciente (~30 s). Si Tor aún arranca o no bajó lo último: “Sincronizando el trato…”. Publicar, exportar, tema y editar texto pendiente no.
 - **Extra:** cualquiera propone texto **y monto propio**. El otro acepta o rechaza. El rechazo no se puede pisar con gossip (`extra_seq`). Extra congelada si la obra está abandonada/cerrada/rechazada.
 - **Abandonar** corta el trato. Cerradas/abandonadas no viven en el tablero central.
-- **Notas:** el texto se sella para los dos antes de publicarse. Un tercero ve la caja y no las palabras. La obra en curso no aparece en su tablero.
+- **Notas:** el texto se sella para los dos antes de publicarse. El anuncio periódico, el saludo y la respuesta al otro sacan las palabras en claro de la nota y del extra pendiente; el disco local las conserva. Un tercero ve la caja y no las palabras. La obra en curso no aparece en su tablero.
 
 No son un chat de usuarios: se ven **obras y avisos**, no una lista tipo WhatsApp.
 

@@ -413,6 +413,32 @@ fn carol_ve_la_caja_y_no_el_texto() {
 }
 
 #[test]
+fn el_chisme_vacio_no_borra_la_nota_local() {
+    let (m, _) = par("Alice");
+    let (c, _) = par("Bob");
+    let o = Oferta::publicar(m.clone(), "Casa", 10_000, 2_000, vec!["Muro".into()]).unwrap();
+    let a = Aceptacion::de(&o, c.clone(), 2_000).unwrap();
+    let mut local = Obra::desde_oferta(o, a).unwrap();
+    local.encerrar_proponer(0, &m).unwrap();
+    local.encerrar_confirmar(0, &c).unwrap();
+    local.avisar_termino(0, &c, 80, "Terminé el muro").unwrap();
+    local.proponer_extra(&c, "Techumbre secreta", 30).unwrap();
+
+    let mut eco = local.sin_texto_claro();
+    assert!(eco.partidas[0].notas[0].texto.is_empty());
+    assert!(eco.extra.as_ref().unwrap().detalle.is_empty());
+    assert_eq!(eco.partidas[0].detalle, "Muro");
+    eco.partidas[0].estado = PartidaEstado::Pagada;
+    local.fusionar(eco);
+    assert_eq!(local.partidas[0].notas[0].texto, "Terminé el muro");
+    assert_eq!(
+        local.extra.as_ref().unwrap().detalle,
+        "Techumbre secreta"
+    );
+    assert_eq!(local.partidas[0].estado, PartidaEstado::Pagada);
+}
+
+#[test]
 fn extra_cifrada_vuelve_al_aceptar() {
     let (m, ms) = par("Alice");
     let (c, cs) = par("Bob");

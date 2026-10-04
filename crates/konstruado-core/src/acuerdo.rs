@@ -201,7 +201,9 @@ impl Partida {
             self.pago = otra.pago;
             self.turno = otra.turno;
             if otra.notas.len() >= self.notas.len() {
+                let previas = std::mem::take(&mut self.notas);
                 self.notas = otra.notas;
+                restaurar_notas(&mut self.notas, &previas);
             }
             if otra.encerrado_por.is_some() {
                 self.encerrado_por = otra.encerrado_por;
@@ -217,7 +219,9 @@ impl Partida {
         }
         if otra.estado == self.estado {
             if otra.notas.len() > self.notas.len() {
+                let previas = std::mem::take(&mut self.notas);
                 self.notas = otra.notas;
+                restaurar_notas(&mut self.notas, &previas);
                 self.propuesto = otra.propuesto;
                 self.turno = otra.turno;
             }
@@ -256,6 +260,21 @@ impl Partida {
 fn llenar_txid(dst: &mut Option<String>, src: &Option<String>) {
     if dst.is_none() {
         *dst = src.clone();
+    }
+}
+
+/// Una copia reenviada puede venir sin el texto. No pisa lo que esta máquina ya tiene.
+fn restaurar_notas(dst: &mut [NotaPartida], prev: &[NotaPartida]) {
+    for (a, b) in dst.iter_mut().zip(prev.iter()) {
+        if a.caja.is_empty() && !b.caja.is_empty() {
+            a.caja = b.caja.clone();
+            a.texto.clear();
+        } else if a.texto.is_empty() && a.caja.is_empty() && !b.texto.is_empty() {
+            a.texto = b.texto.clone();
+        }
+        if !a.caja.is_empty() {
+            a.texto.clear();
+        }
     }
 }
 
@@ -913,6 +932,21 @@ impl Obra {
             Ok(t) => TextoLeido::Plano(t),
             Err(_) => TextoLeido::Cerrado,
         }
+    }
+
+    /// Copia para el chisme. La nota y el extra pendiente salen sin palabras en claro.
+    /// La caja cifrada y el título de la partida se quedan. El disco local no cambia.
+    pub fn sin_texto_claro(&self) -> Self {
+        let mut o = self.clone();
+        for p in &mut o.partidas {
+            for n in &mut p.notas {
+                n.texto.clear();
+            }
+        }
+        if let Some(ex) = o.extra.as_mut() {
+            ex.detalle.clear();
+        }
+        o
     }
 
     fn hay_texto_claro(&self) -> bool {

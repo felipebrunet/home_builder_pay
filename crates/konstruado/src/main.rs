@@ -131,7 +131,7 @@ fn App() -> Element {
         let mut g = persist::cargar();
         if let Some(yo) = g.yo.as_mut() {
             let (sec, pubk) = asegurar_clave(&g.clave_sec, &yo.clave_pub);
-            let mut changed = g.clave_sec != sec || yo.clave_pub != pubk;
+            let changed = g.clave_sec != sec || yo.clave_pub != pubk;
             yo.clave_pub = pubk;
             g.clave_sec = sec;
             if changed {
@@ -229,8 +229,10 @@ fn App() -> Element {
                         n.fijar_persona(&p.id);
                         n.anunciar(p.clone());
                         n.anunciar_persona();
+                        let sec = clave_sec().0;
+                        sellar_guardadas(&n, &p, &sec);
                         let hechos = caja_motor.tick(&n, &p, &n.obras());
-                        aplicar_monero(&n, &p, &hechos);
+                        aplicar_monero(&n, &p, &sec, &hechos);
                         vista_caja.set(caja_motor.vista());
                     }
                     if let Some(r) = rol() {
@@ -461,7 +463,25 @@ fn exigir_sesion(
     }
 }
 
-fn aplicar_monero(nodo: &Nodo, yo: &Persona, hechos: &[caja::Hecho]) {
+/// Sella notas y extras que quedaron en claro. Si falta la clave del otro, la obra no se toca.
+fn sellar_guardadas(nodo: &Nodo, yo: &Persona, sec: &str) {
+    for obra in nodo.obras() {
+        if !obra.participa(&yo.id) {
+            continue;
+        }
+        let mut sealed = obra.clone();
+        if lista_para_publicar(&mut sealed, yo, sec) && sealed != obra {
+            nodo.publicar_obra(sealed);
+        }
+    }
+}
+
+/// True cuando la obra ya no tiene texto en claro. Si no se puede sellar, queda como estaba.
+fn lista_para_publicar(obra: &mut Obra, yo: &Persona, sec: &str) -> bool {
+    obra.preparar_para_red(&yo.id, &yo.clave_pub, sec).is_ok()
+}
+
+fn aplicar_monero(nodo: &Nodo, yo: &Persona, sec: &str, hechos: &[caja::Hecho]) {
     for h in hechos {
         let mut obras = nodo.obras();
         let Some(obra) = obras.iter_mut().find(|o| o.id == h.obra) else {
@@ -492,7 +512,7 @@ fn aplicar_monero(nodo: &Nodo, yo: &Persona, hechos: &[caja::Hecho]) {
                 publico = true;
             }
         }
-        if publico {
+        if publico && lista_para_publicar(obra, yo, sec) {
             nodo.publicar_obra(obra.clone());
         }
     }
@@ -2430,5 +2450,51 @@ fn VerPartida(
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use konstruado_core::NotaPartida;
+
+    fn par(nombre: &str) -> (Persona, String) {
+        let mut p = Persona::nueva(nombre).unwrap();
+        let (sec, pubk) = konstruado_core::generar_clave();
+        p.clave_pub = pubk;
+        (p, sec)
+    }
+
+    fn obra_con_nota(m: &Persona, c: &Persona, texto: &str) -> Obra {
+        let o = Oferta::publicar(m.clone(), "Casa", 10_000, 2_000, vec!["Muro".into()]).unwrap();
+        let a = Aceptacion::de(&o, c.clone(), 2_000).unwrap();
+        let mut obra = Obra::desde_oferta(o, a).unwrap();
+        obra.partidas[0].notas.push(NotaPartida {
+            autor_id: c.id.clone(),
+            autor_nombre: c.nombre.clone(),
+            porcentaje: 100,
+            texto: texto.into(),
+            cuando: 0,
+            caja: String::new(),
+        });
+        obra
+    }
+
+    #[test]
+    fn el_fondeo_no_republica_una_nota_en_claro() {
+        let (m, _) = par("Alice");
+        let (c, cs) = par("Bob");
+        let mut obra = obra_con_nota(&m, &c, "Terminé el muro");
+        assert!(lista_para_publicar(&mut obra, &c, &cs));
+        assert!(obra.partidas[0].notas[0].texto.is_empty());
+        assert!(!obra.partidas[0].notas[0].caja.is_empty());
+        assert!(lista_para_publicar(&mut obra, &c, &cs));
+
+        let mut m = m;
+        m.clave_pub.clear();
+        let mut clara = obra_con_nota(&m, &c, "Terminé el muro");
+        assert!(!lista_para_publicar(&mut clara, &c, &cs));
+        assert_eq!(clara.partidas[0].notas[0].texto, "Terminé el muro");
+        assert!(clara.partidas[0].notas[0].caja.is_empty());
     }
 }
