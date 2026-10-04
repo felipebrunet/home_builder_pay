@@ -68,6 +68,18 @@ pub async fn scan_marcado(
     Ok(found)
 }
 
+/// Arma el anillo de una salida que la billetera ya guardó. No vuelve a escanear la cadena.
+pub async fn anillar(raw: Vec<u8>) -> Result<(Vec<OutputWithDecoys>, (u64, u64))> {
+    let output = WalletOutput::read(&mut std::io::Cursor::new(raw))
+        .map_err(|e| Error::Chain(format!("salida: {e}")))?;
+    let rpc = connect(crate::network::STAGENET_DAEMON).await?;
+    let altura = tip(&rpc).await?;
+    let rate = fee_rate(&rpc).await?;
+    let partes = crate::fund::fee_parts(&rate);
+    let decoy = with_decoys(&rpc, output, altura).await?;
+    Ok((vec![decoy], partes))
+}
+
 pub async fn with_decoys(rpc: &Daemon, output: WalletOutput, tip_height: usize) -> Result<OutputWithDecoys> {
     OutputWithDecoys::new(&mut OsRng, rpc, RING_LEN, tip_height, output)
         .await

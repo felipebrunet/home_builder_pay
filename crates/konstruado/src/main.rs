@@ -426,6 +426,14 @@ fn exigir_sesion(
         return false;
     };
     let Some(p) = yo() else {
+        err.set(Some(
+            lang_now()
+                .t(
+                    "Falta tu nombre en esta ventana.",
+                    "This window has no name yet.",
+                )
+                .into(),
+        ));
         return false;
     };
     let otro = if p.id == obra.mandante.id {
@@ -1059,7 +1067,7 @@ fn Billetera(
                     }
                 }
                 if let Some(aviso) = b.aviso.clone() {
-                    p { class: "hint", "{aviso}" }
+                    p { class: "err", "{caja::aviso_humano(&aviso, matches!(lang, Idioma::Es))}" }
                 }
                 if let Some(tx) = b.ultimo.clone() {
                     p { class: "meta",
@@ -1170,7 +1178,7 @@ fn Billetera(
                     onclick: move |_| {
                         match caja_envio.pedir_envio(&destino(), &monto()) {
                             Ok(()) => err.set(None),
-                            Err(e) => err.set(Some(e)),
+                            Err(e) => err.set(Some(caja::aviso_humano(&e, lang_now() == Idioma::Es))),
                         }
                     },
                     {lang.t("Enviar", "Send")}
@@ -2131,6 +2139,9 @@ fn VerPartida(
         .as_ref()
         .map(|q| q.id == mid)
         .unwrap_or(false);
+    let fondeo_curso = vista().linea(&obra.id, i).cloned();
+    let frenado = fondeo_curso.as_ref().is_some_and(caja::es_freno);
+    let clase_linea = if frenado { "err" } else { "hint" };
     let sincronizando = !cortada && sincronizando_trato(red, yo, &obra);
     let notas_vis: Vec<(String, String, bool)> = p
         .notas
@@ -2176,7 +2187,7 @@ fn VerPartida(
                 p { class: "meta", {match lang { Idioma::Es => format!("Pago {tx}"), Idioma::En => format!("Payment {tx}") }} }
             }
             if let Some(txt) = vista().linea(&obra.id, i).cloned() {
-                p { class: "hint", "{txt.mostrar(matches!(lang, Idioma::Es))}" }
+                p { class: "{clase_linea}", "{txt.mostrar(matches!(lang, Idioma::Es))}" }
             }
             if sincronizando {
                 p { class: "hint", {lang.t("Sincronizando el trato… las acciones esperan a bajar el estado del otro.", "Syncing the deal… actions wait until the other side's state arrives.")} }
@@ -2280,8 +2291,10 @@ fn VerPartida(
                 }
             }
             if !cortada && p.estado == PartidaEstado::Encerrando {
-                if soy_prop_enc {
-                    p { class: "hint", {lang.t("Esperando que el otro confirme el encierre.", "Waiting for the other person to confirm the lock.")} }
+                if soy_prop_enc && !frenado {
+                    if fondeo_curso.is_none() {
+                        p { class: "hint", {lang.t("Esperando que el otro confirme el encierre.", "Waiting for the other person to confirm the lock.")} }
+                    }
                     button {
                         class: "btn btn-ghost",
                         onclick: {
@@ -2303,8 +2316,48 @@ fn VerPartida(
                         },
                         {lang.t("Cancelar propuesta", "Cancel proposal")}
                     }
-                } else {
-                    p { class: "lead", {lang.t("El otro quiere encerrar esta partida. Los dos tienen que confirmar.", "The other person wants to lock this stage. Both have to confirm.")} }
+                } else if frenado {
+                    button {
+                        class: "btn btn-primary",
+                        onclick: {
+                            let obra = obra.clone();
+                            let caja = caja.clone();
+                            move |_| {
+                                if !exigir_sesion(red, yo, &obra, err) {
+                                    return;
+                                }
+                                let Some(quien) = yo() else { return };
+                                match caja.reintentar_fondeo(&obra, i, &quien) {
+                                    Ok(()) => err.set(None),
+                                    Err(e) => err.set(Some(caja::aviso_humano(&e, lang_now() == Idioma::Es))),
+                                }
+                            }
+                        },
+                        {lang.t("Reintentar el fondeo", "Try the funding again")}
+                    }
+                    button {
+                        class: "btn btn-ghost",
+                        onclick: {
+                            let mut obra = obra.clone();
+                            move |_| {
+                                if !exigir_sesion(red, yo, &obra, err) {
+                                    return;
+                                }
+                                let Some(quien) = yo() else { return };
+                                let Some(nodo) = red() else { return };
+                                match obra.encerrar_cancelar(i, &quien) {
+                                    Ok(()) => {
+                                        err.set(None);
+                                        publicar_trato(&nodo, obra.clone(), yo(), err);
+                                    }
+                                    Err(e) => err.set(Some(lang_now().error(&e))),
+                                }
+                            }
+                        },
+                        {lang.t("No encerrar", "Do not lock")}
+                    }
+                } else if fondeo_curso.is_none() {
+                    p { class: "lead", {lang.t("El otro quiere encerrar esta partida. Confirmar arma una sola transacción con los dos.", "The other person wants to lock this stage. Confirm builds one transaction from both wallets.")} }
                     button {
                         class: "btn btn-primary",
                         onclick: {
@@ -2317,12 +2370,34 @@ fn VerPartida(
                                 let Some(quien) = yo() else { return };
                                 match caja.pedir_fondeo(&obra, i, &quien) {
                                     Ok(()) => err.set(None),
-                                    Err(e) => err.set(Some(e)),
+                                    Err(e) => err.set(Some(caja::aviso_humano(&e, lang_now() == Idioma::Es))),
                                 }
                             }
                         },
                         {lang.t("Confirmar y fondear", "Confirm and fund")}
                     }
+                    button {
+                        class: "btn btn-ghost",
+                        onclick: {
+                            let mut obra = obra.clone();
+                            move |_| {
+                                if !exigir_sesion(red, yo, &obra, err) {
+                                    return;
+                                }
+                                let Some(quien) = yo() else { return };
+                                let Some(nodo) = red() else { return };
+                                match obra.encerrar_cancelar(i, &quien) {
+                                    Ok(()) => {
+                                        err.set(None);
+                                        publicar_trato(&nodo, obra.clone(), yo(), err);
+                                    }
+                                    Err(e) => err.set(Some(lang_now().error(&e))),
+                                }
+                            }
+                        },
+                        {lang.t("No encerrar", "Do not lock")}
+                    }
+                } else {
                     button {
                         class: "btn btn-ghost",
                         onclick: {
@@ -2407,7 +2482,7 @@ fn VerPartida(
                                 let Some(quien) = yo() else { return };
                                 match caja.pedir_gasto(&obra, i, &quien) {
                                     Ok(()) => err.set(None),
-                                    Err(e) => err.set(Some(e)),
+                                    Err(e) => err.set(Some(caja::aviso_humano(&e, lang_now() == Idioma::Es))),
                                 }
                             }
                         },

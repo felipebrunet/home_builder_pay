@@ -37,6 +37,8 @@ use konstruado_net::{CajaMsg, Nodo};
 pub const PICONERO_POR_UNIDAD: u64 = 20_000_000;
 
 const LOOKBACK: usize = 40;
+/// Hasta dónde camina solo el fondeo si la billetera todavía no vio la salida. ~4 semanas en stagenet.
+const MAX_HISTORIA: usize = 20_000;
 const PAUSA: Duration = Duration::from_secs(20);
 
 pub fn a_piconero(unidades: u64) -> Option<u64> {
@@ -171,6 +173,33 @@ pub enum Texto {
     EsperandoPago(String),
     SinOtro,
     SinSemilla,
+    /// La billetera todavía no muestra una salida libre. El scan sigue hacia atrás.
+    BuscandoMonedas,
+    /// El contratista ya pidió el fondeo. Falta la propuesta del mandante.
+    EsperandoPropuesta,
+    /// El mandante ya firmó su parte. Falta el contratista.
+    EsperandoContratista,
+    /// Hay plata, pero el candado de ~10 bloques no soltó.
+    Trabadas,
+    /// Se miró el historial reciente y no hay una salida que alcance.
+    SinSaldo,
+    /// La caja 2-de-2 de la obra todavía no existe en este equipo.
+    SinCaja,
+    /// El gasto no ve las dos salidas de la caja.
+    SinSaldoCaja,
+    /// Esas salidas de la caja siguen bajo el candado de 10 bloques.
+    TrabadasCaja,
+    /// Falta la dirección personal del otro para pagar.
+    SinDireccion,
+    /// El otro avisó que su billetera no alcanza.
+    SinSaldoOtro,
+    /// El otro avisó que sus monedas siguen trabadas.
+    TrabadasOtro,
+    SinSemillaOtro,
+    SinCajaOtro,
+    SinDireccionOtro,
+    /// El otro todavía está mirando su billetera. Acá no se arma nada.
+    BuscandoOtro,
     Falla(String),
 }
 
@@ -226,9 +255,219 @@ impl Texto {
                     "Create the stagenet wallet in Account first.".into()
                 }
             }
-            Texto::Falla(s) => s.clone(),
+            Texto::BuscandoMonedas => {
+                if es {
+                    "Estoy mirando tu billetera para este encierre. Si el faucet es viejo, sigo hacia atrás.".into()
+                } else {
+                    "Looking through your wallet for this lock. Older faucet coins are included.".into()
+                }
+            }
+            Texto::EsperandoPropuesta => {
+                if es {
+                    "Pedido enviado. La billetera del mandante está armando la transacción.".into()
+                } else {
+                    "Request sent. The client's wallet is building the transaction.".into()
+                }
+            }
+            Texto::EsperandoContratista => {
+                if es {
+                    "Ya puse mi parte. Falta la firma del contratista, con la ventana abierta.".into()
+                } else {
+                    "Your part is in. Waiting for the contractor to sign, with the window open.".into()
+                }
+            }
+            Texto::Trabadas => {
+                if es {
+                    "Las monedas están, pero siguen trabadas unos 10 bloques. No armo la transacción hasta que se suelten.".into()
+                } else {
+                    "The coins are there, but they stay locked for about 10 blocks. The transaction waits until they unlock.".into()
+                }
+            }
+            Texto::SinSaldo => {
+                if es {
+                    "No alcanza el saldo libre. No armé la transacción. Si el faucet es más viejo que lo ya mirado, en Billetera pedí mirar más atrás.".into()
+                } else {
+                    "Unlocked balance is not enough. The transaction was not built. If the faucet is older than the scan, look further back in Wallet.".into()
+                }
+            }
+            Texto::SinCaja => {
+                if es {
+                    "La caja de los dos todavía no está armada. No sigo hasta que los dos estén en línea.".into()
+                } else {
+                    "The shared box is not ready yet. Nothing proceeds until both stay online.".into()
+                }
+            }
+            Texto::SinSaldoCaja => {
+                if es {
+                    "La caja no muestra las dos salidas libres de esta partida. No armé el pago.".into()
+                } else {
+                    "The box does not show this stage's two unlocked outputs. The payment was not built.".into()
+                }
+            }
+            Texto::TrabadasCaja => {
+                if es {
+                    "Las salidas de la caja siguen trabadas unos 10 bloques. No armo el pago hasta que se suelten.".into()
+                } else {
+                    "The box outputs stay locked for about 10 blocks. The payment waits until they unlock.".into()
+                }
+            }
+            Texto::SinDireccion => {
+                if es {
+                    "Falta la dirección personal del otro. No armo el pago.".into()
+                } else {
+                    "The other person's personal address is missing. The payment was not built.".into()
+                }
+            }
+            Texto::SinSaldoOtro => {
+                if es {
+                    "El otro no tiene saldo libre que alcance. No armo nada de este lado.".into()
+                } else {
+                    "The other person does not have enough unlocked balance. Nothing is built on this side.".into()
+                }
+            }
+            Texto::TrabadasOtro => {
+                if es {
+                    "El otro tiene las monedas trabadas unos 10 bloques. No armo hasta que se suelten.".into()
+                } else {
+                    "The other person's coins stay locked for about 10 blocks. Nothing is built until they unlock.".into()
+                }
+            }
+            Texto::SinSemillaOtro => {
+                if es {
+                    "Al otro le falta la billetera de stagenet.".into()
+                } else {
+                    "The other person has not created a stagenet wallet.".into()
+                }
+            }
+            Texto::SinCajaOtro => {
+                if es {
+                    "Al otro todavía no le armó la caja.".into()
+                } else {
+                    "The other person does not have the shared box yet.".into()
+                }
+            }
+            Texto::SinDireccionOtro => {
+                if es {
+                    "Al otro le falta una dirección personal. El pago no arranca.".into()
+                } else {
+                    "The other person is missing a personal address. The payment does not start.".into()
+                }
+            }
+            Texto::BuscandoOtro => {
+                if es {
+                    "El otro está mirando su billetera. Todavía no armo la transacción.".into()
+                } else {
+                    "The other person is checking their wallet. The transaction is not being built yet.".into()
+                }
+            }
+            Texto::Falla(s) => aviso_humano(s, es),
         }
     }
+}
+
+/// Un freno ya conocido: hay que mostrarlo y no seguir armando.
+pub fn es_freno(texto: &Texto) -> bool {
+    matches!(
+        texto,
+        Texto::Falla(_)
+            | Texto::SinSaldo
+            | Texto::Trabadas
+            | Texto::SinSemilla
+            | Texto::SinCaja
+            | Texto::SinSaldoCaja
+            | Texto::TrabadasCaja
+            | Texto::SinDireccion
+            | Texto::SinSaldoOtro
+            | Texto::TrabadasOtro
+            | Texto::SinSemillaOtro
+            | Texto::SinCajaOtro
+            | Texto::SinDireccionOtro
+    )
+}
+
+/// Textos de la billetera y códigos del motor, en el idioma de la ventana.
+pub fn aviso_humano(aviso: &str, es: bool) -> String {
+    let (esp, ing) = match aviso {
+        "codigo:sin-saldo" | "sin-saldo" | "sin-saldo-caja" => (
+            "No alcanza el saldo libre para este paso. No armé la transacción.",
+            "Unlocked balance is not enough for this step. The transaction was not built.",
+        ),
+        "codigo:trabadas" | "trabadas" | "trabadas-caja" => (
+            "El saldo está, pero sigue trabado unos 10 bloques. No armé la transacción.",
+            "The balance is there, but it stays locked for about 10 blocks. The transaction was not built.",
+        ),
+        "codigo:sin-punta" => (
+            "Todavía no llega la punta del nodo. No armé el envío.",
+            "The node tip has not arrived yet. The send was not built.",
+        ),
+        "codigo:sin-semilla" | "sin-semilla" => (
+            "Primero creá la billetera de stagenet.",
+            "Create the stagenet wallet first.",
+        ),
+        "codigo:en-curso" => (
+            "Ya hay un envío en curso.",
+            "A send is already in progress.",
+        ),
+        "codigo:destino" => (
+            "Falta la dirección de destino.",
+            "The destination address is missing.",
+        ),
+        "codigo:monto-cero" | "el monto es cero" => ("El monto es cero.", "The amount is zero."),
+        "monto inválido" => ("El monto no es válido.", "The amount is not valid."),
+        "demasiados decimales" => (
+            "El monto tiene demasiados decimales.",
+            "The amount has too many decimal places.",
+        ),
+        "el monto es demasiado grande" => (
+            "El monto es demasiado grande.",
+            "The amount is too large.",
+        ),
+        "primero creá la billetera de stagenet" | "falta la billetera de stagenet" => (
+            "Primero creá la billetera de stagenet.",
+            "Create the stagenet wallet first.",
+        ),
+        "ya hay un envío en curso" => (
+            "Ya hay un envío en curso.",
+            "A send is already in progress.",
+        ),
+        "falta la dirección de destino" => (
+            "Falta la dirección de destino.",
+            "The destination address is missing.",
+        ),
+        "no está esa partida" => ("No está esa partida.", "That stage is not here."),
+        "el encierre no está propuesto" => (
+            "El encierre no está propuesto.",
+            "The lock has not been proposed.",
+        ),
+        "el monto no entra en piconero" => (
+            "El monto no entra en piconero.",
+            "The amount does not fit in piconero.",
+        ),
+        "no hay un porcentaje sobre la mesa" => (
+            "No hay un porcentaje sobre la mesa.",
+            "There is no percentage on the table.",
+        ),
+        "falta el porcentaje" => ("Falta el porcentaje.", "The percentage is missing."),
+        "falta la dirección personal del otro" | "sin-direccion" => (
+            "Falta la dirección personal del otro.",
+            "The other person's personal address is missing.",
+        ),
+        "la caja de la obra todavía no está armada" | "sin-caja" => (
+            "La caja de la obra todavía no está armada.",
+            "The job's shared box is not ready yet.",
+        ),
+        "no estás en esta obra" => ("No estás en esta obra.", "You are not on this job."),
+        "propuesta ilegible" => (
+            "La propuesta de fondeo no se puede leer. No seguí armando.",
+            "The funding proposal cannot be read. Building stopped.",
+        ),
+        "fee del nodo inválido" => (
+            "El nodo no entregó un fee válido. No armé el pago.",
+            "The node did not return a valid fee. The payment was not built.",
+        ),
+        other => return other.to_string(),
+    };
+    if es { esp.into() } else { ing.into() }
 }
 
 #[derive(Clone, Debug)]
@@ -301,6 +540,11 @@ impl Caja {
         self.inner.lock().unwrap().pedir_fondeo(obra, partida, yo)
     }
 
+    /// Vuelve a armar el fondeo sin borrar el pedido a mitad de una transacción ya publicada.
+    pub fn reintentar_fondeo(&self, obra: &Obra, partida: usize, yo: &Persona) -> Result<(), String> {
+        self.inner.lock().unwrap().reintentar_fondeo(obra, partida, yo)
+    }
+
     pub fn cancelar_fondeo(&self, obra: &str, partida: usize) {
         self.inner.lock().unwrap().cancelar_fondeo(obra, partida);
     }
@@ -316,6 +560,8 @@ impl Caja {
         m.limpiar_resueltos(obras);
         m.avanzar_dkg(nodo, yo, obras);
         m.mandar_direccion(nodo, yo, obras);
+        m.soltar_avisos_con_moneda();
+        m.habilitar_pedidos();
         m.avisar_pedidos(nodo, yo);
         m.cerrar_si_puede(nodo, yo);
         m.firmar_si_puede(nodo, yo);
@@ -377,6 +623,18 @@ struct DkgRun {
     envie_view: bool,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum AvisoFondeo {
+    SinSaldo,
+    Trabadas,
+    SinSemilla,
+    SinCaja,
+    SinSaldoOtro,
+    TrabadasOtro,
+    SinSemillaOtro,
+    SinCajaOtro,
+}
+
 struct Fondeo {
     peer: String,
     capital: u64,
@@ -389,8 +647,25 @@ struct Fondeo {
     txid: Option<String>,
     visto: bool,
     error: Option<String>,
+    aviso: Option<AvisoFondeo>,
+    /// El aviso local ya se mandó al otro. Los avisos *Otro no se reenvían.
+    aviso_enviado: bool,
     ultimo: Option<Instant>,
     avisar: bool,
+    /// Ya salió `fund-pedir`. Un reintento tiene que abortar antes de pedir de nuevo.
+    avise_pedir: bool,
+    /// Esta billetera todavía no puede poner su parte. No se le pide nada al otro.
+    espera_moneda: bool,
+    /// El otro ya mandó `buscando` y este lado solo lo muestra.
+    dije_busqueda: bool,
+    /// El pedido lo abrió el otro. No hay que devolverle `fund-pedir`.
+    viene_del_par: bool,
+    /// No es un fondeo real: solo muestra lo que avisó el otro.
+    solo_aviso: bool,
+    /// El otro dijo que sigue mirando su billetera.
+    par_buscando: bool,
+    /// Primero se avisa el aborto al otro; al tick siguiente se vuelve a pedir.
+    abortar: bool,
 }
 
 struct Gasto {
@@ -452,6 +727,7 @@ enum Listo {
     Fallo {
         obra: String,
         partida: Option<usize>,
+        pago: Option<bool>,
         msg: String,
     },
     Saldo {
@@ -531,19 +807,31 @@ impl Motor {
 
     fn pedir_envio(&mut self, destino: &str, monto: &str) -> Result<(), String> {
         if self.wallet.is_none() {
-            return Err("primero creá la billetera de stagenet".into());
+            let code = "codigo:sin-semilla";
+            self.envio_aviso = Some(code.into());
+            return Err(code.into());
         }
         if self.pedido_envio.is_some() || self.enviando {
-            return Err("ya hay un envío en curso".into());
+            let code = "codigo:en-curso";
+            self.envio_aviso = Some(code.into());
+            return Err(code.into());
         }
         let destino = destino.trim();
         if destino.is_empty() {
-            return Err("falta la dirección de destino".into());
+            let code = "codigo:destino";
+            self.envio_aviso = Some(code.into());
+            return Err(code.into());
         }
         coop::parse_address(destino, Net::Stagenet.oxide()).map_err(|e| e.to_string())?;
         let monto = personal::piconero_de(monto).map_err(|e| e.to_string())?;
         if monto == 0 {
-            return Err("el monto es cero".into());
+            let code = "codigo:monto-cero";
+            self.envio_aviso = Some(code.into());
+            return Err(code.into());
+        }
+        if let Some(code) = self.corte_envio(monto) {
+            self.envio_aviso = Some(code.into());
+            return Err(code.into());
         }
         self.envio_aviso = None;
         self.pedido_envio = Some(PedidoEnvio {
@@ -560,24 +848,42 @@ impl Motor {
     }
 
     fn pedir_fondeo(&mut self, obra: &Obra, partida: usize, yo: &Persona) -> Result<(), String> {
-        self.exigir_base(obra, yo)?;
+        self.insertar_fondeo(obra, partida, yo, false)
+    }
+
+    fn insertar_fondeo(
+        &mut self,
+        obra: &Obra,
+        partida: usize,
+        yo: &Persona,
+        desde_par: bool,
+    ) -> Result<(), String> {
         let p = obra.partidas.get(partida).ok_or("no está esa partida")?;
         if p.estado != PartidaEstado::Encerrando {
             return Err("el encierre no está propuesto".into());
         }
+        if rol_en(obra, &yo.id).is_none() {
+            return Err("no estás en esta obra".into());
+        }
         let capital = a_piconero(p.capital(obra.garantia)).ok_or("el monto no entra en piconero")?;
         let key = (obra.id.clone(), partida);
-        if let Some(f) = self.fondeos.get(&key) {
-            if f.txid.is_some() {
-                return Ok(());
-            }
+        if self.fondeos.contains_key(&key) {
+            return Ok(());
         }
+        let soy_mandante = obra.mandante.id == yo.id;
+        let minimo = if soy_mandante {
+            capital.saturating_add(FEE_CUSHION)
+        } else {
+            capital
+        };
+        let (aviso, espera) = self.clasificar_fondeo(&obra.id, minimo);
+        let hay_aviso = aviso.is_some();
         self.fondeos.insert(
             key,
             Fondeo {
                 peer: otro_id(obra, &yo.id).to_string(),
                 capital,
-                soy_mandante: obra.mandante.id == yo.id,
+                soy_mandante,
                 propuesta: None,
                 outputs: None,
                 esqueleto: None,
@@ -586,11 +892,86 @@ impl Motor {
                 txid: None,
                 visto: false,
                 error: None,
+                aviso,
+                aviso_enviado: !hay_aviso,
                 ultimo: None,
-                avisar: true,
+                avisar: !desde_par && !hay_aviso && !espera,
+                avise_pedir: false,
+                espera_moneda: espera,
+                dije_busqueda: !espera,
+                viene_del_par: desde_par,
+                solo_aviso: false,
+                par_buscando: false,
+                abortar: false,
             },
         );
         Ok(())
+    }
+
+    fn reintentar_fondeo(&mut self, obra: &Obra, partida: usize, yo: &Persona) -> Result<(), String> {
+        let key = (obra.id.clone(), partida);
+        let ya_pidio = self.fondeos.get(&key).is_some_and(|f| f.avise_pedir);
+        let sigue_publicado = self
+            .fondeos
+            .get(&key)
+            .is_some_and(|f| f.txid.is_some() && f.error.is_none());
+        if sigue_publicado {
+            return Ok(());
+        }
+        if self
+            .fondeos
+            .get(&key)
+            .is_some_and(|f| f.solo_aviso && f.txid.is_none())
+        {
+            self.fondeos.remove(&key);
+            return self.pedir_fondeo(obra, partida, yo);
+        }
+        if self.fondeos.contains_key(&key) {
+            let peer = self
+                .fondeos
+                .get(&key)
+                .map(|f| f.peer.clone())
+                .unwrap_or_default();
+            let soy_mandante = self.fondeos.get(&key).is_some_and(|f| f.soy_mandante);
+            let capital = self.fondeos.get(&key).map(|f| f.capital).unwrap_or(0);
+            let viene = self.fondeos.get(&key).is_some_and(|f| f.viene_del_par);
+            let minimo = if soy_mandante {
+                capital.saturating_add(FEE_CUSHION)
+            } else {
+                capital
+            };
+            let (aviso, espera) = self.clasificar_fondeo(&obra.id, minimo);
+            let hay_aviso = aviso.is_some();
+            self.fondeos.insert(
+                key,
+                Fondeo {
+                    peer,
+                    capital,
+                    soy_mandante,
+                    propuesta: None,
+                    outputs: None,
+                    esqueleto: None,
+                    sobre: None,
+                    blob: None,
+                    txid: None,
+                    visto: false,
+                    error: None,
+                    aviso,
+                    aviso_enviado: !hay_aviso,
+                    ultimo: None,
+                    avisar: !ya_pidio && !viene && !hay_aviso && !espera,
+                    avise_pedir: false,
+                    espera_moneda: espera,
+                    dije_busqueda: !espera,
+                    viene_del_par: viene,
+                    solo_aviso: false,
+                    par_buscando: false,
+                    abortar: ya_pidio,
+                },
+            );
+            return Ok(());
+        }
+        self.pedir_fondeo(obra, partida, yo)
     }
 
     fn cancelar_fondeo(&mut self, obra: &str, partida: usize) {
@@ -604,18 +985,32 @@ impl Motor {
     }
 
     fn pedir_gasto(&mut self, obra: &Obra, partida: usize, yo: &Persona) -> Result<(), String> {
-        self.exigir_base(obra, yo)?;
         let p = obra.partidas.get(partida).ok_or("no está esa partida")?;
         if p.estado != PartidaEstado::EnTrato {
             return Err("no hay un porcentaje sobre la mesa".into());
         }
+        if rol_en(obra, &yo.id).is_none() {
+            return Err("no estás en esta obra".into());
+        }
         let pct = p.propuesto.ok_or("falta el porcentaje")?;
         let capital = a_piconero(p.capital(obra.garantia)).ok_or("el monto no entra en piconero")?;
-        if self.pares.get(&obra.id).is_none() {
-            return Err("falta la dirección personal del otro".into());
+        let key = (obra.id.clone(), partida);
+        if let Some(g) = self.gastos.get(&key) {
+            if g.error.is_none() {
+                return Ok(());
+            }
         }
+        let error = if self.wallet.is_none() {
+            Some("sin-semilla".to_string())
+        } else if !self.cuentas.contains_key(&obra.id) {
+            Some("sin-caja".to_string())
+        } else if self.pares.get(&obra.id).is_none() {
+            Some("sin-direccion".to_string())
+        } else {
+            None
+        };
         self.gastos.insert(
-            (obra.id.clone(), partida),
+            key,
             Gasto {
                 peer: otro_id(obra, &yo.id).to_string(),
                 capital,
@@ -632,24 +1027,11 @@ impl Motor {
                 blob: None,
                 txid: None,
                 visto: false,
-                error: None,
+                error: error.clone(),
                 ultimo: None,
                 avisar: true,
             },
         );
-        Ok(())
-    }
-
-    fn exigir_base(&self, obra: &Obra, yo: &Persona) -> Result<(), String> {
-        if self.wallet.is_none() {
-            return Err("falta la billetera de stagenet".into());
-        }
-        if rol_en(obra, &yo.id).is_none() {
-            return Err("no estás en esta obra".into());
-        }
-        if !self.cuentas.contains_key(&obra.id) {
-            return Err("la caja de la obra todavía no está armada".into());
-        }
         Ok(())
     }
 
@@ -732,10 +1114,21 @@ impl Motor {
         let Some(obra) = obras.iter().find(|o| o.id == m.obra) else {
             return;
         };
-        if self.fondeos.contains_key(&(obra.id.clone(), partida)) {
-            return;
+        let key = (obra.id.clone(), partida);
+        if let Some(f) = self.fondeos.get(&key) {
+            if f.solo_aviso && f.txid.is_none() {
+                self.fondeos.remove(&key);
+            } else {
+                if let Some(f) = self.fondeos.get_mut(&key) {
+                    f.par_buscando = false;
+                    if f.aviso.is_some_and(aviso_es_del_otro) {
+                        f.aviso = None;
+                    }
+                }
+                return;
+            }
         }
-        let _ = self.pedir_fondeo(obra, partida, yo);
+        let _ = self.insertar_fondeo(obra, partida, yo, true);
     }
 
     fn abrir_gasto_red(&mut self, m: &CajaMsg, obras: &[Obra], yo: &Persona) {
@@ -763,6 +1156,7 @@ impl Motor {
         }
         f.sobre = Some(sobre);
         f.error = None;
+        soltar_aviso_ajeno(f);
     }
 
     fn tomar_esqueleto(&mut self, m: &CajaMsg) {
@@ -778,6 +1172,7 @@ impl Motor {
             if f.soy_mandante {
                 f.esqueleto = Some(skel);
                 f.error = None;
+                soltar_aviso_ajeno(f);
             }
         }
     }
@@ -815,23 +1210,71 @@ impl Motor {
         let Ok(txt) = String::from_utf8(m.cuerpo.clone()) else {
             return;
         };
-        if pago {
-            if let Some(g) = self
-                .gastos
-                .iter_mut()
-                .find(|(k, _)| k.0 == m.obra)
-                .map(|(_, g)| g)
-            {
-                g.error = Some(txt);
+        let (partida_msg, code) = partir_aviso(&txt);
+        let partida = partida_msg.or_else(|| {
+            if pago {
+                self.gastos
+                    .keys()
+                    .find(|(obra, _)| obra == &m.obra)
+                    .map(|(_, i)| *i)
+            } else {
+                self.fondeos
+                    .keys()
+                    .find(|(obra, _)| obra == &m.obra)
+                    .map(|(_, i)| *i)
             }
-        } else if let Some(f) = self
-            .fondeos
-            .iter_mut()
-            .find(|(k, _)| k.0 == m.obra)
-            .map(|(_, f)| f)
-        {
-            f.error = Some(txt);
+        });
+        let Some(partida) = partida else {
+            return;
+        };
+        if pago {
+            let shown = codigo_del_otro(code);
+            let key = (m.obra.clone(), partida);
+            if let Some(g) = self.gastos.get_mut(&key) {
+                g.error = Some(shown);
+                return;
+            }
+            self.gastos.insert(
+                key,
+                Gasto {
+                    peer: m.de.clone(),
+                    capital: 0,
+                    pct: 0,
+                    soy_mandante: false,
+                    propuesta: None,
+                    session: None,
+                    signed: None,
+                    pre_otro: None,
+                    share_otro: None,
+                    envie_open: false,
+                    envie_pre: false,
+                    envie_share: false,
+                    blob: None,
+                    txid: None,
+                    visto: false,
+                    error: Some(shown),
+                    ultimo: None,
+                    avisar: false,
+                },
+            );
+            return;
         }
+        if code == "buscando" {
+            self.marcar_busqueda_par(&m.obra, partida, &m.de);
+            return;
+        }
+        if let Some(aviso) = aviso_del_otro(code) {
+            self.poner_aviso_par(&m.obra, partida, &m.de, aviso);
+            return;
+        }
+        let key = (m.obra.clone(), partida);
+        if let Some(f) = self.fondeos.get_mut(&key) {
+            f.error = Some(code.to_string());
+            f.aviso_enviado = true;
+            return;
+        }
+        self.fondeos
+            .insert(key, fondeo_vacio(&m.de, Some(code.to_string()), None));
     }
 
     fn poner_pre(&mut self, m: &CajaMsg) {
@@ -1045,10 +1488,25 @@ impl Motor {
     }
 
     fn avisar_pedidos(&mut self, nodo: &Nodo, yo: &Persona) {
+        let abortos: Vec<_> = self
+            .fondeos
+            .iter()
+            .filter(|(_, f)| f.abortar)
+            .map(|((o, i), f)| (o.clone(), *i, f.peer.clone()))
+            .collect();
+        for (obra, i, peer) in abortos {
+            let cuerpo = i.to_string().into_bytes();
+            if nodo.enviar_caja(&obra, &peer, &yo.id, "fund-abort", &cuerpo) {
+                if let Some(f) = self.fondeos.get_mut(&(obra, i)) {
+                    f.abortar = false;
+                    f.avisar = f.aviso.is_none() && !f.espera_moneda && !f.viene_del_par;
+                }
+            }
+        }
         let pedidos: Vec<_> = self
             .fondeos
             .iter()
-            .filter(|(_, f)| f.avisar)
+            .filter(|(_, f)| f.avisar && !f.abortar)
             .map(|((o, i), f)| (o.clone(), *i, f.peer.clone()))
             .collect();
         for (obra, i, peer) in pedidos {
@@ -1056,13 +1514,15 @@ impl Motor {
             if nodo.enviar_caja(&obra, &peer, &yo.id, "fund-pedir", &cuerpo) {
                 if let Some(f) = self.fondeos.get_mut(&(obra, i)) {
                     f.avisar = false;
+                    f.avise_pedir = true;
+                    f.espera_moneda = false;
                 }
             }
         }
         let pedidos: Vec<_> = self
             .gastos
             .iter()
-            .filter(|(_, g)| g.avisar)
+            .filter(|(_, g)| g.avisar && g.error.is_none())
             .map(|((o, i), g)| (o.clone(), *i, g.peer.clone()))
             .collect();
         for (obra, i, peer) in pedidos {
@@ -1079,7 +1539,15 @@ impl Motor {
         let listos: Vec<(String, usize)> = self
             .fondeos
             .iter()
-            .filter(|(_, f)| f.soy_mandante && f.esqueleto.is_some() && f.blob.is_none() && f.propuesta.is_some() && f.outputs.is_some())
+            .filter(|(_, f)| {
+                f.soy_mandante
+                    && f.esqueleto.is_some()
+                    && f.blob.is_none()
+                    && f.propuesta.is_some()
+                    && f.outputs.is_some()
+                    && f.error.is_none()
+                    && f.aviso.is_none()
+            })
             .map(|((o, i), _)| (o.clone(), *i))
             .collect();
         for (obra, i) in listos {
@@ -1110,12 +1578,7 @@ impl Motor {
                     self.guardar_espera(&obra, i, false, &txid);
                     self.publicar(obra, i, false, blob, txid, nodo, yo);
                 }
-                Err(e) => {
-                    if let Some(f) = self.fondeos.get_mut(&(obra, i)) {
-                        f.error = Some(e.to_string());
-                        f.ultimo = Some(Instant::now());
-                    }
-                }
+                Err(e) => self.fallar(&obra, i, false, e.to_string(), nodo, yo),
             }
         }
     }
@@ -1123,6 +1586,13 @@ impl Motor {
     fn firmar_si_puede(&mut self, nodo: &Nodo, yo: &Persona) {
         let claves: Vec<(String, usize)> = self.gastos.keys().cloned().collect();
         for (obra, i) in claves {
+            if self
+                .gastos
+                .get(&(obra.clone(), i))
+                .is_some_and(|g| g.error.is_some())
+            {
+                continue;
+            }
             let Some(cuenta) = self.cuentas.get(&obra) else {
                 continue;
             };
@@ -1159,15 +1629,11 @@ impl Motor {
                                 }
                             }
                         }
-                        Err(e) => {
-                            if let Some(g) = self.gastos.get_mut(&(obra.clone(), i)) {
-                                g.error = Some(e.to_string());
-                            }
-                        }
+                        Err(e) => self.fallar(&obra, i, true, e.to_string(), nodo, yo),
                     }
                 }
             }
-            let puedo_firmar = self.gastos.get(&(obra.clone(), i)).is_some_and(|g| g.session.is_some() && g.pre_otro.is_some() && g.signed.is_none());
+            let puedo_firmar = self.gastos.get(&(obra.clone(), i)).is_some_and(|g| g.session.is_some() && g.pre_otro.is_some() && g.signed.is_none() && g.error.is_none());
             if puedo_firmar {
                 let pre = self.gastos.get(&(obra.clone(), i)).and_then(|g| g.pre_otro.clone());
                 let session = self.gastos.get_mut(&(obra.clone(), i)).and_then(|g| g.session.take());
@@ -1181,15 +1647,11 @@ impl Motor {
                                 g.envie_share = enviado;
                             }
                         }
-                        Err(e) => {
-                            if let Some(g) = self.gastos.get_mut(&(obra.clone(), i)) {
-                                g.error = Some(e.to_string());
-                            }
-                        }
+                        Err(e) => self.fallar(&obra, i, true, e.to_string(), nodo, yo),
                     }
                 }
             }
-            let puedo_cerrar = self.gastos.get(&(obra.clone(), i)).is_some_and(|g| g.signed.is_some() && g.share_otro.is_some() && g.blob.is_none());
+            let puedo_cerrar = self.gastos.get(&(obra.clone(), i)).is_some_and(|g| g.signed.is_some() && g.share_otro.is_some() && g.blob.is_none() && g.error.is_none());
             let soy_m_antes = self.gastos.get(&(obra.clone(), i)).is_some_and(|g| g.soy_mandante);
             if puedo_cerrar && soy_m_antes && self.ocupado.is_some() {
                 continue;
@@ -1212,11 +1674,7 @@ impl Motor {
                                 self.publicar(obra.clone(), i, true, blob, txid, nodo, yo);
                             }
                         }
-                        Err(e) => {
-                            if let Some(g) = self.gastos.get_mut(&(obra.clone(), i)) {
-                                g.error = Some(e.to_string());
-                            }
-                        }
+                        Err(e) => self.fallar(&obra, i, true, e.to_string(), nodo, yo),
                     }
                 }
             }
@@ -1255,6 +1713,7 @@ impl Motor {
                 Err(e) => Listo::Fallo {
                     obra,
                     partida: Some(partida),
+                    pago: Some(pago),
                     msg: e.to_string(),
                 },
             };
@@ -1262,7 +1721,7 @@ impl Motor {
         });
     }
 
-    fn lanzar_si_toca(&mut self, _nodo: &Nodo, _yo: &Persona) {
+    fn lanzar_si_toca(&mut self, nodo: &Nodo, yo: &Persona) {
         if self.ocupado.is_some() {
             return;
         }
@@ -1274,12 +1733,15 @@ impl Motor {
             self.spawn_ver(obra, i, pago);
             return;
         }
+        self.empujar_historia();
+        self.cerrar_busqueda_vacia();
+        self.emitir_bloqueos(nodo, yo);
         if let Some((obra, i)) = self.busca_entradas(false) {
-            self.spawn_entradas(obra, i, false);
+            self.spawn_entradas(obra, i, false, nodo, yo);
             return;
         }
         if let Some((obra, i)) = self.busca_entradas(true) {
-            self.spawn_entradas(obra, i, true);
+            self.spawn_entradas(obra, i, true, nodo, yo);
             return;
         }
         if self.lanzar_envio() {
@@ -1294,12 +1756,19 @@ impl Motor {
         }
         if self.wallet.is_none() {
             self.pedido_envio = None;
-            self.envio_aviso = Some("primero creá la billetera de stagenet".into());
+            self.envio_aviso = Some("codigo:sin-semilla".into());
             return true;
         }
         if self.tip.is_none() {
-            self.envio_aviso = Some("todavía no llega la punta del nodo".into());
+            self.envio_aviso = Some("codigo:sin-punta".into());
             return true;
+        }
+        if let Some(pedido) = &self.pedido_envio {
+            if let Some(code) = self.corte_envio(pedido.monto) {
+                self.pedido_envio = None;
+                self.envio_aviso = Some(code.into());
+                return true;
+            }
         }
         let armado = match self.armar_envio() {
             Ok(job) => job,
@@ -1350,9 +1819,15 @@ impl Motor {
             .collect();
         let montos: Vec<u64> = libres.iter().map(|e| e.monto).collect();
         let necesita = pedido.monto.saturating_add(FEE_CUSHION);
-        let idxs = elegir_montos(&montos, necesita).map_err(|_| {
-            "no alcanza el saldo libre para el monto, el fee y el cambio".to_string()
-        })?;
+        let idxs = match elegir_montos(&montos, necesita) {
+            Ok(idxs) => idxs,
+            Err(_) => {
+                let todos: Vec<u64> = self.libro.entradas.iter().map(|e| e.monto).collect();
+                let code = corte_envio(&montos, &todos, pedido.monto, true)
+                    .unwrap_or("codigo:sin-saldo");
+                return Err(code.to_string());
+            }
+        };
         let mut crudas = Vec::new();
         let mut usadas = Vec::new();
         for i in idxs {
@@ -1462,7 +1937,12 @@ impl Motor {
                 } else {
                     false
                 };
-                if falta && g.txid.is_none() && frio(g.ultimo) && self.cuentas.contains_key(obra) {
+                if falta
+                    && g.txid.is_none()
+                    && g.error.is_none()
+                    && frio(g.ultimo)
+                    && self.cuentas.contains_key(obra)
+                {
                     return Some((obra.clone(), *i));
                 }
             }
@@ -1473,7 +1953,20 @@ impl Motor {
                 } else {
                     f.sobre.is_some() && f.esqueleto.is_none()
                 };
-                if falta && f.txid.is_none() && frio(f.ultimo) {
+                let minimo = if f.soy_mandante {
+                    f.capital.saturating_add(FEE_CUSHION)
+                } else {
+                    f.capital
+                };
+                if falta
+                    && !f.solo_aviso
+                    && !f.espera_moneda
+                    && f.txid.is_none()
+                    && f.error.is_none()
+                    && f.aviso.is_none()
+                    && frio(f.ultimo)
+                    && self.salida_libre(minimo).is_some()
+                {
                     return Some((obra.clone(), *i));
                 }
             }
@@ -1491,12 +1984,14 @@ impl Motor {
                     Err(e) => Listo::Fallo {
                         obra: String::new(),
                         partida: None,
+                        pago: None,
                         msg: e.to_string(),
                     },
                 },
                 Err(e) => Listo::Fallo {
                     obra: String::new(),
                     partida: None,
+                    pago: None,
                     msg: e.to_string(),
                 },
             };
@@ -1536,54 +2031,72 @@ impl Motor {
                 .unwrap_or_else(|msg| Listo::Fallo {
                     obra,
                     partida: Some(partida),
+                    pago: Some(pago),
                     msg,
                 });
             *celda.lock().unwrap() = Some(listo);
         });
     }
 
-    fn spawn_entradas(&mut self, obra: String, partida: usize, pago: bool) {
-        let Some(wallet) = self.wallet.as_ref() else {
-            return;
-        };
-        let view = if pago {
-            let Some(cuenta) = self.cuentas.get(&obra) else {
+    fn spawn_entradas(&mut self, obra: String, partida: usize, pago: bool, nodo: &Nodo, yo: &Persona) {
+        if !pago {
+            let minimo = self
+                .fondeos
+                .get(&(obra.clone(), partida))
+                .map(|f| {
+                    if f.soy_mandante {
+                        f.capital.saturating_add(FEE_CUSHION)
+                    } else {
+                        f.capital
+                    }
+                })
+                .unwrap_or(0);
+            let Some(raw) = self.salida_libre(minimo) else {
                 return;
             };
-            match cuenta.view_pair() {
-                Ok(v) => v,
-                Err(e) => {
-                    if let Some(g) = self.gastos.get_mut(&(obra, partida)) {
-                        g.error = Some(e.to_string());
-                    }
-                    return;
-                }
+            if let Some(f) = self.fondeos.get_mut(&(obra.clone(), partida)) {
+                f.ultimo = Some(Instant::now());
             }
-        } else {
-            wallet.view_pair()
+            let celda = self.ocupar();
+            tokio::spawn(async move {
+                let listo = match chain::anillar(raw).await {
+                    Ok((decoys, fee)) => Listo::Entradas {
+                        obra: obra.clone(),
+                        partida,
+                        pago: false,
+                        decoys,
+                        fee,
+                    },
+                    Err(e) => Listo::Fallo {
+                        obra,
+                        partida: Some(partida),
+                        pago: Some(false),
+                        msg: e.to_string(),
+                    },
+                };
+                *celda.lock().unwrap() = Some(listo);
+            });
+            return;
+        }
+        let Some(cuenta) = self.cuentas.get(&obra) else {
+            return;
         };
-        let minimo = if pago {
-            self.gastos.get(&(obra.clone(), partida)).map(|g| g.capital).unwrap_or(0)
-        } else if self.fondeos.get(&(obra.clone(), partida)).is_some_and(|f| f.soy_mandante) {
-            self.fondeos
-                .get(&(obra.clone(), partida))
-                .map(|f| f.capital.saturating_add(FEE_CUSHION))
-                .unwrap_or(0)
-        } else {
-            self.fondeos.get(&(obra.clone(), partida)).map(|f| f.capital).unwrap_or(0)
-        };
-        let cuantos = if pago { 2 } else { 1 };
-        let exacto = if pago {
-            self.gastos.get(&(obra.clone(), partida)).map(|g| g.capital)
-        } else {
-            None
-        };
-        if pago {
-            if let Some(g) = self.gastos.get_mut(&(obra.clone(), partida)) {
-                g.ultimo = Some(Instant::now());
+        let view = match cuenta.view_pair() {
+            Ok(v) => v,
+            Err(e) => {
+                self.fallar(&obra, partida, true, e.to_string(), nodo, yo);
+                return;
             }
-        } else if let Some(f) = self.fondeos.get_mut(&(obra.clone(), partida)) {
-            f.ultimo = Some(Instant::now());
+        };
+        let minimo = self
+            .gastos
+            .get(&(obra.clone(), partida))
+            .map(|g| g.capital)
+            .unwrap_or(0);
+        let cuantos = 2;
+        let exacto = self.gastos.get(&(obra.clone(), partida)).map(|g| g.capital);
+        if let Some(g) = self.gastos.get_mut(&(obra.clone(), partida)) {
+            g.ultimo = Some(Instant::now());
         }
         let celda = self.ocupar();
         tokio::spawn(async move {
@@ -1599,6 +2112,7 @@ impl Motor {
                 .unwrap_or_else(|msg| Listo::Fallo {
                     obra,
                     partida: Some(partida),
+                    pago: Some(true),
                     msg,
                 });
             *celda.lock().unwrap() = Some(listo);
@@ -1638,19 +2152,19 @@ impl Motor {
         self.ocupado = None;
         match listo {
             Listo::Punta(n) => self.tip = Some(n),
-            Listo::Fallo { obra, partida, msg } => {
-                if let Some(i) = partida {
-                    if let Some(f) = self.fondeos.get_mut(&(obra.clone(), i)) {
-                        f.error = Some(msg.clone());
-                        f.ultimo = Some(Instant::now());
+            Listo::Fallo { obra, partida, pago, msg } => {
+                if obra.is_empty() && partida.is_none() {
+                    self.scan_aviso = Some(msg);
+                } else if let Some(i) = partida {
+                    let pago = pago.unwrap_or(false);
+                    if let Some(job) = if pago {
+                        self.gastos.get_mut(&(obra.clone(), i)).map(|g| &mut g.ultimo)
+                    } else {
+                        self.fondeos.get_mut(&(obra.clone(), i)).map(|f| &mut f.ultimo)
+                    } {
+                        *job = Some(Instant::now());
                     }
-                    if let Some(g) = self.gastos.get_mut(&(obra.clone(), i)) {
-                        g.error = Some(msg.clone());
-                        g.ultimo = Some(Instant::now());
-                    }
-                    if let Some(peer) = self.fondeos.get(&(obra.clone(), i)).map(|f| f.peer.clone()) {
-                        let _ = nodo.enviar_caja(&obra, &peer, &yo.id, "fund-error", msg.as_bytes());
-                    }
+                    self.fallar(&obra, i, pago, msg, nodo, yo);
                 }
             }
             Listo::Visto { obra, partida, pago, si } => {
@@ -1658,10 +2172,16 @@ impl Motor {
                     if let Some(g) = self.gastos.get_mut(&(obra, partida)) {
                         g.visto = si;
                         g.ultimo = Some(Instant::now());
+                        if si {
+                            g.error = None;
+                        }
                     }
                 } else if let Some(f) = self.fondeos.get_mut(&(obra, partida)) {
                     f.visto = si;
                     f.ultimo = Some(Instant::now());
+                    if si {
+                        f.error = None;
+                    }
                 }
             }
             Listo::Entradas {
@@ -1696,15 +2216,7 @@ impl Motor {
                             let _ = nodo.enviar_caja(&obra, &peer, &yo.id, paso, txid.as_bytes());
                         }
                     }
-                    Err(e) => {
-                        if pago {
-                            if let Some(g) = self.gastos.get_mut(&(obra, partida)) {
-                                g.error = Some(e);
-                            }
-                        } else if let Some(f) = self.fondeos.get_mut(&(obra, partida)) {
-                            f.error = Some(e);
-                        }
-                    }
+                    Err(e) => self.fallar(&obra, partida, pago, e, nodo, yo),
                 }
             }
             Listo::Saldo {
@@ -1783,9 +2295,11 @@ impl Motor {
     ) {
         let key = (obra.to_string(), partida);
         let Some(wallet) = self.wallet.as_ref() else {
+            self.fallar(obra, partida, false, "sin-semilla".into(), nodo, yo);
             return;
         };
         let Some(cuenta) = self.cuentas.get(obra) else {
+            self.fallar(obra, partida, false, "sin-caja".into(), nodo, yo);
             return;
         };
         let joint = cuenta.address().to_string();
@@ -1820,11 +2334,7 @@ impl Motor {
                         f.error = None;
                     }
                 }
-                Err(e) => {
-                    if let Some(f) = self.fondeos.get_mut(&key) {
-                        f.error = Some(e.to_string());
-                    }
-                }
+                Err(e) => self.fallar(obra, partida, false, e.to_string(), nodo, yo),
             }
         } else {
             let sobre = self.fondeos.get(&key).and_then(|f| f.sobre.as_ref()).cloned();
@@ -1832,12 +2342,15 @@ impl Motor {
                 return;
             };
             let Ok(bytes) = hex::decode(&sobre.proposal) else {
+                self.fallar(obra, partida, false, "propuesta ilegible".into(), nodo, yo);
                 return;
             };
             let Ok(prop) = coop::decode_bincode::<Proposal>(&bytes) else {
+                self.fallar(obra, partida, false, "propuesta ilegible".into(), nodo, yo);
                 return;
             };
             let Ok(view_bytes) = hex::decode(&sobre.view) else {
+                self.fallar(obra, partida, false, "propuesta ilegible".into(), nodo, yo);
                 return;
             };
             match view_del_mandante(&sobre.direccion, &view_bytes) {
@@ -1860,18 +2373,10 @@ impl Motor {
                                 f.error = None;
                             }
                         }
-                        Err(e) => {
-                            if let Some(f) = self.fondeos.get_mut(&key) {
-                                f.error = Some(e.to_string());
-                            }
-                        }
+                        Err(e) => self.fallar(obra, partida, false, e.to_string(), nodo, yo),
                     }
                 }
-                Err(e) => {
-                    if let Some(f) = self.fondeos.get_mut(&key) {
-                        f.error = Some(e.to_string());
-                    }
-                }
+                Err(e) => self.fallar(obra, partida, false, e.to_string(), nodo, yo),
             }
         }
     }
@@ -1882,8 +2387,8 @@ impl Motor {
         partida: usize,
         decoys: Vec<OutputWithDecoys>,
         fee: (u64, u64),
-        _nodo: &Nodo,
-        _yo: &Persona,
+        nodo: &Nodo,
+        yo: &Persona,
     ) {
         let key = (obra.to_string(), partida);
         let Some(g0) = self.gastos.get(&key) else {
@@ -1897,6 +2402,7 @@ impl Motor {
         let peer_addr = self.pares.get(obra).cloned();
         let propia = self.wallet.as_ref().map(|w| w.address().to_string());
         let (Some(peer_addr), Some(propia)) = (peer_addr, propia) else {
+            self.fallar(obra, partida, true, "sin-direccion".into(), nodo, yo);
             return;
         };
         let soy_m = self.cuentas.get(obra).is_some_and(|c| c.role() == Party::Mandante);
@@ -1906,15 +2412,15 @@ impl Motor {
             (propia, peer_addr)
         };
         let Ok(c_addr) = xmr_joint::coop::parse_address(&contratista, Net::Stagenet.oxide()) else {
+            self.fallar(obra, partida, true, "sin-direccion".into(), nodo, yo);
             return;
         };
         let Ok(m_addr) = xmr_joint::coop::parse_address(&mandante, Net::Stagenet.oxide()) else {
+            self.fallar(obra, partida, true, "sin-direccion".into(), nodo, yo);
             return;
         };
         let Ok(rate) = fund::fee_rate_from_parts(fee.0, fee.1) else {
-            if let Some(g) = self.gastos.get_mut(&key) {
-                g.error = Some("fee del nodo inválido".into());
-            }
+            self.fallar(obra, partida, true, "fee del nodo inválido".into(), nodo, yo);
             return;
         };
         match spend::propose(&mut OsRng, obra, capital, pct, &c_addr, &m_addr, decoys, rate) {
@@ -1924,11 +2430,7 @@ impl Motor {
                     g.error = None;
                 }
             }
-            Err(e) => {
-                if let Some(g) = self.gastos.get_mut(&key) {
-                    g.error = Some(e.to_string());
-                }
-            }
+            Err(e) => self.fallar(obra, partida, true, e.to_string(), nodo, yo),
         }
     }
 
@@ -1994,6 +2496,381 @@ impl Motor {
         });
     }
 
+    fn fallar(
+        &mut self,
+        obra: &str,
+        partida: usize,
+        pago: bool,
+        msg: String,
+        nodo: &Nodo,
+        yo: &Persona,
+    ) {
+        let key = (obra.to_string(), partida);
+        let (peer, paso) = if pago {
+            let peer = self.gastos.get(&key).map(|g| g.peer.clone()).unwrap_or_default();
+            if let Some(g) = self.gastos.get_mut(&key) {
+                g.error = Some(msg.clone());
+                g.ultimo = Some(Instant::now());
+                g.avisar = false;
+            }
+            (peer, "spend-error")
+        } else {
+            let peer = self.fondeos.get(&key).map(|f| f.peer.clone()).unwrap_or_default();
+            if let Some(f) = self.fondeos.get_mut(&key) {
+                f.error = Some(msg.clone());
+                f.ultimo = Some(Instant::now());
+                f.espera_moneda = false;
+            }
+            (peer, "fund-error")
+        };
+        if peer.is_empty() {
+            return;
+        }
+        let body = format!("p{partida}:{msg}");
+        let _ = nodo.enviar_caja(obra, &peer, &yo.id, paso, body.as_bytes());
+    }
+
+    fn clasificar_fondeo(&self, obra: &str, minimo: u64) -> (Option<AvisoFondeo>, bool) {
+        if self.wallet.is_none() {
+            return (Some(AvisoFondeo::SinSemilla), false);
+        }
+        if !self.cuentas.contains_key(obra) {
+            return (Some(AvisoFondeo::SinCaja), false);
+        }
+        match self.estado_de(minimo) {
+            EstadoMonedas::Libre => (None, false),
+            EstadoMonedas::Trabadas => (Some(AvisoFondeo::Trabadas), false),
+            EstadoMonedas::SinSaldo => (Some(AvisoFondeo::SinSaldo), false),
+            EstadoMonedas::Buscando => (None, true),
+        }
+    }
+
+    fn estado_de(&self, minimo: u64) -> EstadoMonedas {
+        let entradas: Vec<(u64, usize)> = self
+            .libro
+            .entradas
+            .iter()
+            .map(|e| (e.monto, e.altura))
+            .collect();
+        estado_monedas(
+            &entradas,
+            self.tip,
+            self.libro.listo,
+            self.libro.desde,
+            self.libro.hasta,
+            self.retro,
+            minimo,
+        )
+    }
+
+    /// Frena el envío personal cuando el libro ya está al día y no alcanza.
+    fn corte_envio(&self, monto: u64) -> Option<&'static str> {
+        let Some(tip) = self.tip else {
+            return None;
+        };
+        let al_dia = self.libro.listo && self.libro.hasta >= tip && self.retro == 0;
+        if !al_dia {
+            return None;
+        }
+        let libres: Vec<u64> = self
+            .libro
+            .entradas
+            .iter()
+            .filter(|e| tip >= e.altura.saturating_add(10))
+            .map(|e| e.monto)
+            .collect();
+        let todos: Vec<u64> = self.libro.entradas.iter().map(|e| e.monto).collect();
+        corte_envio(&libres, &todos, monto, true)
+    }
+
+    fn habilitar_pedidos(&mut self) {
+        let claves: Vec<_> = self.fondeos.keys().cloned().collect();
+        for key in claves {
+            let Some(f) = self.fondeos.get(&key) else {
+                continue;
+            };
+            if f.solo_aviso || f.abortar || f.txid.is_some() || f.aviso.is_some() {
+                continue;
+            }
+            if !f.espera_moneda {
+                continue;
+            }
+            let minimo = if f.soy_mandante {
+                f.capital.saturating_add(FEE_CUSHION)
+            } else {
+                f.capital
+            };
+            if self.salida_libre(minimo).is_none() {
+                continue;
+            }
+            let viene = f.viene_del_par;
+            if let Some(f) = self.fondeos.get_mut(&key) {
+                f.espera_moneda = false;
+                f.avisar = !viene;
+            }
+        }
+    }
+
+    fn emitir_bloqueos(&mut self, nodo: &Nodo, yo: &Persona) {
+        let avisos: Vec<_> = self
+            .fondeos
+            .iter()
+            .filter(|(_, f)| f.aviso.is_some() && !f.aviso_enviado && !f.peer.is_empty())
+            .map(|((o, i), f)| (o.clone(), *i, f.peer.clone(), f.aviso.unwrap()))
+            .collect();
+        for (obra, i, peer, aviso) in avisos {
+            let Some(code) = codigo_aviso(aviso) else {
+                if let Some(f) = self.fondeos.get_mut(&(obra, i)) {
+                    f.aviso_enviado = true;
+                }
+                continue;
+            };
+            let body = format!("p{i}:{code}");
+            if nodo.enviar_caja(&obra, &peer, &yo.id, "fund-error", body.as_bytes()) {
+                if let Some(f) = self.fondeos.get_mut(&(obra, i)) {
+                    f.aviso_enviado = true;
+                }
+            }
+        }
+        let busquedas: Vec<_> = self
+            .fondeos
+            .iter()
+            .filter(|(_, f)| f.espera_moneda && !f.dije_busqueda && !f.peer.is_empty() && !f.solo_aviso)
+            .map(|((o, i), f)| (o.clone(), *i, f.peer.clone()))
+            .collect();
+        for (obra, i, peer) in busquedas {
+            let body = format!("p{i}:buscando");
+            if nodo.enviar_caja(&obra, &peer, &yo.id, "fund-error", body.as_bytes()) {
+                if let Some(f) = self.fondeos.get_mut(&(obra, i)) {
+                    f.dije_busqueda = true;
+                }
+            }
+        }
+        let gastos: Vec<_> = self
+            .gastos
+            .iter()
+            .filter(|(_, g)| {
+                g.error.as_deref().is_some_and(codigo_gasto_local) && !g.peer.is_empty() && g.avisar
+            })
+            .map(|((o, i), g)| (o.clone(), *i, g.peer.clone(), g.error.clone().unwrap_or_default()))
+            .collect();
+        for (obra, i, peer, code) in gastos {
+            let body = format!("p{i}:{code}");
+            if nodo.enviar_caja(&obra, &peer, &yo.id, "spend-error", body.as_bytes()) {
+                if let Some(g) = self.gastos.get_mut(&(obra, i)) {
+                    g.avisar = false;
+                }
+            }
+        }
+    }
+
+    fn poner_aviso_par(&mut self, obra: &str, partida: usize, de: &str, aviso: AvisoFondeo) {
+        let key = (obra.to_string(), partida);
+        if let Some(f) = self.fondeos.get_mut(&key) {
+            f.aviso = Some(aviso);
+            f.aviso_enviado = true;
+            f.espera_moneda = false;
+            f.par_buscando = false;
+            f.error = None;
+            return;
+        }
+        self.fondeos.insert(key, fondeo_vacio(de, None, Some(aviso)));
+    }
+
+    fn marcar_busqueda_par(&mut self, obra: &str, partida: usize, de: &str) {
+        let key = (obra.to_string(), partida);
+        if let Some(f) = self.fondeos.get_mut(&key) {
+            if f.propuesta.is_some() || f.sobre.is_some() || f.txid.is_some() {
+                return;
+            }
+            f.par_buscando = true;
+            return;
+        }
+        let mut f = fondeo_vacio(de, None, None);
+        f.par_buscando = true;
+        f.solo_aviso = true;
+        self.fondeos.insert(key, f);
+    }
+
+    fn salida_libre(&self, minimo: u64) -> Option<Vec<u8>> {
+        let tip = self.tip?;
+        let pares: Vec<(u64, usize)> = self
+            .libro
+            .entradas
+            .iter()
+            .map(|e| (e.monto, e.altura))
+            .collect();
+        let i = indice_salida_libre(&pares, tip, minimo)?;
+        Some(self.libro.entradas[i].raw.clone())
+    }
+
+    /// Fondeos que todavía necesitan una salida de la billetera.
+    fn fondeo_sin_moneda(&self) -> Vec<(String, usize, u64)> {
+        let mut out = Vec::new();
+        for ((obra, i), f) in &self.fondeos {
+            if f.solo_aviso || f.txid.is_some() || f.error.is_some() || f.aviso.is_some() {
+                continue;
+            }
+            let falta = if f.espera_moneda {
+                true
+            } else if f.soy_mandante {
+                f.propuesta.is_none()
+            } else {
+                f.sobre.is_some() && f.esqueleto.is_none()
+            };
+            if !falta {
+                continue;
+            }
+            let minimo = if f.soy_mandante {
+                f.capital.saturating_add(FEE_CUSHION)
+            } else {
+                f.capital
+            };
+            if self.salida_libre(minimo).is_some() {
+                continue;
+            }
+            out.push((obra.clone(), *i, minimo));
+        }
+        out
+    }
+
+    fn soltar_avisos_con_moneda(&mut self) {
+        let claves: Vec<_> = self.fondeos.keys().cloned().collect();
+        for key in claves {
+            let Some(f) = self.fondeos.get(&key) else {
+                continue;
+            };
+            if f.solo_aviso || f.txid.is_some() {
+                continue;
+            }
+            let minimo = if f.soy_mandante {
+                f.capital.saturating_add(FEE_CUSHION)
+            } else {
+                f.capital
+            };
+            let se_puede = self.salida_libre(minimo).is_some();
+            let caja_ok = self.cuentas.contains_key(&key.0) && self.wallet.is_some();
+            let suelta = match f.aviso {
+                Some(AvisoFondeo::SinSemilla) => self.wallet.is_some() && se_puede,
+                Some(AvisoFondeo::SinCaja) => caja_ok && se_puede,
+                Some(AvisoFondeo::Trabadas) | Some(AvisoFondeo::SinSaldo) => se_puede,
+                _ => false,
+            };
+            if !suelta {
+                continue;
+            }
+            let viene = f.viene_del_par;
+            if let Some(f) = self.fondeos.get_mut(&key) {
+                f.aviso = None;
+                f.aviso_enviado = true;
+                f.espera_moneda = false;
+                if f.propuesta.is_none() && f.sobre.is_none() && !f.abortar {
+                    f.avisar = !viene;
+                }
+            }
+        }
+    }
+
+    fn empujar_historia(&mut self) {
+        let Some(tip) = self.tip else {
+            return;
+        };
+        if self.retro > 0 || !self.libro.listo || self.libro.hasta < tip {
+            return;
+        }
+        let quiere = self.fondeo_sin_moneda().into_iter().any(|(_, _, minimo)| {
+            matches!(self.estado_de(minimo), EstadoMonedas::Buscando)
+        });
+        if quiere && self.libro.desde > tip.saturating_sub(MAX_HISTORIA) {
+            self.retro = 200;
+        }
+    }
+
+    fn cerrar_busqueda_vacia(&mut self) {
+        let pendientes = self.fondeo_sin_moneda();
+        for (obra, i, minimo) in pendientes {
+            let aviso = match self.estado_de(minimo) {
+                EstadoMonedas::Trabadas => Some(AvisoFondeo::Trabadas),
+                EstadoMonedas::SinSaldo => Some(AvisoFondeo::SinSaldo),
+                EstadoMonedas::Libre | EstadoMonedas::Buscando => None,
+            };
+            let Some(aviso) = aviso else {
+                continue;
+            };
+            if let Some(f) = self.fondeos.get_mut(&(obra, i)) {
+                if f.aviso == Some(aviso) {
+                    continue;
+                }
+                f.aviso = Some(aviso);
+                f.aviso_enviado = false;
+                f.espera_moneda = false;
+            }
+        }
+    }
+
+    fn texto_fondeo(&self, f: &Fondeo) -> Texto {
+        if f.visto {
+            if let Some(tx) = &f.txid {
+                return Texto::EsperandoFondeo(tx.clone());
+            }
+        }
+        if let Some(e) = &f.error {
+            return texto_de_codigo(e);
+        }
+        if let Some(aviso) = f.aviso {
+            return texto_aviso(aviso);
+        }
+        if let Some(tx) = &f.txid {
+            return Texto::EsperandoFondeo(tx.clone());
+        }
+        if f.solo_aviso && f.par_buscando {
+            return Texto::BuscandoOtro;
+        }
+        if f.soy_mandante && f.propuesta.is_none() {
+            return self.texto_monedas(f.capital.saturating_add(FEE_CUSHION));
+        }
+        if !f.soy_mandante && f.sobre.is_none() {
+            if f.espera_moneda {
+                return self.texto_monedas(f.capital);
+            }
+            if f.par_buscando {
+                return Texto::BuscandoOtro;
+            }
+            return Texto::EsperandoPropuesta;
+        }
+        if f.soy_mandante && f.esqueleto.is_none() {
+            return Texto::EsperandoContratista;
+        }
+        if !f.soy_mandante && f.esqueleto.is_none() {
+            return self.texto_monedas(f.capital);
+        }
+        Texto::Fondeando
+    }
+
+    fn texto_monedas(&self, minimo: u64) -> Texto {
+        match self.estado_de(minimo) {
+            EstadoMonedas::Libre => Texto::Fondeando,
+            EstadoMonedas::Trabadas => Texto::Trabadas,
+            EstadoMonedas::Buscando => Texto::BuscandoMonedas,
+            EstadoMonedas::SinSaldo => Texto::SinSaldo,
+        }
+    }
+
+    fn texto_gasto(&self, g: &Gasto) -> Texto {
+        if g.visto {
+            if let Some(tx) = &g.txid {
+                return Texto::EsperandoPago(tx.clone());
+            }
+        }
+        if let Some(e) = &g.error {
+            return texto_de_codigo(e);
+        }
+        if let Some(tx) = &g.txid {
+            return Texto::EsperandoPago(tx.clone());
+        }
+        Texto::Gastando
+    }
+
     fn armar_vista(&mut self, obras: &[Obra]) {
         let mut v = CajaVista::vacia();
         v.tip = self.tip;
@@ -2012,17 +2889,7 @@ impl Motor {
             }
         }
         for ((obra, i), f) in &self.fondeos {
-            let texto = if let Some(tx) = &f.txid {
-                if f.visto {
-                    Texto::EsperandoFondeo(tx.clone())
-                } else {
-                    Texto::EsperandoFondeo(tx.clone())
-                }
-            } else if let Some(e) = &f.error {
-                Texto::Falla(e.clone())
-            } else {
-                Texto::Fondeando
-            };
+            let texto = self.texto_fondeo(f);
             v.lineas.push(Linea {
                 obra: obra.clone(),
                 partida: Some(*i),
@@ -2030,13 +2897,7 @@ impl Motor {
             });
         }
         for ((obra, i), g) in &self.gastos {
-            let texto = if let Some(tx) = &g.txid {
-                Texto::EsperandoPago(tx.clone())
-            } else if let Some(e) = &g.error {
-                Texto::Falla(e.clone())
-            } else {
-                Texto::Gastando
-            };
+            let texto = self.texto_gasto(g);
             v.lineas.push(Linea {
                 obra: obra.clone(),
                 partida: Some(*i),
@@ -2263,8 +3124,17 @@ impl Motor {
                         txid: Some(e.txid),
                         visto: false,
                         error: None,
+                        aviso: None,
+                        aviso_enviado: true,
                         ultimo: None,
                         avisar: false,
+                        avise_pedir: true,
+                        espera_moneda: false,
+                        dije_busqueda: true,
+                        viene_del_par: false,
+                        solo_aviso: false,
+                        par_buscando: false,
+                        abortar: false,
                     },
                 );
             }
@@ -2313,6 +3183,200 @@ fn anuncio_de(cuenta: &JointAccount) -> Result<ViewAnnounce, String> {
         view_private: *backup.view_private,
         address: cuenta.address().to_string(),
     })
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum EstadoMonedas {
+    Libre,
+    Trabadas,
+    Buscando,
+    SinSaldo,
+}
+
+/// Qué se puede hacer con el libro que ya está en disco, sin armar anillos.
+fn estado_monedas(
+    entradas: &[(u64, usize)],
+    tip: Option<usize>,
+    listo: bool,
+    desde: usize,
+    hasta: usize,
+    retro: usize,
+    minimo: u64,
+) -> EstadoMonedas {
+    let Some(tip) = tip else {
+        return EstadoMonedas::Buscando;
+    };
+    if indice_salida_libre(entradas, tip, minimo).is_some() {
+        return EstadoMonedas::Libre;
+    }
+    if !listo || hasta < tip || retro > 0 {
+        return EstadoMonedas::Buscando;
+    }
+    if entradas
+        .iter()
+        .any(|&(monto, altura)| monto >= minimo && tip < altura.saturating_add(10))
+    {
+        return EstadoMonedas::Trabadas;
+    }
+    if desde > tip.saturating_sub(MAX_HISTORIA) {
+        return EstadoMonedas::Buscando;
+    }
+    EstadoMonedas::SinSaldo
+}
+
+/// `None` si se puede armar el envío. Si no, un código para mostrar y no firmar.
+fn corte_envio(libres: &[u64], todos: &[u64], monto: u64, al_dia: bool) -> Option<&'static str> {
+    if !al_dia {
+        return None;
+    }
+    let need = monto.saturating_add(FEE_CUSHION);
+    if elegir_montos(libres, need).is_ok() {
+        return None;
+    }
+    let total = todos.iter().fold(0u64, |acc, n| acc.saturating_add(*n));
+    if total >= need {
+        Some("codigo:trabadas")
+    } else {
+        Some("codigo:sin-saldo")
+    }
+}
+
+fn partir_aviso(txt: &str) -> (Option<usize>, &str) {
+    let Some(rest) = txt.strip_prefix('p') else {
+        return (None, txt);
+    };
+    let Some((idx, code)) = rest.split_once(':') else {
+        return (None, txt);
+    };
+    match idx.parse::<usize>() {
+        Ok(i) if !code.is_empty() => (Some(i), code),
+        _ => (None, txt),
+    }
+}
+
+fn codigo_aviso(aviso: AvisoFondeo) -> Option<&'static str> {
+    match aviso {
+        AvisoFondeo::SinSaldo => Some("sin-saldo"),
+        AvisoFondeo::Trabadas => Some("trabadas"),
+        AvisoFondeo::SinSemilla => Some("sin-semilla"),
+        AvisoFondeo::SinCaja => Some("sin-caja"),
+        AvisoFondeo::SinSaldoOtro
+        | AvisoFondeo::TrabadasOtro
+        | AvisoFondeo::SinSemillaOtro
+        | AvisoFondeo::SinCajaOtro => None,
+    }
+}
+
+fn aviso_es_del_otro(aviso: AvisoFondeo) -> bool {
+    codigo_aviso(aviso).is_none()
+}
+
+fn aviso_del_otro(code: &str) -> Option<AvisoFondeo> {
+    match code {
+        "sin-saldo" | "sin-saldo-caja" => Some(AvisoFondeo::SinSaldoOtro),
+        "trabadas" | "trabadas-caja" => Some(AvisoFondeo::TrabadasOtro),
+        "sin-semilla" => Some(AvisoFondeo::SinSemillaOtro),
+        "sin-caja" => Some(AvisoFondeo::SinCajaOtro),
+        _ => None,
+    }
+}
+
+fn codigo_del_otro(code: &str) -> String {
+    match code {
+        "sin-saldo" | "sin-saldo-caja" | "codigo:sin-saldo" => "sin-saldo-otro".into(),
+        "trabadas" | "trabadas-caja" | "codigo:trabadas" => "trabadas-otro".into(),
+        "sin-semilla" | "codigo:sin-semilla" => "sin-semilla-otro".into(),
+        "sin-caja" => "sin-caja-otro".into(),
+        "sin-direccion" => "sin-direccion-otro".into(),
+        other => other.to_string(),
+    }
+}
+
+fn codigo_gasto_local(code: &str) -> bool {
+    matches!(
+        code,
+        "sin-semilla" | "sin-caja" | "sin-direccion" | "sin-saldo-caja" | "trabadas-caja"
+    )
+}
+
+fn texto_aviso(aviso: AvisoFondeo) -> Texto {
+    match aviso {
+        AvisoFondeo::SinSaldo => Texto::SinSaldo,
+        AvisoFondeo::Trabadas => Texto::Trabadas,
+        AvisoFondeo::SinSemilla => Texto::SinSemilla,
+        AvisoFondeo::SinCaja => Texto::SinCaja,
+        AvisoFondeo::SinSaldoOtro => Texto::SinSaldoOtro,
+        AvisoFondeo::TrabadasOtro => Texto::TrabadasOtro,
+        AvisoFondeo::SinSemillaOtro => Texto::SinSemillaOtro,
+        AvisoFondeo::SinCajaOtro => Texto::SinCajaOtro,
+    }
+}
+
+fn soltar_aviso_ajeno(f: &mut Fondeo) {
+    f.par_buscando = false;
+    if f.aviso.is_some_and(aviso_es_del_otro) {
+        f.aviso = None;
+    }
+}
+
+fn texto_de_codigo(code: &str) -> Texto {
+    match code {
+        "sin-semilla" | "codigo:sin-semilla" => Texto::SinSemilla,
+        "sin-caja" => Texto::SinCaja,
+        "sin-direccion" => Texto::SinDireccion,
+        "sin-saldo" | "codigo:sin-saldo" => Texto::SinSaldo,
+        "sin-saldo-caja" => Texto::SinSaldoCaja,
+        "trabadas" | "codigo:trabadas" => Texto::Trabadas,
+        "trabadas-caja" => Texto::TrabadasCaja,
+        "sin-saldo-otro" => Texto::SinSaldoOtro,
+        "trabadas-otro" => Texto::TrabadasOtro,
+        "sin-semilla-otro" => Texto::SinSemillaOtro,
+        "sin-caja-otro" => Texto::SinCajaOtro,
+        "sin-direccion-otro" => Texto::SinDireccionOtro,
+        "buscando" => Texto::BuscandoOtro,
+        other => Texto::Falla(other.to_string()),
+    }
+}
+
+fn fondeo_vacio(peer: &str, error: Option<String>, aviso: Option<AvisoFondeo>) -> Fondeo {
+    Fondeo {
+        peer: peer.to_string(),
+        capital: 0,
+        soy_mandante: false,
+        propuesta: None,
+        outputs: None,
+        esqueleto: None,
+        sobre: None,
+        blob: None,
+        txid: None,
+        visto: false,
+        error,
+        aviso,
+        aviso_enviado: true,
+        ultimo: None,
+        avisar: false,
+        avise_pedir: false,
+        espera_moneda: false,
+        dije_busqueda: true,
+        viene_del_par: true,
+        solo_aviso: true,
+        par_buscando: false,
+        abortar: false,
+    }
+}
+
+/// Índice de la salida libre más chica que cubre `minimo`. `entradas` es (monto, altura).
+fn indice_salida_libre(entradas: &[(u64, usize)], tip: usize, minimo: u64) -> Option<usize> {
+    let mut mejor: Option<(usize, u64)> = None;
+    for (i, &(monto, altura)) in entradas.iter().enumerate() {
+        if monto < minimo || tip < altura.saturating_add(10) {
+            continue;
+        }
+        if mejor.is_none_or(|(_, otra)| monto < otra) {
+            mejor = Some((i, monto));
+        }
+    }
+    mejor.map(|(i, _)| i)
 }
 
 fn frio(t: Option<Instant>) -> bool {
@@ -2531,18 +3595,35 @@ async fn entradas_con(
 ) -> Result<(Vec<OutputWithDecoys>, (u64, u64)), String> {
     let tip = chain::tip(rpc).await.map_err(|e| e.to_string())?;
     let from = tip.saturating_sub(LOOKBACK);
-    let outs = chain::scan(rpc, view, from, tip).await.map_err(|e| e.to_string())?;
+    let marcadas = chain::scan_marcado(rpc, view, from, tip)
+        .await
+        .map_err(|e| e.to_string())?;
     let elegidos = if let Some(amount) = exacto {
-        let matching: Vec<_> = outs.into_iter().filter(|o| o.commitment().amount == amount).collect();
-        if matching.len() != cuantos {
-            return Err(format!(
-                "encontré {} salidas de {amount} piconero y hacen falta {cuantos}",
-                matching.len()
-            ));
+        let mut libres = Vec::new();
+        let mut trabadas = 0usize;
+        for (altura, output) in marcadas {
+            if output.commitment().amount != amount {
+                continue;
+            }
+            if tip >= altura.saturating_add(10) {
+                libres.push(output);
+            } else {
+                trabadas += 1;
+            }
         }
-        matching
+        if libres.len() != cuantos {
+            if libres.len() + trabadas >= cuantos {
+                return Err("trabadas-caja".into());
+            }
+            return Err("sin-saldo-caja".into());
+        }
+        libres
     } else {
-        let uno = fund::pick_output(outs, minimo).map_err(|e| e.to_string())?;
+        let libres: Vec<_> = marcadas
+            .into_iter()
+            .filter_map(|(altura, output)| (tip >= altura.saturating_add(10)).then_some(output))
+            .collect();
+        let uno = fund::pick_output(libres, minimo).map_err(|_| "sin-saldo-caja".to_string())?;
         vec![uno]
     };
     let rate = chain::fee_rate(rpc).await.map_err(|e| e.to_string())?;
@@ -2574,5 +3655,60 @@ mod tests {
         assert!(a_piconero(u64::MAX).is_none());
         assert_eq!(maximo_envio(pico).as_deref(), Some("0.039"));
         assert!(maximo_envio(FEE_CUSHION).is_none());
+    }
+
+    #[test]
+    fn el_fondeo_usa_la_salida_libre_mas_chica() {
+        let entradas = [(500, 1), (2_000, 90), (5_000, 50), (9_000, 95)];
+        assert_eq!(indice_salida_libre(&entradas, 100, 1_000), Some(1));
+        assert_eq!(indice_salida_libre(&entradas, 100, 400), Some(0));
+        assert_eq!(indice_salida_libre(&entradas, 100, 8_000), None);
+        assert_eq!(indice_salida_libre(&entradas, 110, 8_000), Some(3));
+    }
+
+    #[test]
+    fn no_arma_si_no_hay_saldo_o_sigue_trabado() {
+        let trabada = [(5_000u64, 95usize)];
+        assert_eq!(
+            estado_monedas(&trabada, Some(100), true, 60, 100, 0, 1_000),
+            EstadoMonedas::Trabadas
+        );
+        assert_eq!(
+            estado_monedas(&trabada, Some(105), true, 60, 105, 0, 1_000),
+            EstadoMonedas::Libre
+        );
+        assert_eq!(
+            estado_monedas(&[], Some(100), true, 60, 100, 0, 1_000),
+            EstadoMonedas::Buscando
+        );
+        assert_eq!(
+            estado_monedas(&[], Some(100), true, 0, 100, 0, 1_000),
+            EstadoMonedas::SinSaldo
+        );
+        assert_eq!(
+            estado_monedas(&[], Some(100), true, 0, 100, 50, 1_000),
+            EstadoMonedas::Buscando
+        );
+        assert_eq!(
+            estado_monedas(&trabada, None, false, 0, 0, 0, 1_000),
+            EstadoMonedas::Buscando
+        );
+    }
+
+    #[test]
+    fn el_envio_no_arma_si_el_libro_no_alcanza() {
+        let cubre = FEE_CUSHION + 2_000;
+        assert_eq!(corte_envio(&[500], &[500], 1_000, true), Some("codigo:sin-saldo"));
+        assert_eq!(
+            corte_envio(&[], &[cubre], 1_000, true),
+            Some("codigo:trabadas")
+        );
+        assert_eq!(corte_envio(&[cubre], &[cubre], 1_000, true), None);
+        assert_eq!(corte_envio(&[], &[], 1_000, false), None);
+        assert_eq!(partir_aviso("p3:sin-saldo"), (Some(3), "sin-saldo"));
+        assert_eq!(partir_aviso("bloque 3: timeout"), (None, "bloque 3: timeout"));
+        assert!(es_freno(&Texto::SinSaldo));
+        assert!(!es_freno(&Texto::BuscandoMonedas));
+        assert!(aviso_humano("codigo:sin-saldo", false).contains("not enough"));
     }
 }
