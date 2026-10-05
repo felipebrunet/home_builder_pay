@@ -140,6 +140,11 @@ impl JointAccount {
         &self.address
     }
 
+    /// View key compartida de la caja. Alcanza para ver los movimientos, no para gastar.
+    pub fn view_private_bytes(&self) -> [u8; 32] {
+        <[u8; 32]>::from(*self.view_private)
+    }
+
     pub fn participant(&self) -> Participant {
         participant(self.role)
     }

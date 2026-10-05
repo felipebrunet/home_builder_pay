@@ -18,6 +18,9 @@ third_party/**/audits/
 semilla.txt
 libro.json
 *.share
+# Libro de la caja y esperas locales. Van en xmr/, junto con la semilla.
+caja-*.json
+espera-*.json
 crates/konstruado/fonts/
 konstruado-tor-*/
 

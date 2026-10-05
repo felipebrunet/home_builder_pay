@@ -388,7 +388,19 @@ input[type="text"]:focus {
 .partida.on { border: 2px solid var(--tinta); }
 .partida .txt { flex: 1; min-width: 0; }
 .partida .txt strong { display: block; font-size: 17px; }
-.partida .txt span { color: var(--apagado); font-size: 15px; }
+.partida .txt span { display: block; color: var(--apagado); font-size: 15px; }
+
+.clave {
+  margin: 8px 0 0;
+  padding: 10px 12px;
+  border: 1px solid var(--linea);
+  border-radius: 8px;
+  word-break: break-all;
+  font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  font-size: 14px;
+  line-height: 1.4;
+  user-select: text;
+}
 
 .notas {
   margin: 20px 0 8px;

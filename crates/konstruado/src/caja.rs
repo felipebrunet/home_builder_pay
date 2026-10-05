@@ -20,8 +20,8 @@ use rand_core::{OsRng, RngCore};
 use serde::Deserialize;
 use serde::Serialize;
 
-use xmr_joint::backup::{self, SeedBackup};
-use xmr_joint::chain::{self, Daemon};
+use xmr_joint::backup::{self, SeedBackup, ShareBackup};
+use xmr_joint::chain;
 use xmr_joint::coop::{self, Proposal, Skeleton};
 use xmr_joint::dkg::{DkgParty, JointAccount, Party, ViewAnnounce};
 use xmr_joint::fund::{self, view_del_mandante};
@@ -39,6 +39,10 @@ pub const PICONERO_POR_UNIDAD: u64 = 20_000_000;
 const LOOKBACK: usize = 40;
 /// Hasta dónde camina solo el fondeo si la billetera todavía no vio la salida. ~4 semanas en stagenet.
 const MAX_HISTORIA: usize = 20_000;
+/// Lo que suma un click de "mirar más atrás" en la caja. No se escanea de una sola vez.
+const PASO_ATRAS_CAJA: usize = 200;
+/// Bloques de la caja por turno del nodo. El primero sigue siendo [`LOOKBACK`].
+const PASO_SCAN: usize = 8;
 const PAUSA: Duration = Duration::from_secs(20);
 
 pub fn a_piconero(unidades: u64) -> Option<u64> {
@@ -52,6 +56,134 @@ pub fn fmt_xmr(pico: u64) -> String {
         frac.pop();
     }
     format!("{whole}.{frac}")
+}
+
+pub struct AporteFondeo {
+    pub por_lado: u64,
+    pub total: u64,
+}
+
+/// Lo que entra a la caja si los dos fondean: dos salidas iguales, una por lado.
+pub fn aporte_fondeo(capital_unidades: u64) -> Option<AporteFondeo> {
+    let por_lado = a_piconero(capital_unidades)?;
+    let total = por_lado.checked_mul(2)?;
+    Some(AporteFondeo { por_lado, total })
+}
+
+pub struct SaldoPartida {
+    pub estado: String,
+    pub detalle: String,
+    pub candado: Option<String>,
+}
+
+/// Texto de la ficha: estado del fondeo y cuánto quedó en la caja.
+pub fn saldo_partida(
+    es: bool,
+    estado: PartidaEstado,
+    capital_unidades: u64,
+    tiene_fondeo: bool,
+    mandante: &str,
+    contratista: &str,
+) -> Option<SaldoPartida> {
+    let aporte = aporte_fondeo(capital_unidades)?;
+    let lado = fmt_xmr(aporte.por_lado);
+    let total = fmt_xmr(aporte.total);
+    if estado == PartidaEstado::Pagada {
+        return Some(SaldoPartida {
+            estado: if es {
+                "Pagada. Esta partida ya no tiene saldo en la caja.".into()
+            } else {
+                "Paid. This stage no longer has a balance in the box.".into()
+            },
+            detalle: if es {
+                format!("Se habían encerrado {total} XMR: {lado} de {mandante} y {lado} de {contratista}.")
+            } else {
+                format!("They had locked {total} XMR: {lado} from {mandante} and {lado} from {contratista}.")
+            },
+            candado: None,
+        });
+    }
+    if tiene_fondeo
+        && matches!(
+            estado,
+            PartidaEstado::Encerrando | PartidaEstado::Encerrada | PartidaEstado::EnTrato
+        )
+    {
+        let estado_txt = if estado == PartidaEstado::EnTrato {
+            if es {
+                "En trato. El saldo sigue en la caja hasta el pago."
+            } else {
+                "In deal. The balance stays in the box until payment."
+            }
+        } else {
+            if es {
+                "Fondeada. El saldo sigue en la caja hasta el pago."
+            } else {
+                "Funded. The balance stays in the box until payment."
+            }
+        };
+        return Some(SaldoPartida {
+            estado: estado_txt.into(),
+            detalle: if es {
+                format!("Total en la caja: {total} XMR. {mandante} aportó {lado} XMR. {contratista} aportó {lado} XMR.")
+            } else {
+                format!("Total in the box: {total} XMR. {mandante} put in {lado} XMR. {contratista} put in {lado} XMR.")
+            },
+            candado: Some(if es {
+                "Esas salidas se pueden gastar después de 10 bloques desde el bloque del fondeo.".into()
+            } else {
+                "Those outputs can be spent 10 blocks after the funding block.".into()
+            }),
+        });
+    }
+    if estado == PartidaEstado::Encerrando {
+        return Some(SaldoPartida {
+            estado: if es {
+                "Encerrando. Todavía no hay saldo en la caja.".into()
+            } else {
+                "Locking. There is no balance in the box yet.".into()
+            },
+            detalle: if es {
+                format!("Si se fondea, cada lado pone {lado} XMR. El total en la caja sería {total} XMR.")
+            } else {
+                format!("If it funds, each side puts in {lado} XMR. The box total would be {total} XMR.")
+            },
+            candado: None,
+        });
+    }
+    None
+}
+
+/// Una línea corta para la lista de partidas.
+pub fn saldo_corto(es: bool, estado: PartidaEstado, capital_unidades: u64, tiene_fondeo: bool) -> Option<String> {
+    if estado == PartidaEstado::Pagada {
+        return Some(if es {
+            "Pagada · la caja de esta partida quedó en cero".into()
+        } else {
+            "Paid · this stage's box is empty".into()
+        });
+    }
+    if tiene_fondeo
+        && matches!(
+            estado,
+            PartidaEstado::Encerrando | PartidaEstado::Encerrada | PartidaEstado::EnTrato
+        )
+    {
+        let total = fmt_xmr(aporte_fondeo(capital_unidades)?.total);
+        return Some(if es {
+            format!("{total} XMR en la caja")
+        } else {
+            format!("{total} XMR in the box")
+        });
+    }
+    if estado == PartidaEstado::Encerrando {
+        return Some(if es {
+            "Todavía sin fondear".into()
+        } else {
+            "Not funded yet".into()
+        });
+    }
+    None
 }
 
 pub fn escala(es: bool) -> String {
@@ -81,6 +213,17 @@ pub struct CajaVista {
     pub cajas: Vec<(String, String)>,
     pub lineas: Vec<Linea>,
     pub billetera: BilleteraVista,
+    /// Qué tan atrás mira cada caja. `retro` es lo que todavía falta caminar.
+    pub miradas: Vec<MiradaCaja>,
+}
+
+/// Ventana de scan de una caja. No incluye llaves.
+#[derive(Clone, Debug)]
+pub struct MiradaCaja {
+    pub obra: String,
+    pub retro: usize,
+    pub bloques: usize,
+    pub aviso: Option<String>,
 }
 
 /// Saldo de la billetera personal. Los montos van en piconero.
@@ -119,6 +262,7 @@ impl CajaVista {
             cajas: Vec::new(),
             lineas: Vec::new(),
             billetera: BilleteraVista::vacia(),
+            miradas: Vec::new(),
         }
     }
 
@@ -187,6 +331,8 @@ pub enum Texto {
     SinCaja,
     /// El gasto no ve las dos salidas de la caja.
     SinSaldoCaja,
+    /// La caja todavía no cubrió el rango que el usuario pidió.
+    BuscandoCaja,
     /// Esas salidas de la caja siguen bajo el candado de 10 bloques.
     TrabadasCaja,
     /// Falta la dirección personal del otro para pagar.
@@ -299,9 +445,16 @@ impl Texto {
             }
             Texto::SinSaldoCaja => {
                 if es {
-                    "La caja no muestra las dos salidas libres de esta partida. No armé el pago.".into()
+                    "La caja no muestra las dos salidas libres de esta partida. No armé el pago. Si el fondeo es más viejo, pedí mirar más bloques.".into()
                 } else {
-                    "The box does not show this stage's two unlocked outputs. The payment was not built.".into()
+                    "The box does not show this stage's two unlocked outputs. The payment was not built. If the funding is older, scan further back.".into()
+                }
+            }
+            Texto::BuscandoCaja => {
+                if es {
+                    "Estoy mirando más bloques de la caja. Todavía no armo el pago.".into()
+                } else {
+                    "Looking further back through the box. The payment is not being built yet.".into()
                 }
             }
             Texto::TrabadasCaja => {
@@ -456,6 +609,54 @@ pub fn aviso_humano(aviso: &str, es: bool) -> String {
             "La caja de la obra todavía no está armada.",
             "The job's shared box is not ready yet.",
         ),
+        "codigo:semilla-otra" => (
+            "Ya hay otra semilla en este equipo. No la reemplazo: el otro tiene esta dirección para pagarte.",
+            "This machine already has a different seed. It stays: the other person pays this address.",
+        ),
+        "codigo:semilla-red" | "codigo:share-red" => (
+            "Ese archivo no es de stagenet.",
+            "That file is not for stagenet.",
+        ),
+        "codigo:semilla-archivo" => (
+            "Ese archivo no es una semilla de 25 palabras de Konstruado.",
+            "That file is not a Konstruado 25-word seed.",
+        ),
+        "codigo:semilla-direccion" => (
+            "La dirección del archivo no coincide con las 25 palabras.",
+            "The address in the file does not match the 25 words.",
+        ),
+        "codigo:semilla-rota" => (
+            "Ya hay un archivo de semilla en este equipo y no lo pude leer. No lo piso.",
+            "A seed file is already here and I could not read it. I left it in place.",
+        ),
+        "codigo:share-obra" => (
+            "Esa obra no está en este perfil. El share no rehace tu identidad ni el trato.",
+            "That job is not in this profile. The share does not rebuild your identity or the deal.",
+        ),
+        "codigo:share-rol" => (
+            "Ese share es del otro lado, o de alguien que no está en la obra. Cada equipo guarda el suyo.",
+            "That share belongs to the other side, or to someone not on the job. Each machine keeps its own.",
+        ),
+        "codigo:share-distinto" => (
+            "Ya hay otro share de esta obra. No lo reemplazo.",
+            "This job already has a different share. I did not replace it.",
+        ),
+        "codigo:share-archivo" => (
+            "Ese archivo no es un share de Konstruado.",
+            "That file is not a Konstruado share.",
+        ),
+        "codigo:share-no" => (
+            "El share de esta obra no está en este equipo.",
+            "This machine does not have the share for this job.",
+        ),
+        "codigo:caja-tope" => (
+            "Ya miré el tope de historia de la caja, unos 20 000 bloques.",
+            "The box scan already reached its limit, about 20,000 blocks.",
+        ),
+        "codigo:archivo-existe" => (
+            "Esa ruta ya tiene un archivo. Elegí otro nombre.",
+            "That path already has a file. Choose another name.",
+        ),
         "no estás en esta obra" => ("No estás en esta obra.", "You are not on this job."),
         "propuesta ilegible" => (
             "La propuesta de fondeo no se puede leer. No seguí armando.",
@@ -466,6 +667,30 @@ pub fn aviso_humano(aviso: &str, es: bool) -> String {
             "The node did not return a valid fee. The payment was not built.",
         ),
         other => return other.to_string(),
+    };
+    if es { esp.into() } else { ing.into() }
+}
+
+/// Confirmación corta cuando un respaldo se guardó o ya estaba.
+pub fn listo_humano(code: &str, es: bool) -> String {
+    let (esp, ing) = match code {
+        "codigo:semilla-nueva" => (
+            "Recuperé la billetera personal. La caja de la obra no está en esas palabras: hace falta el share.",
+            "Restored the personal wallet. Those words do not hold the job's box: the share is still required.",
+        ),
+        "codigo:semilla-igual" => (
+            "Esas palabras ya son las de esta billetera.",
+            "Those words are already this wallet.",
+        ),
+        "codigo:share-nuevo" => (
+            "Recuperé la caja de esa obra. Si el fondeo es viejo, pedí mirar más bloques.",
+            "Restored that job's box. If the funding is old, scan further back.",
+        ),
+        "codigo:share-igual" => (
+            "Ese share ya estaba en este equipo.",
+            "That share was already on this machine.",
+        ),
+        _ => return aviso_humano(code, es),
     };
     if es { esp.into() } else { ing.into() }
 }
@@ -496,6 +721,13 @@ impl Caja {
         Self {
             inner: Arc::new(Mutex::new(Motor::cargar())),
         }
+    }
+
+    /// View key compartida de la caja, en hex. No es la parte de gasto.
+    pub fn view_de(&self, obra: &str) -> Option<String> {
+        let m = self.inner.lock().unwrap();
+        let cuenta = m.cuentas.get(obra)?;
+        Some(hex::encode(cuenta.view_private_bytes()))
     }
 
     pub fn vista(&self) -> CajaVista {
@@ -534,6 +766,35 @@ impl Caja {
         m.scan_pausa = None;
         m.scan_aviso = None;
         m.guardar_libro();
+    }
+
+    /// Copia el share de esta obra a la ruta que eligió el usuario. No pisa el archivo interno.
+    pub fn guardar_share(&self, obra: &str, path: &Path) -> Result<(), String> {
+        self.inner.lock().unwrap().exportar_share(obra, path)
+    }
+
+    /// Recupera la billetera personal. No trae la caja. No pisa una semilla distinta.
+    pub fn restaurar_semilla(&self, path: &Path) -> Result<&'static str, String> {
+        let mut m = self.inner.lock().unwrap();
+        let code = m.restaurar_semilla(path)?;
+        m.armar_vista(&[]);
+        Ok(code)
+    }
+
+    /// Recupera el share de una obra que ya está en este perfil, si el rol coincide.
+    pub fn restaurar_share(&self, path: &Path, yo: &Persona, obras: &[Obra]) -> Result<&'static str, String> {
+        let mut m = self.inner.lock().unwrap();
+        let code = m.restaurar_share(path, yo, obras)?;
+        m.armar_vista(obras);
+        Ok(code)
+    }
+
+    /// Suma hasta 200 bloques a la historia de esta caja. El scan va de a 8.
+    pub fn pedir_atras_caja(&self, obra: &str) -> Result<(), String> {
+        let mut m = self.inner.lock().unwrap();
+        m.pedir_atras_caja(obra)?;
+        m.armar_vista(&[]);
+        Ok(())
     }
 
     pub fn pedir_fondeo(&self, obra: &Obra, partida: usize, yo: &Persona) -> Result<(), String> {
@@ -594,6 +855,10 @@ struct Motor {
     buscando: bool,
     enviando: bool,
     scan_aviso: Option<String>,
+    cajas_libros: HashMap<String, LibroCaja>,
+    caja_pausa: Option<Instant>,
+    caja_aviso: Option<String>,
+    caja_aviso_obra: Option<String>,
     envio_aviso: Option<String>,
     ultimo_envio: Option<String>,
     ultimo_fee: Option<u64>,
@@ -737,6 +1002,15 @@ enum Listo {
         retro: bool,
         entradas: Vec<EntradaNueva>,
     },
+    CajaScan {
+        obra: String,
+        desde: usize,
+        hasta: usize,
+        tip: usize,
+        retro: bool,
+        entradas: Vec<EntradaNueva>,
+        error: Option<String>,
+    },
     Aviso(String),
     Envio {
         ok: Result<EnvioHecho, String>,
@@ -767,6 +1041,10 @@ impl Motor {
             buscando: false,
             enviando: false,
             scan_aviso: None,
+            cajas_libros: HashMap::new(),
+            caja_pausa: None,
+            caja_aviso: None,
+            caja_aviso_obra: None,
             envio_aviso: None,
             ultimo_envio: None,
             ultimo_fee: None,
@@ -775,6 +1053,7 @@ impl Motor {
         };
         m.cargar_libro();
         m.cargar_shares();
+        m.cargar_libros_caja();
         m.cargar_pares();
         m.cargar_esperas();
         m.armar_vista(&[]);
@@ -1472,7 +1751,10 @@ impl Motor {
         if !path.exists() {
             let _ = backup::write_secret_file(&path, &backup.to_text());
         }
-        self.cuentas.insert(account.obra_id().to_string(), account);
+        let id = account.obra_id().to_string();
+        let addr = account.address().to_string();
+        self.cuentas.insert(id.clone(), account);
+        self.cajas_libros.entry(id).or_insert_with(|| LibroCaja::nueva(&addr));
     }
 
     fn mandar_direccion(&mut self, nodo: &Nodo, yo: &Persona, obras: &[Obra]) {
@@ -1730,8 +2012,29 @@ impl Motor {
             return;
         }
         if let Some((obra, i, pago)) = self.busca_ver() {
-            self.spawn_ver(obra, i, pago);
-            return;
+            if pago {
+                self.spawn_ver(obra, i, true);
+                return;
+            }
+            let txid = self
+                .fondeos
+                .get(&(obra.clone(), i))
+                .and_then(|f| f.txid.clone());
+            if let Some(txid) = txid {
+                if self.caja_tiene_tx(&obra, &txid) {
+                    if let Some(f) = self.fondeos.get_mut(&(obra.clone(), i)) {
+                        f.visto = true;
+                        f.error = None;
+                    }
+                } else if !self.caja_cubierta(&obra) {
+                    if self.lanzar_trozo_caja(&obra) {
+                        return;
+                    }
+                } else if let Some(f) = self.fondeos.get_mut(&(obra, i)) {
+                    f.visto = false;
+                    f.ultimo = Some(Instant::now());
+                }
+            }
         }
         self.empujar_historia();
         self.cerrar_busqueda_vacia();
@@ -1741,13 +2044,36 @@ impl Motor {
             return;
         }
         if let Some((obra, i)) = self.busca_entradas(true) {
-            self.spawn_entradas(obra, i, true, nodo, yo);
-            return;
+            let amount = self
+                .gastos
+                .get(&(obra.clone(), i))
+                .map(|g| g.capital)
+                .unwrap_or(0);
+            match self.cobertura_de(&obra, amount, 2) {
+                CoberturaCaja::Libre => {
+                    self.spawn_entradas(obra, i, true, nodo, yo);
+                    return;
+                }
+                CoberturaCaja::Buscando => {
+                    if self.lanzar_trozo_caja(&obra) {
+                        return;
+                    }
+                }
+                CoberturaCaja::SinSaldo => {
+                    self.fallar(&obra, i, true, "sin-saldo-caja".into(), nodo, yo);
+                }
+                CoberturaCaja::Trabadas => {
+                    self.fallar(&obra, i, true, "trabadas-caja".into(), nodo, yo);
+                }
+            }
         }
         if self.lanzar_envio() {
             return;
         }
         self.lanzar_saldo();
+        if self.ocupado.is_none() {
+            self.lanzar_caja_ociosa();
+        }
     }
 
     fn lanzar_envio(&mut self) -> bool {
@@ -2078,29 +2404,26 @@ impl Motor {
             });
             return;
         }
-        let Some(cuenta) = self.cuentas.get(&obra) else {
+        if !self.cuentas.contains_key(&obra) {
+            self.fallar(&obra, partida, true, "sin-caja".into(), nodo, yo);
             return;
-        };
-        let view = match cuenta.view_pair() {
-            Ok(v) => v,
-            Err(e) => {
-                self.fallar(&obra, partida, true, e.to_string(), nodo, yo);
-                return;
-            }
-        };
-        let minimo = self
+        }
+        let amount = self
             .gastos
             .get(&(obra.clone(), partida))
             .map(|g| g.capital)
             .unwrap_or(0);
-        let cuantos = 2;
-        let exacto = self.gastos.get(&(obra.clone(), partida)).map(|g| g.capital);
+        let raws = self.raws_exactos(&obra, amount);
+        if raws.len() != 2 {
+            self.fallar(&obra, partida, true, "sin-saldo-caja".into(), nodo, yo);
+            return;
+        }
         if let Some(g) = self.gastos.get_mut(&(obra.clone(), partida)) {
             g.ultimo = Some(Instant::now());
         }
         let celda = self.ocupar();
         tokio::spawn(async move {
-            let listo = juntar_entradas(view, minimo, cuantos, exacto)
+            let listo = chain::anillar_varias(raws)
                 .await
                 .map(|(decoys, fee)| Listo::Entradas {
                     obra: obra.clone(),
@@ -2109,11 +2432,11 @@ impl Motor {
                     decoys,
                     fee,
                 })
-                .unwrap_or_else(|msg| Listo::Fallo {
+                .unwrap_or_else(|e| Listo::Fallo {
                     obra,
                     partida: Some(partida),
                     pago: Some(true),
-                    msg,
+                    msg: e.to_string(),
                 });
             *celda.lock().unwrap() = Some(listo);
         });
@@ -2239,6 +2562,42 @@ impl Motor {
                     self.libro.hasta = hasta;
                 }
                 self.guardar_libro();
+            }
+            Listo::CajaScan {
+                obra,
+                desde,
+                hasta,
+                tip,
+                retro,
+                entradas,
+                error,
+            } => {
+                self.tip = Some(tip);
+                if let Some(error) = error {
+                    self.caja_pausa = Some(Instant::now());
+                    self.caja_aviso = Some(error);
+                    self.caja_aviso_obra = Some(obra);
+                } else {
+                    self.caja_pausa = None;
+                    self.caja_aviso = None;
+                    self.caja_aviso_obra = None;
+                    self.fundir_caja(&obra, entradas);
+                    let era_nuevo = self.cajas_libros.get(&obra).is_some_and(|l| !l.listo);
+                    if let Some(libro) = self.cajas_libros.get_mut(&obra) {
+                        if retro {
+                            libro.desde = desde;
+                            let n = hasta.saturating_sub(desde).saturating_add(1);
+                            libro.retro = libro.retro.saturating_sub(n);
+                        } else if era_nuevo {
+                            libro.desde = desde;
+                            libro.hasta = hasta;
+                            libro.listo = true;
+                        } else {
+                            libro.hasta = hasta.max(libro.hasta);
+                        }
+                    }
+                    self.guardar_libro_caja(&obra);
+                }
             }
             Listo::Aviso(msg) => {
                 self.buscando = false;
@@ -2856,7 +3215,7 @@ impl Motor {
         }
     }
 
-    fn texto_gasto(&self, g: &Gasto) -> Texto {
+    fn texto_gasto(&self, obra: &str, g: &Gasto) -> Texto {
         if g.visto {
             if let Some(tx) = &g.txid {
                 return Texto::EsperandoPago(tx.clone());
@@ -2867,6 +3226,14 @@ impl Motor {
         }
         if let Some(tx) = &g.txid {
             return Texto::EsperandoPago(tx.clone());
+        }
+        if g.soy_mandante && g.propuesta.is_none() {
+            return match self.cobertura_de(obra, g.capital, 2) {
+                CoberturaCaja::Buscando => Texto::BuscandoCaja,
+                CoberturaCaja::SinSaldo => Texto::SinSaldoCaja,
+                CoberturaCaja::Trabadas => Texto::TrabadasCaja,
+                CoberturaCaja::Libre => Texto::Gastando,
+            };
         }
         Texto::Gastando
     }
@@ -2897,7 +3264,7 @@ impl Motor {
             });
         }
         for ((obra, i), g) in &self.gastos {
-            let texto = self.texto_gasto(g);
+            let texto = self.texto_gasto(obra, g);
             v.lineas.push(Linea {
                 obra: obra.clone(),
                 partida: Some(*i),
@@ -2912,7 +3279,29 @@ impl Motor {
             }
         }
         v.billetera = self.vista_billetera();
+        v.miradas = self.miradas();
         self.vista = v;
+    }
+
+    fn miradas(&self) -> Vec<MiradaCaja> {
+        let mut out = Vec::new();
+        for id in self.cuentas.keys() {
+            let libro = self.cajas_libros.get(id);
+            let (retro, bloques) = match libro {
+                Some(l) => (l.retro, bloques_mirados(self.tip, l)),
+                None => (0, LOOKBACK),
+            };
+            let aviso = (self.caja_aviso_obra.as_deref() == Some(id.as_str()))
+                .then(|| self.caja_aviso.clone())
+                .flatten();
+            out.push(MiradaCaja {
+                obra: id.clone(),
+                retro,
+                bloques,
+                aviso,
+            });
+        }
+        out
     }
 
     fn vista_billetera(&self) -> BilleteraVista {
@@ -3165,6 +3554,371 @@ impl Motor {
             let _ = std::fs::create_dir_all(xmr_dir());
             let _ = std::fs::write(espera_path(obra, partida, pago), raw);
         }
+    }
+
+    fn exportar_share(&self, obra: &str, path: &Path) -> Result<(), String> {
+        let cuenta = self.cuentas.get(obra).ok_or("codigo:share-no")?;
+        let mut text = cuenta
+            .backup()
+            .map_err(|_| "codigo:share-archivo".to_string())?
+            .to_text();
+        if let Ok(disk) = backup::read_secret_file(&share_path(obra)) {
+            if let Ok(parsed) = ShareBackup::parse(&disk) {
+                if parsed.obra_id == obra {
+                    text = disk;
+                }
+            }
+        }
+        if path.exists() {
+            return Err("codigo:archivo-existe".into());
+        }
+        backup::write_secret_file(path, &text).map_err(|e| e.to_string())
+    }
+
+    fn restaurar_semilla(&mut self, path: &Path) -> Result<&'static str, String> {
+        let text = backup::read_secret_file(path).map_err(|_| "codigo:semilla-archivo".to_string())?;
+        let actual = self.wallet.as_ref().map(|w| w.address().to_string());
+        let (addr, igual) = restaurar_semilla_en(&xmr_dir(), &text, actual.as_deref())?;
+        if igual {
+            if self.wallet.is_none() {
+                self.wallet = leer_semilla();
+            }
+            return Ok("codigo:semilla-igual");
+        }
+        self.wallet = leer_semilla();
+        if self.wallet.as_ref().map(|w| w.address()) != Some(addr.as_str()) {
+            return Err("codigo:semilla-archivo".into());
+        }
+        if self.libro.direccion != addr {
+            self.libro = Libro::nueva(&addr);
+            self.retro = 0;
+            self.forzar = false;
+            self.buscando = false;
+            self.scan_aviso = None;
+            self.scan_pausa = None;
+            self.envio_aviso = None;
+            self.ultimo_envio = None;
+            self.ultimo_fee = None;
+            self.ultimo_cambio = None;
+            self.guardar_libro();
+        }
+        Ok("codigo:semilla-nueva")
+    }
+
+    fn restaurar_share(&mut self, path: &Path, yo: &Persona, obras: &[Obra]) -> Result<&'static str, String> {
+        let text = backup::read_secret_file(path).map_err(|_| "codigo:share-archivo".to_string())?;
+        let share = ShareBackup::parse(&text).map_err(|_| "codigo:share-archivo".to_string())?;
+        if !id_sano(&share.obra_id) {
+            return Err("codigo:share-obra".into());
+        }
+        let obra = obras.iter().find(|o| o.id == share.obra_id);
+        let rol_mio = obra.and_then(|o| rol_en(o, &yo.id)).map(|p| p.label());
+        validar_share_meta(obra.is_some(), rol_mio, &share.role, share.net == Net::Stagenet)
+            .map_err(|e| e.to_string())?;
+        let account = JointAccount::from_backup(&share).map_err(|_| "codigo:share-archivo".to_string())?;
+        let id = account.obra_id().to_string();
+        let dest = share_path(&id);
+        let hay = self.cuentas.contains_key(&id);
+        let iguales = self
+            .cuentas
+            .get(&id)
+            .is_some_and(|prev| misma_cuenta(prev, &account));
+        if hay {
+            validar_share_existente(true, iguales).map_err(|e| e.to_string())?;
+            if !dest.exists() {
+                let body = account.backup().map_err(|_| "codigo:share-archivo".to_string())?.to_text();
+                backup::write_secret_file(&dest, &body).map_err(|e| e.to_string())?;
+            }
+            return Ok("codigo:share-igual");
+        }
+        if dest.exists() {
+            let disk_txt = backup::read_secret_file(&dest).map_err(|_| "codigo:share-distinto".to_string())?;
+            let disk = ShareBackup::parse(&disk_txt).map_err(|_| "codigo:share-distinto".to_string())?;
+            let disk_acc = JointAccount::from_backup(&disk).map_err(|_| "codigo:share-distinto".to_string())?;
+            if !misma_cuenta(&disk_acc, &account) {
+                return Err("codigo:share-distinto".into());
+            }
+            self.meter_cuenta(id, account);
+            return Ok("codigo:share-igual");
+        }
+        let body = account.backup().map_err(|_| "codigo:share-archivo".to_string())?.to_text();
+        backup::write_secret_file(&dest, &body).map_err(|e| e.to_string())?;
+        self.meter_cuenta(id, account);
+        Ok("codigo:share-nuevo")
+    }
+
+    fn meter_cuenta(&mut self, id: String, account: JointAccount) {
+        let addr = account.address().to_string();
+        self.cuentas.insert(id.clone(), account);
+        match self.cajas_libros.get(&id) {
+            Some(l) if l.direccion == addr => {}
+            _ => {
+                self.cajas_libros.insert(id.clone(), LibroCaja::nueva(&addr));
+            }
+        }
+        self.dkg.remove(&id);
+        self.dkg_inbox.remove(&id);
+    }
+
+    fn pedir_atras_caja(&mut self, obra: &str) -> Result<(), String> {
+        let addr = self
+            .cuentas
+            .get(obra)
+            .map(|c| c.address().to_string())
+            .ok_or("codigo:share-no")?;
+        let (desde, listo, retro) = {
+            let libro = self
+                .cajas_libros
+                .entry(obra.to_string())
+                .or_insert_with(|| LibroCaja::nueva(&addr));
+            if libro.direccion != addr {
+                *libro = LibroCaja::nueva(&addr);
+            }
+            (libro.desde, libro.listo, libro.retro)
+        };
+        let n = sumar_atras(self.tip.unwrap_or(0), desde, listo, retro);
+        if n == 0 {
+            return Err("codigo:caja-tope".into());
+        }
+        if let Some(libro) = self.cajas_libros.get_mut(obra) {
+            libro.retro = libro.retro.saturating_add(n);
+        }
+        for ((o, _), g) in self.gastos.iter_mut() {
+            if o == obra && g.error.as_deref() == Some("sin-saldo-caja") {
+                g.error = None;
+                g.ultimo = None;
+            }
+        }
+        for ((o, _), f) in self.fondeos.iter_mut() {
+            if o == obra && f.txid.is_some() && !f.visto {
+                f.ultimo = None;
+            }
+        }
+        self.caja_pausa = None;
+        self.caja_aviso = None;
+        self.caja_aviso_obra = None;
+        self.guardar_libro_caja(obra);
+        Ok(())
+    }
+
+    fn lanzar_caja_ociosa(&mut self) {
+        if self.ocupado.is_some() {
+            return;
+        }
+        let ids: Vec<String> = self.cuentas.keys().cloned().collect();
+        for id in ids {
+            if self.lanzar_trozo_caja(&id) {
+                return;
+            }
+        }
+    }
+
+    fn lanzar_trozo_caja(&mut self, obra: &str) -> bool {
+        if self.ocupado.is_some() || !frio(self.caja_pausa) {
+            return false;
+        }
+        let Some(tip) = self.tip else {
+            return false;
+        };
+        let (addr, view) = {
+            let Some(cuenta) = self.cuentas.get(obra) else {
+                return false;
+            };
+            let addr = cuenta.address().to_string();
+            let Ok(view) = cuenta.view_pair() else {
+                return false;
+            };
+            (addr, view)
+        };
+        let libro = self
+            .cajas_libros
+            .entry(obra.to_string())
+            .or_insert_with(|| LibroCaja::nueva(&addr));
+        if libro.direccion != addr {
+            *libro = LibroCaja::nueva(&addr);
+        }
+        let Some((desde, hasta, retro)) =
+            siguiente_trozo(tip, libro.desde, libro.hasta, libro.listo, libro.retro)
+        else {
+            return false;
+        };
+        if hasta < desde {
+            return false;
+        }
+        let obra = obra.to_string();
+        let celda = self.ocupar();
+        tokio::spawn(async move {
+            let listo = match chain::connect(STAGENET_DAEMON).await {
+                Ok(rpc) => match chain::scan_marcado(&rpc, view, desde, hasta).await {
+                    Ok(marcadas) => {
+                        let mut entradas = Vec::new();
+                        for (altura, output) in marcadas {
+                            entradas.push(EntradaNueva {
+                                altura,
+                                monto: output.commitment().amount,
+                                tx: hex::encode(output.transaction()),
+                                indice: output.index_in_transaction(),
+                                raw: output.serialize(),
+                            });
+                        }
+                        let tip_ahora = chain::tip(&rpc).await.unwrap_or(hasta);
+                        Listo::CajaScan {
+                            obra,
+                            desde,
+                            hasta,
+                            tip: tip_ahora,
+                            retro,
+                            entradas,
+                            error: None,
+                        }
+                    }
+                    Err(e) => Listo::CajaScan {
+                        obra,
+                        desde,
+                        hasta,
+                        tip,
+                        retro,
+                        entradas: Vec::new(),
+                        error: Some(e.to_string()),
+                    },
+                },
+                Err(e) => Listo::CajaScan {
+                    obra,
+                    desde,
+                    hasta,
+                    tip,
+                    retro,
+                    entradas: Vec::new(),
+                    error: Some(e.to_string()),
+                },
+            };
+            *celda.lock().unwrap() = Some(listo);
+        });
+        true
+    }
+
+    fn caja_tiene_tx(&self, obra: &str, txid: &str) -> bool {
+        self.cajas_libros
+            .get(obra)
+            .is_some_and(|l| l.entradas.iter().any(|e| e.tx == txid))
+    }
+
+    fn caja_cubierta(&self, obra: &str) -> bool {
+        let Some(tip) = self.tip else {
+            return false;
+        };
+        let Some(libro) = self.cajas_libros.get(obra) else {
+            return false;
+        };
+        libro.listo && libro.hasta >= tip && libro.retro == 0
+    }
+
+    fn cobertura_de(&self, obra: &str, amount: u64, cuantos: usize) -> CoberturaCaja {
+        let (listo, desde, hasta, retro, entradas) = match self.cajas_libros.get(obra) {
+            Some(l) => (
+                l.listo,
+                l.desde,
+                l.hasta,
+                l.retro,
+                l.entradas.iter().map(|e| (e.monto, e.altura)).collect::<Vec<_>>(),
+            ),
+            None => (false, 0, 0, 0, Vec::new()),
+        };
+        cobertura_caja(&entradas, self.tip, listo, desde, hasta, retro, amount, cuantos)
+    }
+
+    fn raws_exactos(&self, obra: &str, amount: u64) -> Vec<Vec<u8>> {
+        let Some(tip) = self.tip else {
+            return Vec::new();
+        };
+        let Some(libro) = self.cajas_libros.get(obra) else {
+            return Vec::new();
+        };
+        let mut exactas: Vec<&Entrada> = libro.entradas.iter().filter(|e| e.monto == amount).collect();
+        exactas.sort_by_key(|e| (e.altura, e.indice));
+        let Some(nuevas) = exactas.get(exactas.len().saturating_sub(2)..) else {
+            return Vec::new();
+        };
+        if nuevas.len() != 2 || nuevas.iter().any(|e| tip < e.altura.saturating_add(10)) {
+            return Vec::new();
+        }
+        nuevas.iter().map(|e| e.raw.clone()).collect()
+    }
+
+    fn fundir_caja(&mut self, obra: &str, entradas: Vec<EntradaNueva>) {
+        let Some(libro) = self.cajas_libros.get_mut(obra) else {
+            return;
+        };
+        for nueva in entradas {
+            let ya = libro
+                .entradas
+                .iter()
+                .any(|e| e.tx == nueva.tx && e.indice == nueva.indice);
+            if ya {
+                continue;
+            }
+            libro.entradas.push(Entrada {
+                altura: nueva.altura,
+                monto: nueva.monto,
+                tx: nueva.tx,
+                indice: nueva.indice,
+                raw: nueva.raw,
+            });
+        }
+    }
+
+    fn cargar_libros_caja(&mut self) {
+        let ids: Vec<String> = self.cuentas.keys().cloned().collect();
+        for id in ids {
+            let Some(addr) = self.cuentas.get(&id).map(|c| c.address().to_string()) else {
+                continue;
+            };
+            if !id_sano(&id) {
+                continue;
+            }
+            let libro = match backup::read_secret_file(&libro_caja_path(&id))
+                .ok()
+                .and_then(|t| serde_json::from_str::<LibroCajaDisco>(&t).ok())
+            {
+                Some(d) if d.direccion == addr => LibroCaja::de_disco(d),
+                _ => LibroCaja::nueva(&addr),
+            };
+            self.cajas_libros.insert(id, libro);
+        }
+    }
+
+    fn guardar_libro_caja(&self, obra: &str) {
+        if !id_sano(obra) {
+            return;
+        }
+        let Some(libro) = self.cajas_libros.get(obra) else {
+            return;
+        };
+        if libro.direccion.is_empty() {
+            return;
+        }
+        let disco = LibroCajaDisco {
+            direccion: libro.direccion.clone(),
+            desde: libro.desde as u64,
+            hasta: libro.hasta as u64,
+            listo: libro.listo,
+            retro: libro.retro as u64,
+            entradas: libro
+                .entradas
+                .iter()
+                .map(|e| EntradaDisco {
+                    altura: e.altura as u64,
+                    monto: e.monto,
+                    tx: e.tx.clone(),
+                    indice: e.indice,
+                    raw: hex::encode(&e.raw),
+                })
+                .collect(),
+        };
+        let Ok(text) = serde_json::to_string(&disco) else {
+            return;
+        };
+        let _ = escribir_0600(&libro_caja_path(obra), &text);
     }
 }
 
@@ -3487,6 +4241,62 @@ struct Libro {
     entradas: Vec<Entrada>,
 }
 
+struct LibroCaja {
+    direccion: String,
+    desde: usize,
+    hasta: usize,
+    listo: bool,
+    retro: usize,
+    entradas: Vec<Entrada>,
+}
+
+impl LibroCaja {
+    fn nueva(direccion: &str) -> Self {
+        Self {
+            direccion: direccion.to_string(),
+            desde: 0,
+            hasta: 0,
+            listo: false,
+            retro: 0,
+            entradas: Vec::new(),
+        }
+    }
+
+    fn de_disco(d: LibroCajaDisco) -> Self {
+        Self {
+            direccion: d.direccion,
+            desde: d.desde as usize,
+            hasta: d.hasta as usize,
+            listo: d.listo,
+            retro: d.retro as usize,
+            entradas: d
+                .entradas
+                .into_iter()
+                .filter_map(|e| {
+                    let raw = hex::decode(e.raw).ok()?;
+                    Some(Entrada {
+                        altura: e.altura as usize,
+                        monto: e.monto,
+                        tx: e.tx,
+                        indice: e.indice,
+                        raw,
+                    })
+                })
+                .collect(),
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize)]
+struct LibroCajaDisco {
+    direccion: String,
+    desde: u64,
+    hasta: u64,
+    listo: bool,
+    retro: u64,
+    entradas: Vec<EntradaDisco>,
+}
+
 impl Libro {
     fn vacio() -> Self {
         Self {
@@ -3557,6 +4367,10 @@ fn share_path(obra: &str) -> PathBuf {
     xmr_dir().join(format!("{obra}.share"))
 }
 
+fn libro_caja_path(obra: &str) -> PathBuf {
+    xmr_dir().join(format!("caja-{obra}.json"))
+}
+
 fn espera_path(obra: &str, partida: usize, pago: bool) -> PathBuf {
     let clase = if pago { "pago" } else { "fondeo" };
     xmr_dir().join(format!("espera-{obra}-{partida}-{clase}.json"))
@@ -3575,64 +4389,185 @@ fn leer_semilla() -> Option<SingleWallet> {
     Some(wallet)
 }
 
-async fn juntar_entradas(
-    view: xmr_joint::ViewPair,
-    minimo: u64,
-    cuantos: usize,
-    exacto: Option<u64>,
-) -> Result<(Vec<OutputWithDecoys>, (u64, u64)), String> {
-    let rpc = chain::connect(STAGENET_DAEMON).await.map_err(|e| e.to_string())?;
-    let (decoys, fee) = entradas_con(&rpc, view, minimo, cuantos, exacto).await?;
-    Ok((decoys, fee))
+/// Próximo rango inclusive. `true` si camina hacia atrás.
+///
+/// El primer vistazo es el lookback de siempre, de una vez. Lo que el usuario
+/// pide después sale de a [`PASO_SCAN`], para no trabar el nodo con miles de bloques.
+fn siguiente_trozo(
+    tip: usize,
+    desde: usize,
+    hasta: usize,
+    listo: bool,
+    retro: usize,
+) -> Option<(usize, usize, bool)> {
+    if !listo {
+        let inicio = tip.saturating_sub(LOOKBACK);
+        return Some((inicio, tip, false));
+    }
+    if hasta < tip {
+        let d = hasta.saturating_add(1);
+        let h = d.saturating_add(PASO_SCAN - 1).min(tip);
+        return Some((d, h, false));
+    }
+    if retro > 0 && desde > 0 {
+        let n = retro.min(PASO_SCAN).min(desde);
+        let h = desde - 1;
+        let d = h + 1 - n;
+        return Some((d, h, true));
+    }
+    None
 }
 
-async fn entradas_con(
-    rpc: &Daemon,
-    view: xmr_joint::ViewPair,
-    minimo: u64,
-    cuantos: usize,
-    exacto: Option<u64>,
-) -> Result<(Vec<OutputWithDecoys>, (u64, u64)), String> {
-    let tip = chain::tip(rpc).await.map_err(|e| e.to_string())?;
-    let from = tip.saturating_sub(LOOKBACK);
-    let marcadas = chain::scan_marcado(rpc, view, from, tip)
-        .await
-        .map_err(|e| e.to_string())?;
-    let elegidos = if let Some(amount) = exacto {
-        let mut libres = Vec::new();
-        let mut trabadas = 0usize;
-        for (altura, output) in marcadas {
-            if output.commitment().amount != amount {
-                continue;
-            }
-            if tip >= altura.saturating_add(10) {
-                libres.push(output);
-            } else {
-                trabadas += 1;
-            }
-        }
-        if libres.len() != cuantos {
-            if libres.len() + trabadas >= cuantos {
-                return Err("trabadas-caja".into());
-            }
-            return Err("sin-saldo-caja".into());
-        }
-        libres
-    } else {
-        let libres: Vec<_> = marcadas
-            .into_iter()
-            .filter_map(|(altura, output)| (tip >= altura.saturating_add(10)).then_some(output))
-            .collect();
-        let uno = fund::pick_output(libres, minimo).map_err(|_| "sin-saldo-caja".to_string())?;
-        vec![uno]
-    };
-    let rate = chain::fee_rate(rpc).await.map_err(|e| e.to_string())?;
-    let fee = fund::fee_parts(&rate);
-    let mut decoys = Vec::with_capacity(elegidos.len());
-    for output in elegidos {
-        decoys.push(chain::with_decoys(rpc, output, tip).await.map_err(|e| e.to_string())?);
+/// Cuántos bloques suma un click, sin pasar [`MAX_HISTORIA`].
+fn sumar_atras(tip: usize, desde: usize, listo: bool, retro: usize) -> usize {
+    if listo && desde == 0 {
+        return 0;
     }
-    Ok((decoys, fee))
+    let profundidad = if listo {
+        tip.saturating_sub(desde).saturating_add(retro)
+    } else {
+        LOOKBACK.saturating_add(retro)
+    };
+    MAX_HISTORIA.saturating_sub(profundidad).min(PASO_ATRAS_CAJA)
+}
+
+fn bloques_mirados(tip: Option<usize>, libro: &LibroCaja) -> usize {
+    if libro.listo {
+        let punta = tip.unwrap_or(libro.hasta);
+        punta.saturating_sub(libro.desde).saturating_add(libro.retro)
+    } else {
+        LOOKBACK.saturating_add(libro.retro)
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CoberturaCaja {
+    Libre,
+    Trabadas,
+    Buscando,
+    SinSaldo,
+}
+
+/// Dos salidas del monto exacto, con lo que la caja ya guardó. No llama al nodo.
+fn cobertura_caja(
+    entradas: &[(u64, usize)],
+    tip: Option<usize>,
+    listo: bool,
+    _desde: usize,
+    hasta: usize,
+    retro: usize,
+    amount: u64,
+    cuantos: usize,
+) -> CoberturaCaja {
+    let Some(tip) = tip else {
+        return CoberturaCaja::Buscando;
+    };
+    let mut alturas: Vec<usize> = entradas
+        .iter()
+        .filter(|(monto, _)| *monto == amount)
+        .map(|(_, altura)| *altura)
+        .collect();
+    alturas.sort_unstable();
+    if alturas.len() >= cuantos {
+        let nuevas = &alturas[alturas.len() - cuantos..];
+        let sueltas = nuevas.iter().all(|altura| tip >= altura.saturating_add(10));
+        return if sueltas {
+            CoberturaCaja::Libre
+        } else {
+            CoberturaCaja::Trabadas
+        };
+    }
+    let cubierto = listo && hasta >= tip && retro == 0;
+    if cubierto {
+        CoberturaCaja::SinSaldo
+    } else {
+        CoberturaCaja::Buscando
+    }
+}
+
+fn validar_share_meta(
+    obra_en_perfil: bool,
+    rol_mio: Option<&str>,
+    rol_archivo: &str,
+    red_ok: bool,
+) -> Result<(), &'static str> {
+    if !red_ok {
+        return Err("codigo:share-red");
+    }
+    if !obra_en_perfil {
+        return Err("codigo:share-obra");
+    }
+    match rol_mio {
+        Some(rol) if rol == rol_archivo => Ok(()),
+        _ => Err("codigo:share-rol"),
+    }
+}
+
+fn misma_cuenta(a: &JointAccount, b: &JointAccount) -> bool {
+    if a.role() != b.role() || a.obra_id() != b.obra_id() || a.address() != b.address() {
+        return false;
+    }
+    if a.view_private_bytes() != b.view_private_bytes() {
+        return false;
+    }
+    match (a.backup(), b.backup()) {
+        (Ok(x), Ok(y)) => {
+            x.context == y.context && x.threshold_keys.as_slice() == y.threshold_keys.as_slice()
+        }
+        _ => false,
+    }
+}
+
+fn validar_share_existente(ya: bool, iguales: bool) -> Result<&'static str, &'static str> {
+    if ya && !iguales {
+        return Err("codigo:share-distinto");
+    }
+    if ya {
+        Ok("codigo:share-igual")
+    } else {
+        Ok("codigo:share-nuevo")
+    }
+}
+
+enum PlanSemilla {
+    Nueva,
+    Igual,
+}
+
+fn decidir_semilla(actual: Option<&str>, nueva: &str) -> Result<PlanSemilla, &'static str> {
+    match actual {
+        Some(a) if a == nueva => Ok(PlanSemilla::Igual),
+        Some(_) => Err("codigo:semilla-otra"),
+        None => Ok(PlanSemilla::Nueva),
+    }
+}
+
+/// Escribe la semilla en `dir` si no hay otra. No toca el libro ni el perfil.
+fn restaurar_semilla_en(dir: &Path, text: &str, actual: Option<&str>) -> Result<(String, bool), String> {
+    let backup = SeedBackup::parse(text).map_err(|_| "codigo:semilla-archivo".to_string())?;
+    if backup.net != Net::Stagenet {
+        return Err("codigo:semilla-red".into());
+    }
+    let wallet = SingleWallet::restore(Net::Stagenet, backup.words.as_str())
+        .map_err(|_| "codigo:semilla-archivo".to_string())?;
+    if wallet.address() != backup.address {
+        return Err("codigo:semilla-direccion".into());
+    }
+    let addr = wallet.address().to_string();
+    let plan = decidir_semilla(actual, &addr).map_err(|e| e.to_string())?;
+    let path = dir.join("semilla.txt");
+    if path.exists() {
+        match backup::read_secret_file(&path)
+            .ok()
+            .and_then(|t| SeedBackup::parse(&t).ok())
+        {
+            Some(prev) if prev.address == addr && prev.net == Net::Stagenet => return Ok((addr, true)),
+            Some(_) => return Err("codigo:semilla-otra".into()),
+            None => return Err("codigo:semilla-rota".into()),
+        }
+    }
+    backup::write_secret_file(&path, &backup.to_text()).map_err(|e| e.to_string())?;
+    Ok((addr, matches!(plan, PlanSemilla::Igual)))
 }
 
 async fn ver_txid(view: xmr_joint::ViewPair, txid: &str) -> Result<bool, String> {
@@ -3710,5 +4645,162 @@ mod tests {
         assert!(es_freno(&Texto::SinSaldo));
         assert!(!es_freno(&Texto::BuscandoMonedas));
         assert!(aviso_humano("codigo:sin-saldo", false).contains("not enough"));
+    }
+
+    #[test]
+    fn la_partida_muestra_el_total_y_lo_de_cada_lado() {
+        let s = saldo_partida(true, PartidaEstado::Encerrada, 50, true, "felipe", "Don").unwrap();
+        assert!(s.estado.contains("Fondeada"));
+        assert!(s.detalle.contains("Total en la caja: 0.002 XMR"));
+        assert!(s.detalle.contains("felipe aportó 0.001 XMR"));
+        assert!(s.detalle.contains("Don aportó 0.001 XMR"));
+        assert!(s.candado.is_some());
+
+        let trato = saldo_partida(false, PartidaEstado::EnTrato, 50, true, "felipe", "Don").unwrap();
+        assert!(trato.estado.contains("In deal"));
+        assert!(trato.detalle.contains("Total in the box: 0.002 XMR"));
+
+        let pagada = saldo_partida(true, PartidaEstado::Pagada, 50, true, "felipe", "Don").unwrap();
+        assert!(pagada.estado.contains("ya no tiene saldo"));
+        assert!(pagada.detalle.contains("0.002 XMR"));
+        assert!(pagada.candado.is_none());
+
+        let espera = saldo_partida(true, PartidaEstado::Encerrando, 50, false, "felipe", "Don").unwrap();
+        assert!(espera.estado.contains("Todavía no hay saldo"));
+        assert_eq!(
+            saldo_corto(true, PartidaEstado::Encerrada, 50, true).as_deref(),
+            Some("0.002 XMR en la caja")
+        );
+        assert!(saldo_partida(true, PartidaEstado::Pendiente, 50, false, "a", "b").is_none());
+    }
+
+    #[test]
+    fn la_semilla_no_pisa_otra_direccion() {
+        let dir = std::env::temp_dir().join(format!("konstruado-semilla-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let mal = restaurar_semilla_en(&dir, "no es una semilla", None).unwrap_err();
+        assert_eq!(mal, "codigo:semilla-archivo");
+
+        let (w1, words1) = SingleWallet::generate(&mut OsRng, Net::Stagenet).unwrap();
+        let (w2, words2) = SingleWallet::generate(&mut OsRng, Net::Stagenet).unwrap();
+        let una = SeedBackup {
+            net: Net::Stagenet,
+            address: w1.address().to_string(),
+            words: words1,
+        };
+        let otra = SeedBackup {
+            net: Net::Stagenet,
+            address: w2.address().to_string(),
+            words: words2,
+        };
+        let (addr, igual) = restaurar_semilla_en(&dir, &una.to_text(), None).unwrap();
+        assert_eq!(addr, w1.address());
+        assert!(!igual);
+        let (misma, ya) = restaurar_semilla_en(&dir, &una.to_text(), Some(w1.address())).unwrap();
+        assert_eq!(misma, w1.address());
+        assert!(ya);
+        std::fs::remove_file(dir.join("semilla.txt")).unwrap();
+        let (repuesta, igual) = restaurar_semilla_en(&dir, &una.to_text(), Some(w1.address())).unwrap();
+        assert_eq!(repuesta, w1.address());
+        assert!(igual);
+        assert!(std::fs::read_to_string(dir.join("semilla.txt")).unwrap().contains(w1.address()));
+        let pisar = restaurar_semilla_en(&dir, &otra.to_text(), Some(w1.address())).unwrap_err();
+        assert_eq!(pisar, "codigo:semilla-otra");
+        let otra_en_disco = restaurar_semilla_en(&dir, &otra.to_text(), None).unwrap_err();
+        assert_eq!(otra_en_disco, "codigo:semilla-otra");
+        let guardado = std::fs::read_to_string(dir.join("semilla.txt")).unwrap();
+        assert!(guardado.contains(w1.address()));
+        assert!(!guardado.contains(w2.address()));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn el_share_ajeno_no_entra() {
+        assert_eq!(
+            validar_share_meta(false, Some("mandante"), "mandante", true),
+            Err("codigo:share-obra")
+        );
+        assert_eq!(
+            validar_share_meta(true, Some("mandante"), "contratista", true),
+            Err("codigo:share-rol")
+        );
+        assert_eq!(
+            validar_share_meta(true, None, "mandante", true),
+            Err("codigo:share-rol")
+        );
+        assert_eq!(
+            validar_share_meta(true, Some("mandante"), "mandante", false),
+            Err("codigo:share-red")
+        );
+        assert!(validar_share_meta(true, Some("contratista"), "contratista", true).is_ok());
+        assert_eq!(validar_share_existente(true, false), Err("codigo:share-distinto"));
+        assert_eq!(validar_share_existente(true, true), Ok("codigo:share-igual"));
+        assert_eq!(validar_share_existente(false, false), Ok("codigo:share-nuevo"));
+        assert!(listo_humano("codigo:semilla-nueva", true).contains("no está en esas palabras"));
+        assert!(aviso_humano("codigo:share-rol", false).contains("other side"));
+    }
+
+    #[test]
+    fn la_caja_no_camina_todo_de_una() {
+        let (desde, hasta, retro) = siguiente_trozo(1_000, 0, 0, false, 5_000).unwrap();
+        assert!(!retro);
+        assert_eq!(desde, 1_000 - LOOKBACK);
+        assert_eq!(hasta, 1_000);
+
+        let (desde, hasta, retro) = siguiente_trozo(1_000, 960, 1_000, true, 200).unwrap();
+        assert!(retro);
+        assert_eq!(hasta - desde + 1, PASO_SCAN);
+        assert!(PASO_SCAN < 200);
+
+        assert_eq!(siguiente_trozo(1_000, 960, 1_000, true, 0), None);
+        assert_eq!(sumar_atras(10_000, 10_000 - LOOKBACK, true, 0), PASO_ATRAS_CAJA);
+        assert_eq!(sumar_atras(10_000, 0, true, 0), 0);
+        assert_eq!(sumar_atras(50_000, 50_000 - MAX_HISTORIA, true, 0), 0);
+
+        assert_eq!(
+            cobertura_caja(&[(5, 10), (5, 11)], Some(100), true, 60, 100, 0, 5, 2),
+            CoberturaCaja::Libre
+        );
+        assert_eq!(
+            cobertura_caja(&[(5, 95), (5, 96)], Some(100), true, 60, 100, 200, 5, 2),
+            CoberturaCaja::Trabadas
+        );
+        assert_eq!(
+            cobertura_caja(&[], Some(100), true, 60, 100, 0, 5, 2),
+            CoberturaCaja::SinSaldo
+        );
+        assert_eq!(
+            cobertura_caja(&[(5, 10)], Some(100), true, 60, 100, 50, 5, 2),
+            CoberturaCaja::Buscando
+        );
+        assert_eq!(
+            cobertura_caja(
+                &[(5, 10), (5, 11), (5, 40), (5, 41)],
+                Some(100),
+                true,
+                60,
+                100,
+                0,
+                5,
+                2
+            ),
+            CoberturaCaja::Libre
+        );
+        assert_eq!(
+            cobertura_caja(
+                &[(5, 10), (5, 11), (5, 95), (5, 96)],
+                Some(100),
+                true,
+                60,
+                100,
+                0,
+                5,
+                2
+            ),
+            CoberturaCaja::Trabadas
+        );
+        assert!(!es_freno(&Texto::BuscandoCaja));
+        assert!(es_freno(&Texto::SinSaldoCaja));
     }
 }

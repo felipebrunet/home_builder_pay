@@ -354,16 +354,16 @@ fn App() -> Element {
                             }
                         },
                         Screen::Detalle => rsx! {
-                            Detalle { yo, red, obras, sel_obra, sel_partida, screen, err, vista: vista_caja }
+                            Detalle { yo, red, obras, sel_obra, sel_partida, screen, err, caja: caja_ui.clone(), vista: vista_caja }
                         },
                         Screen::VerPartida => rsx! {
                             VerPartida { yo, red, obras, sel_obra, sel_partida, screen, err, caja: caja_ui.clone(), vista: vista_caja }
                         },
                         Screen::Cuenta => rsx! {
-                            Cuenta { nombre, rol, yo, red, screen, err, tema, caja: caja_ui.clone(), vista: vista_caja }
+                            Cuenta { nombre, rol, yo, red, obras, screen, err, tema, caja: caja_ui.clone(), vista: vista_caja }
                         },
                         Screen::Billetera => rsx! {
-                            Billetera { screen, err, caja: caja_ui.clone(), vista: vista_caja }
+                            Billetera { yo, obras, screen, err, caja: caja_ui.clone(), vista: vista_caja }
                         },
                         Screen::Help => rsx! {
                             help::Help { yo, screen, vista: help_vista() }
@@ -826,6 +826,7 @@ fn Cuenta(
     rol: Signal<Option<Rol>>,
     yo: Signal<Option<Persona>>,
     red: Signal<Option<Nodo>>,
+    obras: Signal<Vec<Obra>>,
     screen: Signal<Screen>,
     err: Signal<Option<String>>,
     tema: Signal<String>,
@@ -938,6 +939,7 @@ fn Cuenta(
                     {lang.t("Crear billetera de stagenet", "Create stagenet wallet")}
                 }
             }
+            RestaurarLlaves { caja: caja.clone(), yo, obras, vista, err }
             button {
                 class: "btn btn-primary",
                 onclick: move |_| {
@@ -985,6 +987,8 @@ fn Cuenta(
 
 #[component]
 fn Billetera(
+    yo: Signal<Option<Persona>>,
+    obras: Signal<Vec<Obra>>,
     screen: Signal<Screen>,
     mut err: Signal<Option<String>>,
     caja: caja::Caja,
@@ -1136,6 +1140,7 @@ fn Billetera(
                     },
                     {lang.t("Guardar las 25 palabras", "Save the 25 words")}
                 }
+                RestaurarLlaves { caja: caja.clone(), yo, obras, vista, err }
                 div { class: "paso", b { "2" } {lang.t("Enviar", "Send")} }
                 label { class: "et", {lang.t("DESTINO", "DESTINATION")} }
                 input {
@@ -1214,6 +1219,7 @@ fn Billetera(
                     },
                     {lang.t("Crear billetera de stagenet", "Create stagenet wallet")}
                 }
+                RestaurarLlaves { caja: caja.clone(), yo, obras, vista, err }
             }
             button {
                 class: "btn btn-ghost",
@@ -1669,6 +1675,238 @@ fn VerOferta(
 }
 
 #[component]
+fn RestaurarLlaves(
+    caja: caja::Caja,
+    yo: Signal<Option<Persona>>,
+    obras: Signal<Vec<Obra>>,
+    vista: Signal<caja::CajaVista>,
+    mut err: Signal<Option<String>>,
+) -> Element {
+    let mut ok = use_signal(|| None::<String>);
+    let lang = use_context::<Signal<Idioma>>()();
+    let caja_semilla = caja.clone();
+    let caja_share = caja.clone();
+    let caja_vista = caja.clone();
+    rsx! {
+        p { class: "hint",
+            {lang.t(
+                "Recuperar las 25 palabras trae tu dirección personal. No trae la caja de la obra ni tu nombre en el trato.",
+                "Restoring the 25 words brings back your personal address. It does not bring the job's box or your name on the deal.",
+            )}
+        }
+        button {
+            class: "btn btn-ghost",
+            onclick: move |_| {
+                let Some(path) = rfd::FileDialog::new().pick_file() else { return };
+                ok.set(None);
+                match caja_semilla.restaurar_semilla(&path) {
+                    Ok(code) => {
+                        vista.set(caja_semilla.vista());
+                        err.set(None);
+                        ok.set(Some(caja::listo_humano(code, lang_now() == Idioma::Es)));
+                    }
+                    Err(e) => err.set(Some(caja::aviso_humano(&e, lang_now() == Idioma::Es))),
+                }
+            },
+            {lang.t("Recuperar las 25 palabras", "Restore the 25 words")}
+        }
+        p { class: "hint",
+            {lang.t(
+                "Recuperar un share trae la caja de una obra que ya está en este equipo. Tiene que ser el tuyo: el del otro lado no sirve. Si perdiste el perfil entero, esto no te vuelve a unir.",
+                "Restoring a share brings back the box of a job already on this machine. It has to be yours: the other side's file will not work. If the whole profile is gone, this does not rejoin the deal.",
+            )}
+        }
+        button {
+            class: "btn btn-ghost",
+            onclick: move |_| {
+                let Some(path) = rfd::FileDialog::new().pick_file() else { return };
+                let Some(quien) = yo() else {
+                    err.set(Some(lang_now().t(
+                        "Falta tu nombre en este equipo.",
+                        "This machine does not have your name yet.",
+                    ).into()));
+                    return;
+                };
+                ok.set(None);
+                match caja_share.restaurar_share(&path, &quien, &obras()) {
+                    Ok(code) => {
+                        vista.set(caja_vista.vista());
+                        err.set(None);
+                        ok.set(Some(caja::listo_humano(code, lang_now() == Idioma::Es)));
+                    }
+                    Err(e) => err.set(Some(caja::aviso_humano(&e, lang_now() == Idioma::Es))),
+                }
+            },
+            {lang.t("Recuperar un share", "Restore a share")}
+        }
+        if let Some(m) = ok() {
+            p { class: "hint", "{m}" }
+        }
+    }
+}
+
+#[component]
+fn CajaProfundidad(
+    obra_id: String,
+    caja: caja::Caja,
+    vista: Signal<caja::CajaVista>,
+    yo: Signal<Option<Persona>>,
+    obras: Signal<Vec<Obra>>,
+    mut err: Signal<Option<String>>,
+) -> Element {
+    let mut ok = use_signal(|| None::<String>);
+    let lang = use_context::<Signal<Idioma>>()();
+    let v = vista();
+    let hay = v.caja_de(&obra_id).is_some();
+    let mirada = v.miradas.into_iter().find(|m| m.obra == obra_id);
+    let (linea_bloques, linea_retro, linea_aviso) = match &mirada {
+        Some(m) => (
+            match lang {
+                Idioma::Es => format!("La caja mira {} bloques hacia atrás.", m.bloques),
+                Idioma::En => format!("The box looks {} blocks back.", m.bloques),
+            },
+            if m.retro > 0 {
+                Some(match lang {
+                    Idioma::Es => format!("Quedan {} bloques por mirar en la caja.", m.retro),
+                    Idioma::En => format!("{} box blocks left to scan backward.", m.retro),
+                })
+            } else {
+                None
+            },
+            m.aviso.clone(),
+        ),
+        None => (
+            lang.t(
+                "La caja arranca por los últimos 40 bloques.",
+                "The box starts with the last 40 blocks.",
+            ).to_string(),
+            None,
+            None,
+        ),
+    };
+    let caja_guardar = caja.clone();
+    let caja_atras = caja.clone();
+    let caja_share = caja.clone();
+    let caja_vista = caja.clone();
+    let obra_guardar = obra_id.clone();
+    let obra_atras = obra_id;
+    rsx! {
+        if hay {
+            button {
+                class: "btn btn-ghost",
+                onclick: move |_| {
+                    let Some(path) = rfd::FileDialog::new()
+                        .set_file_name(format!("konstruado-{obra_guardar}.share"))
+                        .save_file()
+                    else {
+                        return;
+                    };
+                    ok.set(None);
+                    match caja_guardar.guardar_share(&obra_guardar, &path) {
+                        Ok(()) => {
+                            err.set(None);
+                            ok.set(Some(lang_now().t(
+                                "Guardé el share. Esa copia puede gastar, junto con la del otro.",
+                                "Saved the share. That copy can spend, together with the other person's.",
+                            ).into()));
+                        }
+                        Err(e) => err.set(Some(caja::aviso_humano(&e, lang_now() == Idioma::Es))),
+                    }
+                },
+                {lang.t("Guardar el share de la caja", "Save the box share")}
+            }
+            p { class: "hint",
+                {lang.t(
+                    "Esta copia puede gastar, junto con el share del otro. Guardala aparte y no la pegues en un chat.",
+                    "This copy can spend, together with the other person's share. Keep it aside and do not paste it into a chat.",
+                )}
+            }
+            p { class: "hint", "{linea_bloques}" }
+            if let Some(retro) = linea_retro {
+                p { class: "hint", "{retro}" }
+            }
+            if let Some(aviso) = linea_aviso {
+                p { class: "err", "{caja::aviso_humano(&aviso, matches!(lang, Idioma::Es))}" }
+            }
+            button {
+                class: "btn btn-ghost",
+                onclick: move |_| {
+                    ok.set(None);
+                    match caja_atras.pedir_atras_caja(&obra_atras) {
+                        Ok(()) => {
+                            vista.set(caja_atras.vista());
+                            err.set(None);
+                        }
+                        Err(e) => err.set(Some(caja::aviso_humano(&e, lang_now() == Idioma::Es))),
+                    }
+                },
+                {lang.t("Mirar 200 bloques más atrás en la caja", "Scan 200 more blocks back in the box")}
+            }
+        }
+        p { class: "hint",
+            {lang.t(
+                "Si perdiste el share de esta obra, recuperalo desde el archivo que guardaste. Tiene que ser el tuyo y la obra tiene que seguir en este equipo.",
+                "If you lost this job's share, restore it from the file you saved. It has to be yours, and the job has to still be on this machine.",
+            )}
+        }
+        button {
+            class: "btn btn-ghost",
+            onclick: move |_| {
+                let Some(path) = rfd::FileDialog::new().pick_file() else { return };
+                let Some(quien) = yo() else {
+                    err.set(Some(lang_now().t(
+                        "Falta tu nombre en este equipo.",
+                        "This machine does not have your name yet.",
+                    ).into()));
+                    return;
+                };
+                ok.set(None);
+                match caja_share.restaurar_share(&path, &quien, &obras()) {
+                    Ok(code) => {
+                        vista.set(caja_vista.vista());
+                        err.set(None);
+                        ok.set(Some(caja::listo_humano(code, lang_now() == Idioma::Es)));
+                    }
+                    Err(e) => err.set(Some(caja::aviso_humano(&e, lang_now() == Idioma::Es))),
+                }
+            },
+            {lang.t("Recuperar un share", "Restore a share")}
+        }
+        if let Some(m) = ok() {
+            p { class: "hint", "{m}" }
+        }
+    }
+}
+
+#[component]
+fn CajaLlave(obra_id: String, caja: caja::Caja, vista: Signal<caja::CajaVista>) -> Element {
+    let mut mostrar = use_signal(|| false);
+    let lang = use_context::<Signal<Idioma>>()();
+    let addr = vista().caja_de(&obra_id).map(|s| s.to_string());
+    let Some(addr) = addr else {
+        return rsx! {};
+    };
+    let clave = if mostrar() { caja.view_de(&obra_id) } else { None };
+    rsx! {
+        p { class: "meta", {match lang { Idioma::Es => format!("Caja stagenet {addr}"), Idioma::En => format!("Stagenet box {addr}") }} }
+        button {
+            class: "btn btn-ghost",
+            onclick: move |_| mostrar.set(!mostrar()),
+            {if mostrar() { lang.t("Ocultar view key", "Hide view key") } else { lang.t("Mostrar view key de la caja", "Show the box view key") }}
+        }
+        if let Some(clave) = clave {
+            p { class: "clave", "{clave}" }
+            p { class: "hint",
+                {lang.t(
+                    "Junto con la dirección, esta view key muestra los movimientos de la caja. No alcanza para gastar.",
+                    "With the address, this view key shows the box movements. It cannot spend.",
+                )}
+            }
+        }
+    }
+}
+
+#[component]
 fn Detalle(
     yo: Signal<Option<Persona>>,
     red: Signal<Option<Nodo>>,
@@ -1677,6 +1915,7 @@ fn Detalle(
     sel_partida: Signal<Option<usize>>,
     screen: Signal<Screen>,
     err: Signal<Option<String>>,
+    caja: caja::Caja,
     vista: Signal<caja::CajaVista>,
 ) -> Element {
     let mut confirma_abandono = use_signal(|| false);
@@ -1714,6 +1953,8 @@ fn Detalle(
         TextoLeido::Plano(t) => t,
         TextoLeido::Cerrado => lang.t("Texto cifrado", "Encrypted text").into(),
     };
+    let hay_caja = vista().caja_de(&obra.id).is_some();
+    let obra_caja = obra.id.clone();
     rsx! {
         div { class: "pane",
             div { class: "card-h",
@@ -1723,10 +1964,13 @@ fn Detalle(
             p { class: "lead",
                 {match lang { Idioma::Es => format!("Mandante {mnom} · contratista {cnom} · {n_part} partidas · trabajo {}", monto(obra.trabajo)), Idioma::En => format!("Client {mnom} · contractor {cnom} · {n_part} stages · job {}", monto(obra.trabajo)) }}
             }
-            if let Some(addr) = vista().caja_de(&obra.id) {
-                p { class: "meta", {match lang { Idioma::Es => format!("Caja stagenet {addr}"), Idioma::En => format!("Stagenet box {addr}") }} }
+            if hay_caja {
+                CajaLlave { obra_id: obra_caja, caja: caja.clone(), vista }
             } else if matches!(estado, EstadoObra::Acordada | EstadoObra::EnMarcha) && (soy_m || soy_c) {
                 p { class: "hint", {lang.t("Armando la caja 2-de-2. Los dos tienen que seguir en línea.", "Building the 2-of-2 box. Both have to stay online.")} }
+            }
+            if abierta && (soy_m || soy_c) {
+                CajaProfundidad { obra_id: obra.id.clone(), caja: caja.clone(), vista, yo, obras, err }
             }
             if sincronizando {
                 p { class: "hint", {lang.t("Sincronizando el trato… las acciones esperan a bajar el estado del otro.", "Syncing the deal… actions wait until the other side's state arrives.")} }
@@ -1948,6 +2192,9 @@ fn Detalle(
                             div { class: "txt",
                                 strong { "{i + 1}  {titulo}" }
                                 span { "{monto(p.capital(garantia))} {lang.t(\"por lado\", \"per side\")}" }
+                                if let Some(corto) = caja::saldo_corto(matches!(lang, Idioma::Es), p.estado, p.capital(garantia), p.fondeo_txid.is_some()) {
+                                    span { "{corto}" }
+                                }
                             }
                             span { class: kind, "{label}" }
                         }
@@ -2177,8 +2424,18 @@ fn VerPartida(
             p { class: "lead",
                 {match lang { Idioma::Es => format!("{} por lado. Mandante {} · contratista {}", monto(p.capital(garantia)), obra.mandante.nombre, obra.contratista.nombre), Idioma::En => format!("{} per side. Client {} · contractor {}", monto(p.capital(garantia)), obra.mandante.nombre, obra.contratista.nombre) }}
             }
-            if let Some(pico) = caja::a_piconero(p.capital(garantia)) {
+            if let Some(s) = caja::saldo_partida(matches!(lang, Idioma::Es), p.estado, p.capital(garantia), p.fondeo_txid.is_some(), &obra.mandante.nombre, &obra.contratista.nombre) {
+                p { class: "lead", "{s.estado}" }
+                p { class: "lead", "{s.detalle}" }
+                if let Some(c) = s.candado {
+                    p { class: "hint", "{c}" }
+                }
+                CajaLlave { obra_id: obra.id.clone(), caja: caja.clone(), vista }
+            } else if let Some(pico) = caja::a_piconero(p.capital(garantia)) {
                 p { class: "hint", {match lang { Idioma::Es => format!("{} XMR por lado en stagenet.", caja::fmt_xmr(pico)), Idioma::En => format!("{} XMR per side on stagenet.", caja::fmt_xmr(pico)) }} }
+            }
+            if !cortada && (soy_m || soy_c) {
+                CajaProfundidad { obra_id: obra.id.clone(), caja: caja.clone(), vista, yo, obras, err }
             }
             if let Some(tx) = p.fondeo_txid.as_ref() {
                 p { class: "meta", {match lang { Idioma::Es => format!("Fondeo {tx}"), Idioma::En => format!("Funding {tx}") }} }

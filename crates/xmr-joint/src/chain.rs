@@ -80,6 +80,24 @@ pub async fn anillar(raw: Vec<u8>) -> Result<(Vec<OutputWithDecoys>, (u64, u64))
     Ok((vec![decoy], partes))
 }
 
+/// Igual que [`anillar`], para las salidas que la caja ya guardó. Un solo viaje al nodo.
+pub async fn anillar_varias(raws: Vec<Vec<u8>>) -> Result<(Vec<OutputWithDecoys>, (u64, u64))> {
+    if raws.is_empty() {
+        return Err(Error::Chain("no hay salidas".into()));
+    }
+    let rpc = connect(crate::network::STAGENET_DAEMON).await?;
+    let altura = tip(&rpc).await?;
+    let rate = fee_rate(&rpc).await?;
+    let partes = crate::fund::fee_parts(&rate);
+    let mut decoys = Vec::with_capacity(raws.len());
+    for raw in raws {
+        let output = WalletOutput::read(&mut std::io::Cursor::new(raw))
+            .map_err(|e| Error::Chain(format!("salida: {e}")))?;
+        decoys.push(with_decoys(&rpc, output, altura).await?);
+    }
+    Ok((decoys, partes))
+}
+
 pub async fn with_decoys(rpc: &Daemon, output: WalletOutput, tip_height: usize) -> Result<OutputWithDecoys> {
     OutputWithDecoys::new(&mut OsRng, rpc, RING_LEN, tip_height, output)
         .await
