@@ -34,9 +34,11 @@ No son un chat de usuarios: se ven **obras y avisos**, no una lista tipo WhatsAp
 
 - Swarm horneado: `konstruado-red-1` + onion en `crates/konstruado-net/src/rendezvous.rs`. Nadie tipeá un código.
 - Cada `cargo run` lanza **su** `tor` (`-f` propio, no el `torrc` del sistema).
-- Mandante **hospeda** la sala; contratista **marca**. Publicar el descriptor tarda ~30 s; el dial del contratista espera hasta 45 s.
-- Misma PC: se encuentran por `127.0.0.1:17432` sin esperar Tor.
+- Mandante **hospeda** la sala; contratista **marca**. Publicar el descriptor tarda ~30 s; el dial del contratista espera hasta 45 s. El contratista de escritorio sigue cortando esa sesión a los 12 s y vuelve a marcar.
+- Misma PC: se encuentran por `127.0.0.1:17432` sin esperar Tor. La escucha sigue en `127.0.0.1` salvo `KONSTRUADO_ESCUCHAR=0.0.0.0` (prueba en la LAN).
 - Dos PCs: hace falta el paquete `tor`. El contratista puede **Buscar ofertas**. Sigue marcando la sala para bajar obras nuevas.
+- Un teléfono no tiene dirección entrante. Se anuncia como `PeerAddr::Buzon` y mantiene una sesión viva hacia la sala. La caja va por esa sesión; si se cae, la PC la guarda (máximo 64) y la entrega al volver. Dos teléfonos se hablan por la PC que hospeda, con tope de 3 `saltos`. Entre dos PCs la caja sigue yendo directo. El campo `saltos` tiene `serde(default)`: un par viejo lo ignora, pero no entiende `Buzon`.
+- Solo un anfitrión del onion horneado. Si el mandante es el teléfono, la sala la hospeda una PC: contratista con `KONSTRUADO_HOSPEDAR_SALA=1`, o `cargo run -p konstruado-net --bin konstruado-sala`. La app Android no vive en este repo.
 - `fusionar` en obras **no retrocede** estados (Pendiente → Encerrada → En trato → Pagada).
 
 ## Persistencia y UI

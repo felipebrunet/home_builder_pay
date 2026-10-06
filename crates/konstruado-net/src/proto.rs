@@ -6,6 +6,16 @@ use konstruado_core::{Oferta, Obra, Persona};
 pub enum PeerAddr {
     Tcp { host: String, port: u16 },
     Onion { host: String, port: u16 },
+    /// Nodo sin dirección entrante (celular detrás de Orbot). Solo se le
+    /// llega por una sesión que él mismo abrió, o por un relay que la tenga.
+    Buzon { node: String },
+}
+
+impl PeerAddr {
+    /// True si se puede abrir una conexión nueva hacia esta dirección.
+    pub fn marcable(&self) -> bool {
+        !matches!(self, PeerAddr::Buzon { .. })
+    }
 }
 
 impl std::fmt::Display for PeerAddr {
@@ -13,6 +23,7 @@ impl std::fmt::Display for PeerAddr {
         match self {
             PeerAddr::Tcp { host, port } => write!(f, "{host}:{port}"),
             PeerAddr::Onion { host, port } => write!(f, "{host}:{port}"),
+            PeerAddr::Buzon { node } => write!(f, "buzon:{}", &node[..node.len().min(8)]),
         }
     }
 }
@@ -49,6 +60,9 @@ pub enum Msg {
         de: String,
         paso: String,
         cuerpo: String,
+        /// Saltos de relay. Los pares viejos no lo mandan (0).
+        #[serde(default)]
+        saltos: u8,
     },
 }
 

@@ -1,9 +1,10 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
+use tokio::sync::mpsc::UnboundedSender;
 use tokio::time::timeout;
 use uuid::Uuid;
 
@@ -13,8 +14,33 @@ use crate::proto::{
     decode_obras, decode_presentes, decode_tablero, encode_obras, encode_presentes, encode_tablero,
     key_hex, CajaMsg, Msg, PeerAddr,
 };
+use crate::rendezvous::{RENDEZVOUS_ONION, VIRT_PORT};
 use crate::tor::{EstadoTor, Tor};
 use crate::{clave_obras, clave_presentes, clave_tablero, PUERTO_LOCAL, RED};
+
+/// Keepalive de una sesión que abrimos nosotros.
+const PING: Duration = Duration::from_secs(20);
+/// Sin nada leído en este tiempo, la sesión se cierra.
+const INACTIVO: Duration = Duration::from_secs(90);
+/// Cada cuánto se empuja el almacén por una sesión viva.
+const EMPUJE: Duration = Duration::from_secs(2);
+/// Tope del buzón por nodo.
+const MAX_BUZON: usize = 64;
+/// Tope de saltos de relay para la caja.
+const MAX_SALTOS: u8 = 3;
+
+/// Una sesión abierta con otro nodo. Se le puede escribir sin marcar.
+struct Vivo {
+    sid: u64,
+    tx: UnboundedSender<Msg>,
+    ultimo_put: Option<Instant>,
+}
+
+enum Ruta {
+    Vivo(UnboundedSender<Msg>),
+    Marcar(PeerAddr),
+    Nada,
+}
 
 struct Inner {
     id: String,
@@ -35,6 +61,14 @@ struct Inner {
     personas: HashMap<String, String>,
     /// Bandeja de la caja. No se replica.
     caja: Vec<CajaMsg>,
+    /// Sesiones abiertas por nodo remoto.
+    vivos: HashMap<String, Vivo>,
+    /// Mensajes para nodos sin sesión ni dirección marcable.
+    buzon: HashMap<String, Vec<Msg>>,
+    sesion_seq: u64,
+    /// Celular: sin dirección entrante, solo sesiones vivas y destinos fijos.
+    movil: bool,
+    destinos: HashSet<PeerAddr>,
 }
 
 #[derive(Clone)]
@@ -51,19 +85,138 @@ impl Nodo {
     }
 
     pub async fn arrancar_en(bootstrap: u16) -> std::io::Result<Self> {
-        Self::montar(tokio::runtime::Handle::current(), bootstrap).await
+        Self::montar(tokio::runtime::Handle::current(), bootstrap, false).await
+    }
+
+    /// Celular: no lanza `tor`. Si hay SOCKS (Orbot), marca la sala horneada y
+    /// mantiene la sesión abierta; el otro lado le empuja por ahí. `destinos`
+    /// son extras por TCP (emulador `10.0.2.2:17432`, `adb reverse`, pruebas).
+    pub async fn arrancar_movil(
+        socks: Option<(String, u16)>,
+        destinos: Vec<PeerAddr>,
+    ) -> std::io::Result<Self> {
+        Self::arrancar_movil_en(PUERTO_LOCAL, socks, destinos).await
+    }
+
+    pub async fn arrancar_movil_en(
+        bootstrap: u16,
+        socks: Option<(String, u16)>,
+        destinos: Vec<PeerAddr>,
+    ) -> std::io::Result<Self> {
+        let n = Self::montar(tokio::runtime::Handle::current(), bootstrap, true).await?;
+        if let Some((host, port)) = socks {
+            n.configurar_socks(&host, port);
+            n.agregar_destino(PeerAddr::Onion {
+                host: RENDEZVOUS_ONION.into(),
+                port: VIRT_PORT,
+            });
+        }
+        for d in destinos {
+            n.agregar_destino(d);
+        }
+        Ok(n)
+    }
+
+    /// Cambia el SOCKS externo (Orbot). No lanza `tor`.
+    pub fn configurar_socks(&self, host: &str, port: u16) {
+        let tor = self.inner.lock().unwrap().tor.clone();
+        tor.configurar_socks(host, port);
+        tor.marcar_arrancando("Orbot: buscando sala");
+    }
+
+    pub fn socks(&self) -> Option<std::net::SocketAddr> {
+        self.inner.lock().unwrap().tor.socks()
+    }
+
+    /// Mantiene una sesión saliente con `destino`: si se corta, vuelve a marcar.
+    pub fn agregar_destino(&self, destino: PeerAddr) {
+        if !destino.marcable() {
+            return;
+        }
+        if !self.inner.lock().unwrap().destinos.insert(destino.clone()) {
+            return;
+        }
+        let n = self.clone();
+        self.handle.spawn(async move {
+            n.mantener(destino).await;
+        });
+    }
+
+    pub fn quitar_destino(&self, destino: &PeerAddr) {
+        self.inner.lock().unwrap().destinos.remove(destino);
+    }
+
+    pub fn destinos(&self) -> Vec<PeerAddr> {
+        self.inner.lock().unwrap().destinos.iter().cloned().collect()
+    }
+
+    pub fn n_vivos(&self) -> usize {
+        self.inner.lock().unwrap().vivos.len()
+    }
+
+    async fn mantener(&self, destino: PeerAddr) {
+        let es_sala = matches!(&destino, PeerAddr::Onion { host, .. } if host == RENDEZVOUS_ONION);
+        let mut halt = self.inner.lock().unwrap().halt.subscribe();
+        let mut n = 1u32;
+        loop {
+            if *halt.borrow() || !self.inner.lock().unwrap().destinos.contains(&destino) {
+                return;
+            }
+            let tor = self.inner.lock().unwrap().tor.clone();
+            if es_sala && tor.socks().is_none() {
+                tokio::time::sleep(Duration::from_secs(2)).await;
+                continue;
+            }
+            if es_sala && self.n_vivos() == 0 {
+                tor.marcar_arrancando(format!("Orbot: buscando sala ({n})"));
+            }
+            let espera = match timeout(Duration::from_secs(60), self.connect(&destino)).await {
+                Ok(Ok(stream)) => {
+                    if es_sala {
+                        tor.marcar_listo();
+                    }
+                    tokio::select! {
+                        _ = halt.changed() => return,
+                        _ = self.sesion_out(stream) => {}
+                    }
+                    Duration::from_secs(2)
+                }
+                Ok(Err(e)) => {
+                    if es_sala && self.n_vivos() == 0 {
+                        tor.marcar_arrancando(format!("Orbot: buscando sala ({})", Self::corto_err(&e)));
+                    }
+                    Duration::from_secs(4)
+                }
+                Err(_) => {
+                    if es_sala && self.n_vivos() == 0 {
+                        tor.marcar_arrancando("Orbot: buscando sala (sin respuesta)");
+                    }
+                    Duration::from_secs(4)
+                }
+            };
+            n = n.saturating_add(1);
+            tokio::select! {
+                _ = halt.changed() => return,
+                _ = tokio::time::sleep(espera) => {}
+            }
+        }
     }
 
     async fn montar(
         handle: tokio::runtime::Handle,
         bootstrap: u16,
+        movil: bool,
     ) -> std::io::Result<Self> {
         let tor = Tor::ausente();
         let id = Uuid::new_v4().to_string();
         let (listener, port) = bind_local(bootstrap).await?;
-        let addr = PeerAddr::Tcp {
-            host: "127.0.0.1".into(),
-            port,
+        let addr = if movil {
+            PeerAddr::Buzon { node: id.clone() }
+        } else {
+            PeerAddr::Tcp {
+                host: "127.0.0.1".into(),
+                port,
+            }
         };
         let (halt, _) = tokio::sync::watch::channel(false);
         let nodo = Self {
@@ -81,6 +234,11 @@ impl Nodo {
                 persona: None,
                 personas: HashMap::new(),
                 caja: Vec::new(),
+                vivos: HashMap::new(),
+                buzon: HashMap::new(),
+                sesion_seq: 0,
+                movil,
+                destinos: HashSet::new(),
             })),
             handle: handle.clone(),
         };
@@ -153,7 +311,9 @@ impl Nodo {
     }
 
     pub fn entrar_en_sala(&self, mandante: bool) {
-        self.inner.lock().unwrap().rol_sala = Some(mandante);
+        // Una PC contratista puede hospedar la sala para un celular mandante.
+        let forzar = std::env::var("KONSTRUADO_HOSPEDAR_SALA").is_ok_and(|v| v == "1");
+        self.inner.lock().unwrap().rol_sala = Some(mandante || forzar);
     }
 
     async fn unirse_tor(&self, local_port: u16) {
@@ -163,7 +323,10 @@ impl Nodo {
             return;
         }
         if let Some(a) = tor.onion_addr() {
-            self.inner.lock().unwrap().addr = a;
+            let mut g = self.inner.lock().unwrap();
+            if !g.movil {
+                g.addr = a;
+            }
         }
         loop {
             let mandante = loop {
@@ -271,37 +434,58 @@ impl Nodo {
 
     /// Avisa la persona a los pares que ya conocemos. No se guarda en el DHT.
     pub fn anunciar_persona(&self) {
-        let (persona, node, peers) = {
+        let (persona, node, peers, movil) = {
             let g = self.inner.lock().unwrap();
             let Some(persona) = g.persona.clone() else {
                 return;
             };
-            let peers: Vec<_> = g.peers.values().cloned().collect();
-            (persona, g.id.clone(), peers)
+            let peers: Vec<_> = g.peers.keys().cloned().collect();
+            (persona, g.id.clone(), peers, g.movil)
         };
         if peers.is_empty() {
             return;
         }
         let msg = Msg::Soy { node, persona };
+        let mut marcar = Vec::new();
+        for peer in peers {
+            match self.ruta(&peer) {
+                Ruta::Vivo(tx) => {
+                    let _ = tx.send(msg.clone());
+                }
+                Ruta::Marcar(addr) if !movil => marcar.push(addr),
+                _ => {}
+            }
+        }
+        if marcar.is_empty() {
+            return;
+        }
         let n = self.clone();
         self.handle.spawn(async move {
-            for addr in peers {
+            for addr in marcar {
                 let _ = n.send(&addr, &msg).await;
             }
         });
     }
 
     /// Manda bytes de la caja solo al nodo que anunció `para`. False si todavía no lo vimos.
+    ///
+    /// Sin dirección marcable (celular), va por la sesión viva o por un relay.
     pub fn enviar_caja(&self, obra: &str, para: &str, de: &str, paso: &str, cuerpo: &[u8]) -> bool {
-        let addr = {
+        let (node, relay) = {
             let g = self.inner.lock().unwrap();
-            let Some(node) = g.personas.get(para) else {
+            let Some(node) = g.personas.get(para).cloned() else {
                 return false;
             };
-            g.peers.get(node).cloned()
-        };
-        let Some(addr) = addr else {
-            return false;
+            if !g.peers.contains_key(&node) && !g.vivos.contains_key(&node) {
+                return false;
+            }
+            let relay = g
+                .vivos
+                .iter()
+                .filter(|(k, _)| **k != node)
+                .map(|(_, v)| v.tx.clone())
+                .next();
+            (node, relay)
         };
         let msg = Msg::Caja {
             obra: obra.to_string(),
@@ -309,12 +493,40 @@ impl Nodo {
             de: de.to_string(),
             paso: paso.to_string(),
             cuerpo: hex::encode(cuerpo),
+            saltos: 0,
         };
-        let n = self.clone();
-        self.handle.spawn(async move {
-            let _ = n.send(&addr, &msg).await;
-        });
-        true
+        match self.ruta(&node) {
+            Ruta::Vivo(tx) => tx.send(msg).is_ok(),
+            Ruta::Marcar(addr) => {
+                let n = self.clone();
+                self.handle.spawn(async move {
+                    if n.send(&addr, &msg).await.is_err() {
+                        n.encolar(&node, msg);
+                    }
+                });
+                true
+            }
+            Ruta::Nada => match relay {
+                Some(tx) => tx.send(msg).is_ok(),
+                None => false,
+            },
+        }
+    }
+
+    fn ruta(&self, node: &str) -> Ruta {
+        let g = self.inner.lock().unwrap();
+        if let Some(v) = g.vivos.get(node) {
+            return Ruta::Vivo(v.tx.clone());
+        }
+        match g.peers.get(node) {
+            Some(a) if a.marcable() => Ruta::Marcar(a.clone()),
+            _ => Ruta::Nada,
+        }
+    }
+
+    fn encolar(&self, node: &str, msg: Msg) {
+        let mut g = self.inner.lock().unwrap();
+        encolar_en(&mut g.buzon, node, msg);
     }
 
     pub fn tomar_caja(&self) -> Vec<CajaMsg> {
@@ -326,7 +538,7 @@ impl Nodo {
         let g = self.inner.lock().unwrap();
         g.personas
             .get(id)
-            .is_some_and(|node| g.peers.contains_key(node))
+            .is_some_and(|node| g.peers.contains_key(node) || g.vivos.contains_key(node))
     }
 
     pub fn sesion_viva(&self, _yo_id: &str, otro_id: &str) -> bool {
@@ -537,12 +749,38 @@ impl Nodo {
 
     async fn gossip(&self) {
         let (peers, puts, port, bootstrap) = {
-            let g = self.inner.lock().unwrap();
+            let mut g = self.inner.lock().unwrap();
             let port = match &g.addr {
                 PeerAddr::Tcp { port, .. } | PeerAddr::Onion { port, .. } => *port,
+                PeerAddr::Buzon { .. } => g.local_port,
             };
-            let peers: Vec<_> = g.peers.values().cloned().collect();
             let puts: Vec<_> = g.store.iter().map(|(k, v)| put_de(k, v)).collect();
+            // Por las sesiones vivas se empuja cada EMPUJE, sin marcar. También
+            // la lista de pares: así un celular conoce a otro que llegó después.
+            let lista: Vec<_> = g
+                .peers
+                .iter()
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .chain(std::iter::once((g.id.clone(), g.addr.clone())))
+                .collect();
+            let mut puts_vivos = vec![Msg::Peers { list: lista }];
+            puts_vivos.extend(puts.iter().cloned());
+            let ahora_i = Instant::now();
+            for v in g.vivos.values_mut() {
+                if v.ultimo_put.is_none_or(|t| ahora_i.duration_since(t) >= EMPUJE) {
+                    v.ultimo_put = Some(ahora_i);
+                    for m in &puts_vivos {
+                        let _ = v.tx.send(m.clone());
+                    }
+                }
+            }
+            let movil = g.movil;
+            let peers: Vec<_> = g
+                .peers
+                .iter()
+                .filter(|(k, a)| !movil && a.marcable() && !g.vivos.contains_key(*k))
+                .map(|(_, a)| a.clone())
+                .collect();
             (peers, puts, port, g.bootstrap)
         };
         if peers.is_empty() && port != bootstrap {
@@ -573,6 +811,7 @@ impl Nodo {
         match addr {
             PeerAddr::Tcp { host, port } => TcpStream::connect((host.as_str(), *port)).await,
             PeerAddr::Onion { host, port } => tor.conectar(host, *port).await,
+            PeerAddr::Buzon { .. } => Err(std::io::Error::other("sin dirección entrante")),
         }
     }
 
@@ -581,43 +820,257 @@ impl Nodo {
         write_msg(&mut s, msg).await
     }
 
-    async fn sesion_out(&self, mut stream: TcpStream) -> std::io::Result<()> {
+    async fn sesion_out(&self, stream: TcpStream) -> std::io::Result<()> {
         let (id, addr) = {
             let g = self.inner.lock().unwrap();
             (g.id.clone(), g.addr.clone())
         };
-        write_msg(
-            &mut stream,
-            &Msg::Hola {
-                node: id,
-                addr,
-                swarm: RED.into(),
-            },
-        )
-        .await?;
-        for put in self.puts() {
-            write_msg(&mut stream, &put).await?;
+        let mut primeros = vec![Msg::Hola {
+            node: id,
+            addr,
+            swarm: RED.into(),
+        }];
+        primeros.extend(self.puts());
+        self.leer_loop(stream, false, primeros).await
+    }
+
+    async fn sesion_in(&self, stream: TcpStream) -> std::io::Result<()> {
+        self.leer_loop(stream, true, Vec::new()).await
+    }
+
+    /// Lee y escribe por la misma conexión. Cuando el otro se presenta, la
+    /// sesión queda registrada como viva: se le puede empujar sin marcar.
+    async fn leer_loop(
+        &self,
+        stream: TcpStream,
+        entrante: bool,
+        primeros: Vec<Msg>,
+    ) -> std::io::Result<()> {
+        let (mut rd, mut wr) = stream.into_split();
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<Msg>();
+        for m in primeros {
+            let _ = tx.send(m);
         }
-        self.leer_loop(&mut stream).await
-    }
-
-    async fn sesion_in(&self, mut stream: TcpStream) -> std::io::Result<()> {
-        self.leer_loop(&mut stream).await
-    }
-
-    async fn leer_loop(&self, stream: &mut TcpStream) -> std::io::Result<()> {
-        loop {
-            let msg = match read_msg(stream).await {
-                Ok(m) => m,
-                Err(_) => break,
-            };
-            for reply in self.handle(msg) {
-                if write_msg(stream, &reply).await.is_err() {
-                    return Ok(());
+        let escritor = self.handle.spawn(async move {
+            while let Some(m) = rx.recv().await {
+                if write_msg(&mut wr, &m).await.is_err() {
+                    break;
+                }
+            }
+        });
+        let pinger = if entrante {
+            None
+        } else {
+            let txp = tx.clone();
+            Some(self.handle.spawn(async move {
+                loop {
+                    tokio::time::sleep(PING).await;
+                    if txp.send(Msg::Ping).is_err() {
+                        break;
+                    }
+                }
+            }))
+        };
+        let (sid, mut halt) = {
+            let mut g = self.inner.lock().unwrap();
+            g.sesion_seq += 1;
+            (g.sesion_seq, g.halt.subscribe())
+        };
+        // La limpieza vive en un guard: si el futuro se cancela (halt en
+        // `mantener`), igual se cierran escritor/pinger y se suelta el vivo.
+        struct Guard {
+            inner: Arc<Mutex<Inner>>,
+            sid: u64,
+            remoto: Option<String>,
+            tareas: Vec<tokio::task::JoinHandle<()>>,
+        }
+        impl Drop for Guard {
+            fn drop(&mut self) {
+                if let Some(r) = self.remoto.take() {
+                    if let Ok(mut g) = self.inner.lock() {
+                        if g.vivos.get(&r).is_some_and(|v| v.sid == self.sid) {
+                            g.vivos.remove(&r);
+                        }
+                    }
+                }
+                for t in self.tareas.drain(..) {
+                    t.abort();
                 }
             }
         }
+        let mut guard = Guard {
+            inner: self.inner.clone(),
+            sid,
+            remoto: None,
+            tareas: std::iter::once(escritor).chain(pinger).collect(),
+        };
+        let mut remoto: Option<String> = None;
+        loop {
+            let leido = tokio::select! {
+                _ = halt.changed() => break,
+                r = timeout(INACTIVO, read_msg(&mut rd)) => r,
+            };
+            let msg = match leido {
+                Ok(Ok(m)) => m,
+                _ => break,
+            };
+            if remoto.is_none() {
+                if let Msg::Hola { node, .. } = &msg {
+                    remoto = self.registrar_vivo(node, sid, &tx, entrante);
+                    guard.remoto = remoto.clone();
+                }
+            }
+            for reply in self.handle_de(msg, remoto.as_deref()) {
+                if tx.send(reply).is_err() {
+                    break;
+                }
+            }
+        }
+        drop(guard);
         Ok(())
+    }
+
+    /// Registra la sesión y le manda lo que estaba esperando: el saludo de
+    /// vuelta (si entró), las personas conocidas y el buzón.
+    fn registrar_vivo(
+        &self,
+        node: &str,
+        sid: u64,
+        tx: &UnboundedSender<Msg>,
+        entrante: bool,
+    ) -> Option<String> {
+        let mut g = self.inner.lock().unwrap();
+        if node == g.id {
+            return None;
+        }
+        g.vivos.insert(
+            node.to_string(),
+            Vivo {
+                sid,
+                tx: tx.clone(),
+                ultimo_put: None,
+            },
+        );
+        let pendientes = g.buzon.remove(node).unwrap_or_default();
+        let mut salida = Vec::new();
+        if entrante {
+            salida.push(Msg::Hola {
+                node: g.id.clone(),
+                addr: g.addr.clone(),
+                swarm: RED.into(),
+            });
+        }
+        if let Some(p) = g.persona.clone() {
+            salida.push(Msg::Soy {
+                node: g.id.clone(),
+                persona: p,
+            });
+        }
+        for (persona, n) in &g.personas {
+            if n != node {
+                salida.push(Msg::Soy {
+                    node: n.clone(),
+                    persona: persona.clone(),
+                });
+            }
+        }
+        drop(g);
+        for m in salida.into_iter().chain(pendientes) {
+            let _ = tx.send(m);
+        }
+        Some(node.to_string())
+    }
+
+    fn handle_de(&self, msg: Msg, origen: Option<&str>) -> Vec<Msg> {
+        match msg {
+            Msg::Soy { node, persona } => {
+                if node.is_empty() || persona.is_empty() {
+                    return Vec::new();
+                }
+                let mut g = self.inner.lock().unwrap();
+                if node == g.id {
+                    return Vec::new();
+                }
+                if g.personas.get(&persona) == Some(&node) {
+                    return Vec::new();
+                }
+                g.personas.insert(persona.clone(), node.clone());
+                // Relay: los demás que tienen sesión con nosotros también lo aprenden.
+                let otros: Vec<_> = g
+                    .vivos
+                    .iter()
+                    .filter(|(k, _)| Some(k.as_str()) != origen && **k != node)
+                    .map(|(_, v)| v.tx.clone())
+                    .collect();
+                drop(g);
+                for t in otros {
+                    let _ = t.send(Msg::Soy {
+                        node: node.clone(),
+                        persona: persona.clone(),
+                    });
+                }
+                Vec::new()
+            }
+            Msg::Caja {
+                obra,
+                para,
+                de,
+                paso,
+                cuerpo,
+                saltos,
+            } => {
+                let mut g = self.inner.lock().unwrap();
+                if g.persona.as_deref() == Some(para.as_str()) {
+                    if let Ok(bytes) = hex::decode(cuerpo) {
+                        if bytes.len() <= 900_000 {
+                            if g.caja.len() >= 32 {
+                                g.caja.remove(0);
+                            }
+                            g.caja.push(CajaMsg {
+                                obra,
+                                de,
+                                paso,
+                                cuerpo: bytes,
+                            });
+                        }
+                    }
+                    return Vec::new();
+                }
+                // No es para esta persona: relay hacia el nodo que la anunció.
+                if saltos >= MAX_SALTOS {
+                    return Vec::new();
+                }
+                let Some(dest) = g.personas.get(&para).cloned() else {
+                    return Vec::new();
+                };
+                if Some(dest.as_str()) == origen || dest == g.id {
+                    return Vec::new();
+                }
+                let fwd = Msg::Caja {
+                    obra,
+                    para,
+                    de,
+                    paso,
+                    cuerpo,
+                    saltos: saltos + 1,
+                };
+                if let Some(v) = g.vivos.get(&dest) {
+                    let _ = v.tx.send(fwd);
+                } else if let Some(addr) = g.peers.get(&dest).filter(|a| a.marcable()).cloned() {
+                    drop(g);
+                    let n = self.clone();
+                    self.handle.spawn(async move {
+                        if n.send(&addr, &fwd).await.is_err() {
+                            n.encolar(&dest, fwd);
+                        }
+                    });
+                } else {
+                    encolar_en(&mut g.buzon, &dest, fwd);
+                }
+                Vec::new()
+            }
+            other => self.handle(other),
+        }
     }
 
     fn handle(&self, msg: Msg) -> Vec<Msg> {
@@ -687,44 +1140,17 @@ impl Nodo {
             }
             Msg::Ping => vec![Msg::Pong],
             Msg::Pong => Vec::new(),
-            Msg::Soy { node, persona } => {
-                if node.is_empty() || persona.is_empty() {
-                    return Vec::new();
-                }
-                let mut g = self.inner.lock().unwrap();
-                if node != g.id {
-                    g.personas.insert(persona, node);
-                }
-                Vec::new()
-            }
-            Msg::Caja {
-                obra,
-                para,
-                de,
-                paso,
-                cuerpo,
-            } => {
-                let mut g = self.inner.lock().unwrap();
-                let mia = g.persona.as_deref() == Some(para.as_str());
-                if mia {
-                    if let Ok(bytes) = hex::decode(cuerpo) {
-                        if bytes.len() <= 900_000 {
-                            if g.caja.len() >= 32 {
-                                g.caja.remove(0);
-                            }
-                            g.caja.push(CajaMsg {
-                                obra,
-                                de,
-                                paso,
-                                cuerpo: bytes,
-                            });
-                        }
-                    }
-                }
-                Vec::new()
-            }
+            Msg::Soy { .. } | Msg::Caja { .. } => Vec::new(),
         }
     }
+}
+
+fn encolar_en(buzon: &mut HashMap<String, Vec<Msg>>, node: &str, msg: Msg) {
+    let cola = buzon.entry(node.to_string()).or_default();
+    if cola.len() >= MAX_BUZON {
+        cola.remove(0);
+    }
+    cola.push(msg);
 }
 
 fn put_de(key: &str, val: &[u8]) -> Msg {
@@ -792,17 +1218,19 @@ fn merge_store(store: &mut HashMap<String, Vec<u8>>, key: String, val: Vec<u8>) 
 }
 
 async fn bind_local(bootstrap: u16) -> std::io::Result<(TcpListener, u16)> {
-    match TcpListener::bind(("127.0.0.1", bootstrap)).await {
+    // Pruebas en LAN (celular -> PC sin Orbot): KONSTRUADO_ESCUCHAR=0.0.0.0
+    let host = std::env::var("KONSTRUADO_ESCUCHAR").unwrap_or_else(|_| "127.0.0.1".into());
+    match TcpListener::bind((host.as_str(), bootstrap)).await {
         Ok(l) => Ok((l, bootstrap)),
         Err(_) => {
-            let l = TcpListener::bind(("127.0.0.1", 0)).await?;
+            let l = TcpListener::bind((host.as_str(), 0)).await?;
             let port = l.local_addr()?.port();
             Ok((l, port))
         }
     }
 }
 
-async fn write_msg(s: &mut TcpStream, msg: &Msg) -> std::io::Result<()> {
+async fn write_msg<W: AsyncWrite + Unpin>(s: &mut W, msg: &Msg) -> std::io::Result<()> {
     let buf = serde_json::to_vec(msg).map_err(std::io::Error::other)?;
     let len = u32::try_from(buf.len()).map_err(std::io::Error::other)?;
     s.write_all(&len.to_be_bytes()).await?;
@@ -810,7 +1238,7 @@ async fn write_msg(s: &mut TcpStream, msg: &Msg) -> std::io::Result<()> {
     s.flush().await
 }
 
-async fn read_msg(s: &mut TcpStream) -> std::io::Result<Msg> {
+async fn read_msg<R: AsyncRead + Unpin>(s: &mut R) -> std::io::Result<Msg> {
     let mut h = [0u8; 4];
     s.read_exact(&mut h).await?;
     let n = u32::from_be_bytes(h) as usize;
@@ -878,6 +1306,135 @@ mod tests {
             .local_addr()
             .unwrap()
             .port()
+    }
+
+
+    fn tcp(port: u16) -> PeerAddr {
+        PeerAddr::Tcp {
+            host: "127.0.0.1".into(),
+            port,
+        }
+    }
+
+    async fn hasta<F: FnMut() -> bool>(seg: u64, que: &str, mut f: F) {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(seg);
+        while !f() {
+            if tokio::time::Instant::now() > deadline {
+                panic!("timeout: {que}");
+            }
+            tokio::time::sleep(Duration::from_millis(40)).await;
+        }
+    }
+
+    /// Celular sin dirección entrante: la PC le empuja por la sesión que él abrió.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn celular_recibe_por_sesion_viva() {
+        let pc_port = puerto_libre();
+        let pc = Nodo::arrancar_en(pc_port).await.unwrap();
+        let cel = Nodo::arrancar_movil_en(puerto_libre(), None, vec![tcp(pc_port)])
+            .await
+            .unwrap();
+        let ana = Persona::nueva("Ana").unwrap();
+        let beto = Persona::nueva("Beto").unwrap();
+        pc.fijar_persona(&ana.id);
+        cel.fijar_persona(&beto.id);
+        pc.anunciar(ana.clone());
+        cel.anunciar(beto.clone());
+        hasta(6, "personas", || {
+            pc.anunciar_persona();
+            cel.anunciar_persona();
+            pc.conoce_persona(&beto.id) && cel.conoce_persona(&ana.id)
+        })
+        .await;
+        // La PC ve al celular como buzón, no como TCP.
+        assert!(matches!(
+            pc.inner.lock().unwrap().peers.values().find(|a| matches!(a, PeerAddr::Buzon { .. })),
+            Some(_)
+        ));
+        assert!(pc.enviar_caja("obra-1", &beto.id, &ana.id, "dkg-commit", b"de-la-pc"));
+        assert!(cel.enviar_caja("obra-1", &ana.id, &beto.id, "dkg-commit", b"del-cel"));
+        hasta(6, "caja pc->cel", || {
+            cel.tomar_caja().iter().any(|m| m.cuerpo == b"de-la-pc")
+        })
+        .await;
+        hasta(6, "caja cel->pc", || pc.tomar_caja().iter().any(|m| m.cuerpo == b"del-cel")).await;
+        pc.publicar(Oferta::publicar(ana.clone(), "Casa Quisco", 10_000, 2_000, vec![]).unwrap());
+        hasta(8, "tablero en el cel", || {
+            cel.tablero().iter().any(|o| o.nombre == "Casa Quisco")
+        })
+        .await;
+        cel.publicar(Oferta::publicar(beto.clone(), "Galpon", 10_000, 2_000, vec![]).unwrap());
+        hasta(8, "tablero en la pc", || pc.tablero().iter().any(|o| o.nombre == "Galpon")).await;
+        pc.parar();
+        cel.parar();
+    }
+
+    /// Dos celulares sin onion propio se hablan por la sala (relay).
+    #[tokio::test(flavor = "multi_thread", worker_threads = 3)]
+    async fn dos_celulares_por_relay() {
+        let sala_port = puerto_libre();
+        let sala = Nodo::arrancar_en(sala_port).await.unwrap();
+        let a = Nodo::arrancar_movil_en(puerto_libre(), None, vec![tcp(sala_port)])
+            .await
+            .unwrap();
+        let b = Nodo::arrancar_movil_en(puerto_libre(), None, vec![tcp(sala_port)])
+            .await
+            .unwrap();
+        let ana = Persona::nueva("Ana").unwrap();
+        let beto = Persona::nueva("Beto").unwrap();
+        a.fijar_persona(&ana.id);
+        b.fijar_persona(&beto.id);
+        a.anunciar(ana.clone());
+        b.anunciar(beto.clone());
+        hasta(8, "personas por relay", || {
+            a.anunciar_persona();
+            b.anunciar_persona();
+            a.conoce_persona(&beto.id) && b.conoce_persona(&ana.id)
+        })
+        .await;
+        assert!(a.enviar_caja("obra-9", &beto.id, &ana.id, "fund-proposal", b"a-b"));
+        assert!(b.enviar_caja("obra-9", &ana.id, &beto.id, "fund-skeleton", b"b-a"));
+        hasta(6, "a->b", || b.tomar_caja().iter().any(|m| m.cuerpo == b"a-b" && m.de == ana.id)).await;
+        hasta(6, "b->a", || a.tomar_caja().iter().any(|m| m.cuerpo == b"b-a")).await;
+        // La sala no se queda con la caja.
+        assert!(sala.tomar_caja().is_empty());
+        a.publicar(Oferta::publicar(ana.clone(), "Casa Relay", 10_000, 2_000, vec![]).unwrap());
+        hasta(10, "tablero a->b", || b.tablero().iter().any(|o| o.nombre == "Casa Relay")).await;
+        sala.parar();
+        a.parar();
+        b.parar();
+    }
+
+    /// Si el celular se cae, la caja espera en el buzón del relay y llega al volver.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 3)]
+    async fn buzon_entrega_al_volver() {
+        let sala_port = puerto_libre();
+        let sala = Nodo::arrancar_en(sala_port).await.unwrap();
+        let a = Nodo::arrancar_movil_en(puerto_libre(), None, vec![tcp(sala_port)])
+            .await
+            .unwrap();
+        let b = Nodo::arrancar_movil_en(puerto_libre(), None, vec![tcp(sala_port)])
+            .await
+            .unwrap();
+        let ana = Persona::nueva("Ana").unwrap();
+        let beto = Persona::nueva("Beto").unwrap();
+        a.fijar_persona(&ana.id);
+        b.fijar_persona(&beto.id);
+        hasta(8, "personas", || {
+            a.anunciar_persona();
+            b.anunciar_persona();
+            a.conoce_persona(&beto.id) && b.conoce_persona(&ana.id)
+        })
+        .await;
+        // b corta su sesión con la sala; la sala lo saca de vivos.
+        b.quitar_destino(&tcp(sala_port));
+        b.parar();
+        hasta(6, "sala suelta a b", || sala.n_vivos() == 1).await;
+        assert!(a.enviar_caja("obra-2", &beto.id, &ana.id, "spend-open", b"guardado"));
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        assert!(sala.inner.lock().unwrap().buzon.values().any(|c| !c.is_empty()));
+        sala.parar();
+        a.parar();
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

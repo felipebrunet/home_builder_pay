@@ -48,6 +48,47 @@ impl Tor {
         }
     }
 
+    /// Use an external SOCKS proxy (Orbot on Android, system tor, etc.).
+    /// Does not spawn a `tor` process and does not open a control port,
+    /// so ADD_ONION / hospedar_sala is unavailable on this path.
+    pub fn socks_externo(host: impl Into<String>, port: u16) -> Self {
+        let host = host.into();
+        let socks: SocketAddr = format!("{host}:{port}")
+            .parse()
+            .unwrap_or_else(|_| SocketAddr::from(([127, 0, 0, 1], port)));
+        Self {
+            snap: Arc::new(Mutex::new(Snap {
+                estado: EstadoTor::Listo {
+                    onion: "(socks externo / Orbot)".into(),
+                },
+                socks: Some(socks),
+                onion: Some("(socks externo / Orbot)".into()),
+                hospeda: false,
+            })),
+            ctl: Arc::new(tokio::sync::Mutex::new(None)),
+        }
+    }
+
+    /// Reconfigure SOCKS without spawning tor. Clears any prior control handle.
+    pub fn configurar_socks(&self, host: &str, port: u16) {
+        let socks: SocketAddr = format!("{host}:{port}")
+            .parse()
+            .unwrap_or_else(|_| SocketAddr::from(([127, 0, 0, 1], port)));
+        {
+            let mut g = self.snap.lock().unwrap();
+            g.socks = Some(socks);
+            g.onion = Some("(socks externo / Orbot)".into());
+            g.hospeda = false;
+            g.estado = EstadoTor::Listo {
+                onion: "(socks externo / Orbot)".into(),
+            };
+        }
+        // Drop control so we never try ADD_ONION without a real controller.
+        if let Ok(mut g) = self.ctl.try_lock() {
+            *g = None;
+        }
+    }
+
     pub fn marcar_arrancando(&self, paso: impl Into<String>) {
         self.snap.lock().unwrap().estado = EstadoTor::Arrancando { paso: paso.into() };
     }
@@ -300,5 +341,13 @@ mod tests {
         assert!(RENDEZVOUS_ONION.ends_with(".onion"));
         assert_eq!(RENDEZVOUS_ONION.len(), 56 + 6);
         assert_eq!(RENDEZVOUS_KEY.len(), 88);
+    }
+
+    #[test]
+    fn socks_externo_queda_listo() {
+        let t = Tor::socks_externo("127.0.0.1", 9050);
+        assert_eq!(t.socks().unwrap().port(), 9050);
+        assert!(matches!(t.estado(), EstadoTor::Listo { .. }));
+        assert!(!t.hospeda_sala());
     }
 }

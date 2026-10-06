@@ -10,7 +10,7 @@ mod tor;
 
 pub use dht::Nodo;
 pub use proto::{CajaMsg, Msg, PeerAddr};
-pub use rendezvous::RENDEZVOUS_ONION;
+pub use rendezvous::{RENDEZVOUS_ONION, VIRT_PORT};
 pub use tor::{EstadoTor, Tor};
 
 /// Hardcoded rendezvous. Every build joins this swarm.
@@ -18,6 +18,11 @@ pub const RED: &str = "konstruado-red-1";
 
 /// Local TCP port used as first-hop bootstrap on the same machine.
 pub const PUERTO_LOCAL: u16 = 17432;
+
+/// Orbot default SOCKS port (VPN/proxy mode on the device).
+pub const ORBOT_SOCKS: u16 = 9050;
+/// Orbot default control port (optional; password auth).
+pub const ORBOT_CONTROL: u16 = 9051;
 
 pub fn swarm_id() -> [u8; 32] {
     use sha2::{Digest, Sha256};
