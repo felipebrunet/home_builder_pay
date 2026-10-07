@@ -144,12 +144,15 @@ mod tests {
 
     #[test]
     fn about_trae_repo_y_readme() {
-        assert_eq!(VERSION, "0.1.0-dev");
+        // Version comes from [workspace.package]; HELP.md must not hardcode it.
+        assert!(!VERSION.is_empty() && !VERSION.ends_with("-dev"));
+        assert!(!README.contains(VERSION));
         assert!(REPO.contains("felipebrunet/home_builder_pay"));
         assert!(README.contains("Not a chat"));
         assert!(README.contains("ES / EN"));
         assert!(!README.contains("cargo run"));
         assert!(!README.contains("CONTEXTO"));
+        assert!(README.contains("job backup → seed → share"));
         let _ = menu();
     }
 }

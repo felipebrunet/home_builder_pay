@@ -3,6 +3,18 @@ plugins {
     id("org.jetbrains.kotlin.android")
 }
 
+// App version comes from the Rust workspace (`[workspace.package] version`),
+// the same value the desktop window and konstruado-ffi report.
+val konstruadoVersion: String = run {
+    val toml = rootProject.file("../Cargo.toml").readText()
+    val section = toml.substringAfter("[workspace.package]").substringBefore("\n[")
+    Regex("""(?m)^version\s*=\s*"([^"]+)"""").find(section)?.groupValues?.get(1)
+        ?: error("version not found in [workspace.package] of Cargo.toml")
+}
+val konstruadoVersionCode: Int = konstruadoVersion.substringBefore('-').split('.')
+    .map { it.toInt() }
+    .let { (major, minor, patch) -> major * 10000 + minor * 100 + patch }
+
 android {
     namespace = "cl.konstruado.app"
     compileSdk = 34
@@ -11,8 +23,8 @@ android {
         applicationId = "cl.konstruado.app"
         minSdk = 26
         targetSdk = 34
-        versionCode = 5
-        versionName = "0.2.3"
+        versionCode = konstruadoVersionCode
+        versionName = konstruadoVersion
         ndk {
             abiFilters += listOf("arm64-v8a", "x86_64")
         }
