@@ -61,7 +61,7 @@ impl Idioma {
     pub fn label_partida(self, p: &Partida) -> String {
         match p.estado {
             PartidaEstado::Pendiente => self.t("Pendiente", "Pending").into(),
-            PartidaEstado::Encerrando => self.t("Encerrando", "Locking").into(),
+            PartidaEstado::Encerrando => self.t("En fondeo", "Funding").into(),
             PartidaEstado::Encerrada => self.t("En obra", "In progress").into(),
             PartidaEstado::EnTrato => match p.propuesto {
                 Some(n) => match self {

@@ -28,7 +28,7 @@ use xmr_joint::fund::{self, view_del_mandante};
 use xmr_joint::personal::{self, elegir_montos};
 use xmr_joint::spend::{self, SpendProposal, SpendSession, SpendSigned};
 use xmr_joint::wallet::SingleWallet;
-use xmr_joint::{OutputWithDecoys, Net, FEE_CUSHION, PICONERO, STAGENET_DAEMON};
+use xmr_joint::{daemon_url, OutputWithDecoys, Net, FEE_CUSHION, PICONERO};
 
 use konstruado_core::{EstadoObra, Obra, PartidaEstado, Persona, Rol};
 use konstruado_net::{CajaMsg, Nodo};
@@ -139,9 +139,9 @@ pub fn saldo_partida(
     if estado == PartidaEstado::Encerrando {
         return Some(SaldoPartida {
             estado: if es {
-                "Encerrando. Todavía no hay saldo en la caja.".into()
+                "Todavía no hay saldo en la caja; falta completar el fondeo.".into()
             } else {
-                "Locking. There is no balance in the box yet.".into()
+                "No balance in the box yet; funding is still in progress.".into()
             },
             detalle: if es {
                 format!("Si se fondea, cada lado pone {lado} XMR. El total en la caja sería {total} XMR.")
@@ -255,7 +255,7 @@ pub struct Mov {
 impl CajaVista {
     pub fn vacia() -> Self {
         Self {
-            daemon: STAGENET_DAEMON.to_string(),
+            daemon: daemon_url(),
             tip: None,
             personal: None,
             tiene_semilla: false,
@@ -538,6 +538,111 @@ pub fn es_freno(texto: &Texto) -> bool {
     )
 }
 
+
+fn es_rechazo_fondeo(msg: &str) -> bool {
+    let low = msg.to_ascii_lowercase();
+    low.contains("rejected")
+        || low.contains("double spend")
+        || low.contains("key image")
+        || low.contains("already spent")
+        || low.contains("decoy")
+        || low.contains("failed to get")
+        || low.contains("not in the mainchain")
+        || low.contains("invalid input")
+}
+
+/// Traduce errores crudos del RPC/daemon (timeout, refused, …) a español/inglés.
+pub fn humanizar_error_cadena(raw: &str, es: bool) -> String {
+    let s = raw.trim();
+    let low = s.to_ascii_lowercase();
+    let cuerpo = s
+        .strip_prefix("cadena: ")
+        .or_else(|| s.strip_prefix("Chain: "))
+        .unwrap_or(s);
+    let low_c = cuerpo.to_ascii_lowercase();
+
+    let (esp, ing) = if low_c.contains("timeout")
+        || low_c.contains("elapsed")
+        || low_c.contains("timed out")
+        || low.contains("timeout reached")
+    {
+        (
+            "El nodo no respondió a tiempo (timeout). Revisá que monerod esté en marcha, el puerto (RPC stagenet suele ser 38081; el público usa 38089) y que el teléfono alcance esa IP por LAN o Tailscale.",
+            "The node did not answer in time (timeout). Check that monerod is running, the port (stagenet RPC is often 38081; the public node uses 38089), and that this phone can reach that IP on LAN or Tailscale.",
+        )
+    } else if low_c.contains("connection refused")
+        || low_c.contains("actively refused")
+        || low_c.contains("econnrefused")
+    {
+        (
+            "El nodo rechazó la conexión. ¿monerod escucha en esa IP:puerto? En la PC: --rpc-bind-ip 0.0.0.0 --confirm-external-bind (y sin restricted-rpc si querés RPC completo).",
+            "The node refused the connection. Is monerod listening on that IP:port? On the PC use --rpc-bind-ip 0.0.0.0 --confirm-external-bind.",
+        )
+    } else if low_c.contains("network is unreachable")
+        || low_c.contains("no route to host")
+        || low_c.contains("host is unreachable")
+        || low_c.contains("ehostunreach")
+        || low_c.contains("enetunreach")
+    {
+        (
+            "No hay ruta hasta esa IP. Si usás Tailscale, confirmá que PC y teléfono estén en la misma red Tailscale; si es LAN, misma Wi‑Fi y que el firewall no bloquee el puerto.",
+            "No route to that IP. On Tailscale, both devices must be on the same tailnet; on LAN, same Wi‑Fi and an open RPC port.",
+        )
+    } else if low_c.contains("name or service not known")
+        || low_c.contains("nodename nor servname")
+        || low_c.contains("dns")
+        || low_c.contains("failed to lookup")
+    {
+        (
+            "No pude resolver el host de la URL. Revisá el nombre o usá la IP (Tailscale/LAN).",
+            "Could not resolve the host in the URL. Check the name or use the Tailscale/LAN IP.",
+        )
+    } else if low_c.contains("certificate")
+        || low_c.contains("tls")
+        || low_c.contains("ssl")
+        || low_c.contains("handshake")
+    {
+        (
+            "Falló el HTTPS/TLS con ese nodo. Un monerod local de stagenet casi siempre es http://IP:38081 (sin https).",
+            "HTTPS/TLS failed with that node. A local stagenet monerod is almost always http://IP:38081 (not https).",
+        )
+    } else if low_c.contains("invalid uri") || low_c.contains("builder error") {
+        (
+            "La URL del nodo no es válida. Tiene que ser http:// o https://host:puerto.",
+            "The node URL is not valid. Use http:// or https://host:port.",
+        )
+    } else if low_c.contains("rejected")
+        || low_c.contains("double spend")
+        || low_c.contains("key image")
+        || low_c.contains("already spent")
+    {
+        (
+            "El nodo rechazó la transacción. Suele ser una salida ya gastada, fee insuficiente o el nodo atrasado. Actualizá el saldo (y podá fantasmas si usás monerod propio) y reintentá.",
+            "The node rejected the transaction. Often a spent output, low fee, or a lagging node. Refresh the balance and try again.",
+        )
+    } else if cuerpo.trim().is_empty()
+        || cuerpo.trim() == "()"
+        || low_c.ends_with("rejected ()")
+        || low_c.ends_with("rejected()")
+    {
+        (
+            "El nodo rechazó la transacción sin detalle. Probá Actualizar saldo, revisá el monerod y reintentá el fondeo.",
+            "The node rejected the transaction without a reason. Refresh the balance, check monerod, and retry funding.",
+        )
+    } else {
+        return if es {
+            format!(
+                "No pude hablar con el nodo Monero: {cuerpo}. Revisá la URL, el puerto y que el teléfono alcance esa máquina (LAN/Tailscale)."
+            )
+        } else {
+            format!(
+                "Could not talk to the Monero node: {cuerpo}. Check the URL, port, and that this phone can reach that machine (LAN/Tailscale)."
+            )
+        };
+    };
+    if es { esp.into() } else { ing.into() }
+}
+
 /// Textos de la billetera y códigos del motor, en el idioma de la ventana.
 pub fn aviso_humano(aviso: &str, es: bool) -> String {
     let (esp, ing) = match aviso {
@@ -666,7 +771,40 @@ pub fn aviso_humano(aviso: &str, es: bool) -> String {
             "El nodo no entregó un fee válido. No armé el pago.",
             "The node did not return a valid fee. The payment was not built.",
         ),
-        other => return other.to_string(),
+        "fondeo-rechazado" | "codigo:fondeo-rechazado" => (
+            "El nodo rechazó el fondeo (decoys viejos o salida ya usada). Tocá «Empezar el fondeo de nuevo» para armar anillos frescos; la obra no se pierde.",
+            "The node rejected the funding (stale decoys or a spent output). Tap Start funding again for fresh rings; the job is kept.",
+        ),
+        "fondeo-reinicio" | "codigo:fondeo-reinicio" => (
+            "Reiniciando el fondeo con anillos nuevos…",
+            "Restarting funding with fresh rings…",
+        ),
+        "fondeo-abortado-par" | "codigo:fondeo-abortado-par" => (
+            "El otro reinició el fondeo. Cuando toque, confirmá o pedí de nuevo con anillos frescos.",
+            "The other side restarted funding. When it is your turn, confirm or request again with fresh rings.",
+        ),
+        "esa partida no está en fondeo" => (
+            "Esa partida no está en fondeo.",
+            "That stage is not in funding.",
+        ),
+        other => {
+            let low = other.to_ascii_lowercase();
+            if low.contains("timeout")
+                || low.contains("elapsed")
+                || low.contains("connection refused")
+                || low.contains("unreachable")
+                || low.contains("interface error")
+                || low.contains("rejected")
+                || low.contains("key image")
+                || low.contains("double spend")
+                || other.trim() == "()"
+                || other.starts_with("cadena:")
+                || other.starts_with("Chain:")
+            {
+                return humanizar_error_cadena(other, es);
+            }
+            return other.to_string();
+        },
     };
     if es { esp.into() } else { ing.into() }
 }
@@ -802,8 +940,29 @@ impl Caja {
     }
 
     /// Vuelve a armar el fondeo sin borrar el pedido a mitad de una transacción ya publicada.
-    pub fn reintentar_fondeo(&self, obra: &Obra, partida: usize, yo: &Persona) -> Result<(), String> {
-        self.inner.lock().unwrap().reintentar_fondeo(obra, partida, yo)
+    pub fn reintentar_fondeo(
+        &self,
+        obra: &Obra,
+        partida: usize,
+        yo: &Persona,
+        nodo: &Nodo,
+    ) -> Result<(), String> {
+        // Mismo camino que «Empezar de nuevo»: decoys frescos en los dos lados.
+        self.empezar_fondeo_de_nuevo(obra, partida, yo, nodo)
+    }
+
+    /// Borra decoys/propuesta locales, avisa al peer con `fund-abort` y pide fondeo fresco.
+    pub fn empezar_fondeo_de_nuevo(
+        &self,
+        obra: &Obra,
+        partida: usize,
+        yo: &Persona,
+        nodo: &Nodo,
+    ) -> Result<(), String> {
+        self.inner
+            .lock()
+            .unwrap()
+            .empezar_fondeo_de_nuevo(obra, partida, yo, nodo)
     }
 
     pub fn cancelar_fondeo(&self, obra: &str, partida: usize) {
@@ -931,6 +1090,8 @@ struct Fondeo {
     par_buscando: bool,
     /// Primero se avisa el aborto al otro; al tick siguiente se vuelve a pedir.
     abortar: bool,
+    /// Salidas personales (tx, índice) que este lado metió al fondeo. Se sacan del libro al publicar.
+    gastadas: Option<Vec<(String, u64)>>,
 }
 
 struct Gasto {
@@ -1001,6 +1162,8 @@ enum Listo {
         tip: usize,
         retro: bool,
         entradas: Vec<EntradaNueva>,
+        /// Salidas del libro que el daemon marca como gastadas (key image).
+        podar: Vec<(String, u64)>,
     },
     CajaScan {
         obra: String,
@@ -1182,6 +1345,7 @@ impl Motor {
                 solo_aviso: false,
                 par_buscando: false,
                 abortar: false,
+                gastadas: None,
             },
         );
         Ok(())
@@ -1246,6 +1410,7 @@ impl Motor {
                     solo_aviso: false,
                     par_buscando: false,
                     abortar: ya_pidio,
+                    gastadas: None,
                 },
             );
             return Ok(());
@@ -1254,13 +1419,88 @@ impl Motor {
     }
 
     fn cancelar_fondeo(&mut self, obra: &str, partida: usize) {
-        if let Some(f) = self.fondeos.get(&(obra.to_string(), partida)) {
-            if f.txid.is_some() {
+        self.limpiar_sesion_fondeo(obra, partida, false);
+    }
+
+    /// Borra propuesta/esqueleto/decoys/txid locales. Si `solo_si_no_visto`, no toca un fondeo ya visto en cadena.
+    fn limpiar_sesion_fondeo(&mut self, obra: &str, partida: usize, forzar: bool) {
+        let key = (obra.to_string(), partida);
+        if let Some(f) = self.fondeos.get(&key) {
+            if f.visto && !forzar {
                 return;
             }
         }
-        self.fondeos.remove(&(obra.to_string(), partida));
+        self.fondeos.remove(&key);
         let _ = std::fs::remove_file(espera_path(obra, partida, false));
+        // Quita frenos viejos de esta partida; el caller puede poner uno nuevo.
+        self.vista
+            .lineas
+            .retain(|l| !(l.obra == obra && l.partida == Some(partida)));
+    }
+
+    /// Avisa al peer y deja la partida Encerrando lista para un fondeo nuevo (decoys frescos).
+    fn reiniciar_fondeo_tras_rechazo(
+        &mut self,
+        obra: &str,
+        partida: usize,
+        nodo: &Nodo,
+        yo: &Persona,
+    ) {
+        let peer = self
+            .fondeos
+            .get(&(obra.to_string(), partida))
+            .map(|f| f.peer.clone())
+            .unwrap_or_default();
+        if !peer.is_empty() {
+            let cuerpo = partida.to_string();
+            let _ = nodo.enviar_caja(obra, &peer, &yo.id, "fund-abort", cuerpo.as_bytes());
+        }
+        self.limpiar_sesion_fondeo(obra, partida, false);
+        self.nota(
+            obra,
+            Some(partida),
+            Texto::Falla("fondeo-rechazado".into()),
+        );
+    }
+
+    /// Empezar el fondeo de cero: aborta la sesión en los dos lados y vuelve a pedir.
+    fn empezar_fondeo_de_nuevo(
+        &mut self,
+        obra: &Obra,
+        partida: usize,
+        yo: &Persona,
+        nodo: &Nodo,
+    ) -> Result<(), String> {
+        let p = obra.partidas.get(partida).ok_or("no está esa partida")?;
+        if p.estado != PartidaEstado::Encerrando {
+            return Err("esa partida no está en fondeo".into());
+        }
+        if rol_en(obra, &yo.id).is_none() {
+            return Err("no estás en esta obra".into());
+        }
+        let peer = self
+            .fondeos
+            .get(&(obra.id.clone(), partida))
+            .map(|f| f.peer.clone())
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| otro_id(obra, &yo.id).to_string());
+        if !peer.is_empty() {
+            let cuerpo = partida.to_string();
+            let _ = nodo.enviar_caja(&obra.id, &peer, &yo.id, "fund-abort", cuerpo.as_bytes());
+        }
+        self.limpiar_sesion_fondeo(&obra.id, partida, false);
+        self.nota(
+            &obra.id,
+            Some(partida),
+            Texto::Falla("fondeo-reinicio".into()),
+        );
+        // Arranca sesión fresca (sin decoys viejos).
+        self.pedir_fondeo(obra, partida, yo)?;
+        // Quita el aviso de reinicio cuando ya hay sesión limpia pidiendo monedas.
+        self.vista
+            .lineas
+            .retain(|l| !(l.obra == obra.id && l.partida == Some(partida) && matches!(l.texto, Texto::Falla(ref s) if s == "fondeo-reinicio")));
+        Ok(())
     }
 
     fn pedir_gasto(&mut self, obra: &Obra, partida: usize, yo: &Persona) -> Result<(), String> {
@@ -1337,7 +1577,12 @@ impl Motor {
                 "fund-tx" => self.tomar_txid(&m, false),
                 "fund-abort" => {
                     if let Ok(i) = parse_idx(&m.cuerpo) {
-                        self.cancelar_fondeo(&m.obra, i);
+                        self.limpiar_sesion_fondeo(&m.obra, i, false);
+                        self.nota(
+                            &m.obra,
+                            Some(i),
+                            Texto::Falla("fondeo-abortado-par".into()),
+                        );
                     }
                 }
                 "fund-error" => self.fallo_par(&m, false),
@@ -1474,14 +1719,19 @@ impl Motor {
                 g.txid = Some(txid);
                 g.error = None;
             }
-        } else if let Some(f) = self
-            .fondeos
-            .iter_mut()
-            .find(|(k, f)| k.0 == m.obra && f.peer == m.de)
-            .map(|(_, f)| f)
-        {
-            f.txid = Some(txid);
-            f.error = None;
+        } else {
+            let key = self
+                .fondeos
+                .iter()
+                .find(|(k, f)| k.0 == m.obra && f.peer == m.de)
+                .map(|(k, _)| k.clone());
+            if let Some(key) = key {
+                if let Some(f) = self.fondeos.get_mut(&key) {
+                    f.txid = Some(txid);
+                    f.error = None;
+                }
+                self.consumir_fondeo_personal(&key.0, key.1);
+            }
         }
     }
 
@@ -1858,6 +2108,7 @@ impl Motor {
                         f.ultimo = Some(Instant::now());
                     }
                     self.guardar_espera(&obra, i, false, &txid);
+                    // No marcar gastadas hasta que el nodo acepte el broadcast.
                     self.publicar(obra, i, false, blob, txid, nodo, yo);
                 }
                 Err(e) => self.fallar(&obra, i, false, e.to_string(), nodo, yo),
@@ -1975,7 +2226,7 @@ impl Motor {
             celda: celda.clone(),
         });
         tokio::spawn(async move {
-            let res = match chain::connect(STAGENET_DAEMON).await {
+            let res = match chain::connect(&daemon_url()).await {
                 Ok(rpc) => match chain::publish_bytes(&rpc, &blob).await {
                     Ok(()) => Listo::Publicado {
                         obra,
@@ -2209,9 +2460,16 @@ impl Motor {
 
     fn spawn_saldo(&mut self, view: xmr_joint::ViewPair, desde: usize, hasta: usize, retro: bool) {
         self.buscando = true;
+        let spend = self.wallet.as_ref().map(|w| w.spend_key().clone());
+        let crudas: Vec<(String, u64, Vec<u8>)> = self
+            .libro
+            .entradas
+            .iter()
+            .map(|e| (e.tx.clone(), e.indice, e.raw.clone()))
+            .collect();
         let celda = self.ocupar();
         tokio::spawn(async move {
-            let listo = match chain::connect(STAGENET_DAEMON).await {
+            let listo = match chain::connect(&daemon_url()).await {
                 Ok(rpc) => match chain::scan_marcado(&rpc, view, desde, hasta).await {
                     Ok(marcadas) => {
                         let mut entradas = Vec::new();
@@ -2225,12 +2483,14 @@ impl Motor {
                             });
                         }
                         let tip = chain::tip(&rpc).await.unwrap_or(hasta);
+                        let podar = podar_gastadas_en_cadena(&rpc, spend.as_ref(), &crudas).await;
                         Listo::Saldo {
                             desde,
                             hasta,
                             tip,
                             retro,
                             entradas,
+                            podar,
                         }
                     }
                     Err(e) => Listo::Aviso(e.to_string()),
@@ -2304,7 +2564,7 @@ impl Motor {
         self.tip_en = Some(Instant::now());
         let celda = self.ocupar();
         tokio::spawn(async move {
-            let listo = match chain::connect(STAGENET_DAEMON).await {
+            let listo = match chain::connect(&daemon_url()).await {
                 Ok(rpc) => match chain::tip(&rpc).await {
                     Ok(n) => Listo::Punta(n),
                     Err(e) => Listo::Fallo {
@@ -2377,10 +2637,11 @@ impl Motor {
                     }
                 })
                 .unwrap_or(0);
-            let Some(raw) = self.salida_libre(minimo) else {
+            let Some((raw, tx, indice)) = self.salida_libre_id(minimo) else {
                 return;
             };
             if let Some(f) = self.fondeos.get_mut(&(obra.clone(), partida)) {
+                f.gastadas = Some(vec![(tx, indice)]);
                 f.ultimo = Some(Instant::now());
             }
             let celda = self.ocupar();
@@ -2534,12 +2795,21 @@ impl Motor {
                 };
                 match ok {
                     Ok(()) => {
+                        if !pago {
+                            self.consumir_fondeo_personal(&obra, partida);
+                        }
                         if let Some(peer) = peer {
                             let paso = if pago { "spend-tx" } else { "fund-tx" };
                             let _ = nodo.enviar_caja(&obra, &peer, &yo.id, paso, txid.as_bytes());
                         }
                     }
-                    Err(e) => self.fallar(&obra, partida, pago, e, nodo, yo),
+                    Err(e) => {
+                        let rechazo = !pago && es_rechazo_fondeo(&e);
+                        self.fallar(&obra, partida, pago, e.clone(), nodo, yo);
+                        if rechazo {
+                            self.reiniciar_fondeo_tras_rechazo(&obra, partida, nodo, yo);
+                        }
+                    }
                 }
             }
             Listo::Saldo {
@@ -2548,12 +2818,16 @@ impl Motor {
                 tip,
                 retro,
                 entradas,
+                podar,
             } => {
                 self.buscando = false;
                 self.scan_pausa = None;
                 self.scan_aviso = None;
                 self.tip = Some(tip);
                 self.fundir_entradas(entradas);
+                if !podar.is_empty() {
+                    self.libro.marcar_gastadas(&podar);
+                }
                 if retro {
                     self.libro.desde = desde;
                     let n = hasta.saturating_sub(desde).saturating_add(1);
@@ -2608,9 +2882,7 @@ impl Motor {
                 self.enviando = false;
                 match ok {
                     Ok(hecho) => {
-                        self.libro.entradas.retain(|e| {
-                            !usadas.iter().any(|(tx, indice)| e.tx == *tx && e.indice == *indice)
-                        });
+                        self.libro.marcar_gastadas(&usadas);
                         self.guardar_libro();
                         self.ultimo_envio = Some(hecho.txid);
                         self.ultimo_fee = Some(hecho.fee);
@@ -2625,6 +2897,9 @@ impl Motor {
 
     fn fundir_entradas(&mut self, entradas: Vec<EntradaNueva>) {
         for nueva in entradas {
+            if self.libro.ya_gastada(&nueva.tx, nueva.indice) {
+                continue;
+            }
             let ya = self
                 .libro
                 .entradas
@@ -3052,6 +3327,10 @@ impl Motor {
     }
 
     fn salida_libre(&self, minimo: u64) -> Option<Vec<u8>> {
+        self.salida_libre_id(minimo).map(|(raw, _, _)| raw)
+    }
+
+    fn salida_libre_id(&self, minimo: u64) -> Option<(Vec<u8>, String, u64)> {
         let tip = self.tip?;
         let pares: Vec<(u64, usize)> = self
             .libro
@@ -3060,7 +3339,24 @@ impl Motor {
             .map(|e| (e.monto, e.altura))
             .collect();
         let i = indice_salida_libre(&pares, tip, minimo)?;
-        Some(self.libro.entradas[i].raw.clone())
+        let e = &self.libro.entradas[i];
+        Some((e.raw.clone(), e.tx.clone(), e.indice))
+    }
+
+    /// Saca del saldo personal las salidas que este lado ya metió al fondeo publicado.
+    fn consumir_fondeo_personal(&mut self, obra: &str, partida: usize) {
+        let Some(usadas) = self
+            .fondeos
+            .get(&(obra.to_string(), partida))
+            .and_then(|f| f.gastadas.clone())
+        else {
+            return;
+        };
+        if usadas.is_empty() {
+            return;
+        }
+        self.libro.marcar_gastadas(&usadas);
+        self.guardar_libro();
     }
 
     /// Fondeos que todavía necesitan una salida de la billetera.
@@ -3240,6 +3536,7 @@ impl Motor {
 
     fn armar_vista(&mut self, obras: &[Obra]) {
         let mut v = CajaVista::vacia();
+        v.daemon = daemon_url();
         v.tip = self.tip;
         v.tiene_semilla = self.wallet.is_some();
         v.personal = self.wallet.as_ref().map(|w| w.address().to_string());
@@ -3363,25 +3660,35 @@ impl Motor {
             return;
         }
         self.retro = disco.retro as usize;
+        let gastadas: Vec<(String, u64)> = disco
+            .gastadas
+            .into_iter()
+            .map(|g| (g.tx, g.indice))
+            .collect();
+        let entradas = disco
+            .entradas
+            .into_iter()
+            .filter_map(|e| {
+                if gastadas.iter().any(|(tx, i)| tx == &e.tx && *i == e.indice) {
+                    return None;
+                }
+                let raw = hex::decode(e.raw).ok()?;
+                Some(Entrada {
+                    altura: e.altura as usize,
+                    monto: e.monto,
+                    tx: e.tx,
+                    indice: e.indice,
+                    raw,
+                })
+            })
+            .collect();
         self.libro = Libro {
             direccion: disco.direccion,
             desde: disco.desde as usize,
             hasta: disco.hasta as usize,
             listo: disco.listo,
-            entradas: disco
-                .entradas
-                .into_iter()
-                .filter_map(|e| {
-                    let raw = hex::decode(e.raw).ok()?;
-                    Some(Entrada {
-                        altura: e.altura as usize,
-                        monto: e.monto,
-                        tx: e.tx,
-                        indice: e.indice,
-                        raw,
-                    })
-                })
-                .collect(),
+            entradas,
+            gastadas,
         };
     }
 
@@ -3405,6 +3712,15 @@ impl Motor {
                     tx: e.tx.clone(),
                     indice: e.indice,
                     raw: hex::encode(&e.raw),
+                })
+                .collect(),
+            gastadas: self
+                .libro
+                .gastadas
+                .iter()
+                .map(|(tx, indice)| EntradaRefDisco {
+                    tx: tx.clone(),
+                    indice: *indice,
                 })
                 .collect(),
         };
@@ -3524,6 +3840,7 @@ impl Motor {
                         solo_aviso: false,
                         par_buscando: false,
                         abortar: false,
+                gastadas: None,
                     },
                 );
             }
@@ -3748,7 +4065,7 @@ impl Motor {
         let obra = obra.to_string();
         let celda = self.ocupar();
         tokio::spawn(async move {
-            let listo = match chain::connect(STAGENET_DAEMON).await {
+            let listo = match chain::connect(&daemon_url()).await {
                 Ok(rpc) => match chain::scan_marcado(&rpc, view, desde, hasta).await {
                     Ok(marcadas) => {
                         let mut entradas = Vec::new();
@@ -4116,6 +4433,41 @@ fn fondeo_vacio(peer: &str, error: Option<String>, aviso: Option<AvisoFondeo>) -
         solo_aviso: true,
         par_buscando: false,
         abortar: false,
+        gastadas: None,
+    }
+}
+
+
+async fn podar_gastadas_en_cadena(
+    rpc: &xmr_joint::chain::Daemon,
+    spend: Option<&xmr_joint::LlaveGasto>,
+    crudas: &[(String, u64, Vec<u8>)],
+) -> Vec<(String, u64)> {
+    let Some(spend) = spend else {
+        return Vec::new();
+    };
+    if crudas.is_empty() {
+        return Vec::new();
+    }
+    let mut images = Vec::with_capacity(crudas.len());
+    let mut refs = Vec::with_capacity(crudas.len());
+    for (tx, indice, raw) in crudas {
+        let Some(ki) = xmr_joint::wallet::key_image_from_raw(spend, raw) else {
+            continue;
+        };
+        images.push(ki);
+        refs.push((tx.clone(), *indice));
+    }
+    if images.is_empty() {
+        return Vec::new();
+    }
+    match xmr_joint::chain::key_images_spent(rpc, &images).await {
+        Ok(flags) => refs
+            .into_iter()
+            .zip(flags)
+            .filter_map(|((tx, i), gastada)| gastada.then_some((tx, i)))
+            .collect(),
+        Err(_) => Vec::new(),
     }
 }
 
@@ -4239,6 +4591,8 @@ struct Libro {
     hasta: usize,
     listo: bool,
     entradas: Vec<Entrada>,
+    /// Salidas ya gastadas (fondeo o envío). El scan no las vuelve a sumar.
+    gastadas: Vec<(String, u64)>,
 }
 
 struct LibroCaja {
@@ -4305,6 +4659,7 @@ impl Libro {
             hasta: 0,
             listo: false,
             entradas: Vec::new(),
+            gastadas: Vec::new(),
         }
     }
 
@@ -4315,7 +4670,22 @@ impl Libro {
             hasta: 0,
             listo: false,
             entradas: Vec::new(),
+            gastadas: Vec::new(),
         }
+    }
+
+    fn ya_gastada(&self, tx: &str, indice: u64) -> bool {
+        self.gastadas.iter().any(|(t, i)| t == tx && *i == indice)
+    }
+
+    fn marcar_gastadas(&mut self, usadas: &[(String, u64)]) {
+        for (tx, indice) in usadas {
+            if !self.ya_gastada(tx, *indice) {
+                self.gastadas.push((tx.clone(), *indice));
+            }
+        }
+        self.entradas
+            .retain(|e| !usadas.iter().any(|(tx, i)| e.tx == *tx && e.indice == *i));
     }
 }
 
@@ -4327,6 +4697,8 @@ struct LibroDisco {
     listo: bool,
     retro: u64,
     entradas: Vec<EntradaDisco>,
+    #[serde(default)]
+    gastadas: Vec<EntradaRefDisco>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -4336,6 +4708,12 @@ struct EntradaDisco {
     tx: String,
     indice: u64,
     raw: String,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+struct EntradaRefDisco {
+    tx: String,
+    indice: u64,
 }
 
 fn escribir_0600(path: &Path, text: &str) -> Result<(), String> {
@@ -4571,7 +4949,7 @@ fn restaurar_semilla_en(dir: &Path, text: &str, actual: Option<&str>) -> Result<
 }
 
 async fn ver_txid(view: xmr_joint::ViewPair, txid: &str) -> Result<bool, String> {
-    let rpc = chain::connect(STAGENET_DAEMON).await.map_err(|e| e.to_string())?;
+    let rpc = chain::connect(&daemon_url()).await.map_err(|e| e.to_string())?;
     let tip = chain::tip(&rpc).await.map_err(|e| e.to_string())?;
     let from = tip.saturating_sub(LOOKBACK);
     let outs = chain::scan(&rpc, view, from, tip).await.map_err(|e| e.to_string())?;
@@ -4581,6 +4959,54 @@ async fn ver_txid(view: xmr_joint::ViewPair, txid: &str) -> Result<bool, String>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn humaniza_timeout_del_nodo() {
+        let m = humanizar_error_cadena(
+            "cadena: interface error (timeout reached: Elapsed(()))",
+            true,
+        );
+        assert!(m.contains("timeout"), "{m}");
+        assert!(!m.contains("Elapsed(())"), "{m}");
+    }
+
+    #[test]
+    fn humaniza_tx_rechazada_vacia() {
+        let m = aviso_humano("transaction was rejected ()", true);
+        assert!(m.contains("rechazó") || m.contains("rechazo"), "{m}");
+        assert!(!m.contains("()"), "{m}");
+    }
+
+    #[test]
+    fn libro_no_rescata_salidas_gastadas() {
+        let mut libro = Libro::nueva("5test");
+        libro.entradas.push(Entrada {
+            altura: 10,
+            monto: 500_000_000_000,
+            tx: "aa".into(),
+            indice: 0,
+            raw: vec![1],
+        });
+        libro.entradas.push(Entrada {
+            altura: 20,
+            monto: 495_000_000_000,
+            tx: "bb".into(),
+            indice: 0,
+            raw: vec![2],
+        });
+        libro.marcar_gastadas(&[("aa".into(), 0)]);
+        assert_eq!(libro.entradas.len(), 1);
+        assert_eq!(libro.entradas[0].tx, "bb");
+        assert!(libro.ya_gastada("aa", 0));
+        // Re-fundir la misma salida gastada no la revive.
+        let motor_libro = libro;
+        // simulate fundir skip via ya_gastada
+        assert!(motor_libro.ya_gastada("aa", 0));
+        assert!(!motor_libro.ya_gastada("bb", 0));
+        let total: u64 = motor_libro.entradas.iter().map(|e| e.monto).sum();
+        assert_eq!(total, 495_000_000_000);
+        assert_eq!(fmt_xmr(total), "0.495");
+    }
 
     #[test]
     fn dos_mil_son_cero_cero_cuatro_xmr() {

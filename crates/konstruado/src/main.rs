@@ -2584,13 +2584,14 @@ fn VerPartida(
                                     return;
                                 }
                                 let Some(quien) = yo() else { return };
-                                match caja.reintentar_fondeo(&obra, i, &quien) {
+                                let Some(nodo) = red() else { return };
+                                match caja.empezar_fondeo_de_nuevo(&obra, i, &quien, &nodo) {
                                     Ok(()) => err.set(None),
                                     Err(e) => err.set(Some(caja::aviso_humano(&e, lang_now() == Idioma::Es))),
                                 }
                             }
                         },
-                        {lang.t("Reintentar el fondeo", "Try the funding again")}
+                        {lang.t("Empezar el fondeo de nuevo", "Start funding again")}
                     }
                     button {
                         class: "btn btn-ghost",

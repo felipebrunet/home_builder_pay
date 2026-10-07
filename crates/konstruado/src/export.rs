@@ -231,12 +231,12 @@ fn wrap_lines(s: &str, width: usize) -> Vec<String> {
 fn partida_estado(lang: Idioma, e: PartidaEstado) -> &'static str {
     match (lang, e) {
         (Idioma::Es, PartidaEstado::Pendiente) => "Pendiente",
-        (Idioma::Es, PartidaEstado::Encerrando) => "Encerrando",
+        (Idioma::Es, PartidaEstado::Encerrando) => "En fondeo",
         (Idioma::Es, PartidaEstado::Encerrada) => "Encerrada",
         (Idioma::Es, PartidaEstado::EnTrato) => "En trato",
         (Idioma::Es, PartidaEstado::Pagada) => "Pagada",
         (Idioma::En, PartidaEstado::Pendiente) => "Pending",
-        (Idioma::En, PartidaEstado::Encerrando) => "Locking",
+        (Idioma::En, PartidaEstado::Encerrando) => "Funding",
         (Idioma::En, PartidaEstado::Encerrada) => "Locked",
         (Idioma::En, PartidaEstado::EnTrato) => "In deal",
         (Idioma::En, PartidaEstado::Pagada) => "Paid",

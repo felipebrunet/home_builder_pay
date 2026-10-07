@@ -117,9 +117,9 @@ pub async fn publicar(
         );
     }
     let url = net
-        .daemon_default()
+        .daemon()
         .ok_or_else(|| Error::Wallet("esta red no tiene daemon".into()))?;
-    let rpc = crate::chain::connect(url).await?;
+    let rpc = crate::chain::connect(&url).await?;
     let tip = crate::chain::tip(&rpc).await?;
     let rate = crate::chain::fee_rate(&rpc).await?;
     let mut decoys = Vec::with_capacity(salidas.len());

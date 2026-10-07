@@ -72,7 +72,7 @@ pub async fn scan_marcado(
 pub async fn anillar(raw: Vec<u8>) -> Result<(Vec<OutputWithDecoys>, (u64, u64))> {
     let output = WalletOutput::read(&mut std::io::Cursor::new(raw))
         .map_err(|e| Error::Chain(format!("salida: {e}")))?;
-    let rpc = connect(crate::network::STAGENET_DAEMON).await?;
+    let rpc = connect(&crate::network::daemon_url()).await?;
     let altura = tip(&rpc).await?;
     let rate = fee_rate(&rpc).await?;
     let partes = crate::fund::fee_parts(&rate);
@@ -85,7 +85,7 @@ pub async fn anillar_varias(raws: Vec<Vec<u8>>) -> Result<(Vec<OutputWithDecoys>
     if raws.is_empty() {
         return Err(Error::Chain("no hay salidas".into()));
     }
-    let rpc = connect(crate::network::STAGENET_DAEMON).await?;
+    let rpc = connect(&crate::network::daemon_url()).await?;
     let altura = tip(&rpc).await?;
     let rate = fee_rate(&rpc).await?;
     let partes = crate::fund::fee_parts(&rate);
@@ -114,4 +114,36 @@ pub async fn publish_bytes(rpc: &Daemon, bytes: &[u8]) -> Result<()> {
     let tx = monero_wallet::transaction::Transaction::read(&mut std::io::Cursor::new(bytes))
         .map_err(|e| Error::Chain(format!("tx: {e}")))?;
     publish(rpc, &tx).await
+}
+
+/// Pregunta al daemon qué key images ya se gastaron (0 = libre, 1/2 = gastada).
+///
+/// En nodos con `restricted-rpc` puede fallar: el caller trata el error como "no supe".
+pub async fn key_images_spent(rpc: &Daemon, images: &[[u8; 32]]) -> Result<Vec<bool>> {
+    if images.is_empty() {
+        return Ok(Vec::new());
+    }
+    let hexes: Vec<String> = images.iter().map(hex::encode).collect();
+    let params = serde_json::to_string(&hexes).map_err(|e| Error::Chain(e.to_string()))?;
+    let raw = rpc
+        .json_rpc_call("is_key_image_spent", Some(params), 256 * 1024)
+        .await
+        .map_err(|e| Error::Chain(e.to_string()))?;
+    let v: serde_json::Value =
+        serde_json::from_str(&raw).map_err(|e| Error::Chain(format!("is_key_image_spent: {e}")))?;
+    let arr = v
+        .get("spent_status")
+        .and_then(|x| x.as_array())
+        .ok_or_else(|| Error::Chain("is_key_image_spent sin spent_status".into()))?;
+    if arr.len() != images.len() {
+        return Err(Error::Chain(format!(
+            "is_key_image_spent devolvió {} estados, pedí {}",
+            arr.len(),
+            images.len()
+        )));
+    }
+    Ok(arr
+        .iter()
+        .map(|x| x.as_u64().unwrap_or(0) != 0)
+        .collect())
 }

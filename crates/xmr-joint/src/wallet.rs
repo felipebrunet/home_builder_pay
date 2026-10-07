@@ -100,6 +100,20 @@ pub fn key_image_bytes(spend: &Scalar, output: &OutputWithDecoys) -> [u8; 32] {
     image.compress().to_bytes()
 }
 
+/// Key image de una [`WalletOutput`] guardada (sin decoys).
+pub fn key_image_wallet(spend: &Scalar, output: &monero_wallet::WalletOutput) -> [u8; 32] {
+    let input_key = (*spend).into() + output.key_offset().into();
+    let generator = Point::biased_hash(output.key().compress().to_bytes());
+    let image = Point::from(&input_key * generator.into());
+    image.compress().to_bytes()
+}
+
+/// Key image desde el blob serializado que guarda el libro personal.
+pub fn key_image_from_raw(spend: &Scalar, raw: &[u8]) -> Option<[u8; 32]> {
+    let output = monero_wallet::WalletOutput::read(&mut std::io::Cursor::new(raw)).ok()?;
+    Some(key_image_wallet(spend, &output))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
