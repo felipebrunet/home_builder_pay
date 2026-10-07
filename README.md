@@ -95,7 +95,7 @@ On Debian/Ubuntu:
 
 ```bash
 sudo apt install tor libgtk-3-0 libwebkit2gtk-4.1-0 libxdo3
-chmod +x construado-*-linux-x86_64*
+chmod +x konstruado-*-linux-x86_64*
 ./konstruado-*-linux-x86_64*
 ```
 
