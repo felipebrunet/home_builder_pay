@@ -102,7 +102,7 @@ chmod +x construado-*-linux-x86_64*
 To rebuild it:
 
 ```bash
-cargo build -p construado --release
+cargo build -p konstruado --release
 mkdir -p dist
 cp target/release/konstruado dist/konstruado-0.2.0-linux-x86_64
 ```
