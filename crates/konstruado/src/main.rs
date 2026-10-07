@@ -3092,15 +3092,15 @@ mod tests {
         let (m, _) = par("Alice");
         let (c, cs) = par("Bob");
         let mut obra = obra_con_nota(&m, &c, "Terminé el muro");
-        assert!(lista_para_publicar(&mut obra, &c, &cs));
+        assert!(obra.preparar_para_red(&c.id, &c.clave_pub, &cs).is_ok());
         assert!(obra.partidas[0].notas[0].texto.is_empty());
         assert!(!obra.partidas[0].notas[0].caja.is_empty());
-        assert!(lista_para_publicar(&mut obra, &c, &cs));
+        assert!(obra.preparar_para_red(&c.id, &c.clave_pub, &cs).is_ok());
 
         let mut m = m;
         m.clave_pub.clear();
         let mut clara = obra_con_nota(&m, &c, "Terminé el muro");
-        assert!(!lista_para_publicar(&mut clara, &c, &cs));
+        assert!(!clara.preparar_para_red(&c.id, &c.clave_pub, &cs).is_ok());
         assert_eq!(clara.partidas[0].notas[0].texto, "Terminé el muro");
         assert!(clara.partidas[0].notas[0].caja.is_empty());
     }
