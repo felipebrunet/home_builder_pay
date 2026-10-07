@@ -642,6 +642,7 @@ impl Nodo {
         self.spawn_gossip();
     }
 
+    /// Obras activas (sin las archivadas solo en este equipo).
     pub fn obras(&self) -> Vec<Obra> {
         let key = key_hex(&clave_obras());
         let g = self.inner.lock().unwrap();
@@ -654,7 +655,18 @@ impl Nodo {
             .collect()
     }
 
-    /// Ids de obras ocultas por salida local (para persistir).
+    /// Todas las obras del almacén, incluidas las archivadas localmente.
+    /// Sirve para oferta_en_tablero, lookup, respaldo y share.
+    pub fn obras_todas(&self) -> Vec<Obra> {
+        let key = key_hex(&clave_obras());
+        let g = self.inner.lock().unwrap();
+        g.store
+            .get(&key)
+            .map(|b| decode_obras(b))
+            .unwrap_or_default()
+    }
+
+    /// Ids de obras archivadas solo en este equipo (para persistir).
     pub fn obras_salidas(&self) -> Vec<String> {
         self.inner
             .lock()
@@ -665,25 +677,22 @@ impl Nodo {
             .collect()
     }
 
-    /// Carga la lista de salidas locales al arrancar.
+    /// Carga la lista de archivadas locales al arrancar.
     pub fn fijar_obras_salidas(&self, ids: Vec<String>) {
         let mut g = self.inner.lock().unwrap();
         g.obras_salidas = ids.into_iter().collect();
     }
 
-    /// Quita la obra de este equipo y la marca para que gossip no la devuelva.
-    /// No mueve fondos ni publica un estado Abandonada al peer.
+    /// Archiva la obra solo en este equipo: queda en el almacén (share/contexto)
+    /// pero sale del tablero y de Mis obras activas. No mueve fondos ni publica Abandonada.
     pub fn salir_obra_local(&self, obra_id: &str) {
         let mut g = self.inner.lock().unwrap();
         g.obras_salidas.insert(obra_id.to_string());
-        let key = key_hex(&clave_obras());
-        let mut list = g
-            .store
-            .get(&key)
-            .map(|b| decode_obras(b))
-            .unwrap_or_default();
-        list.retain(|o| o.id != obra_id);
-        g.store.insert(key, encode_obras(&list));
+    }
+
+    /// Alias explícito de archivar (misma semántica que salir_obra_local).
+    pub fn archivar_obra_local(&self, obra_id: &str) {
+        self.salir_obra_local(obra_id);
     }
 
     /// Al reimportar un respaldo, la obra vuelve a ser visible.

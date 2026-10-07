@@ -582,7 +582,7 @@ impl KonstruadoApp {
 
     fn obra(&self, id: &str) -> Result<Obra, FfiError> {
         self.nodo
-            .obras()
+            .obras_todas()
             .into_iter()
             .find(|o| o.id == id)
             .ok_or_else(|| fallo("La obra todavía no llegó a este equipo."))
@@ -594,7 +594,7 @@ impl KonstruadoApp {
             yo: s.yo.clone(),
             rol: s.rol,
             ofertas: self.nodo.tablero(),
-            obras: self.nodo.obras(),
+            obras: self.nodo.obras_todas(),
             presentes: self.nodo.presentes(),
             tema: s.tema.clone(),
             idioma: s.idioma.clone(),
@@ -701,7 +701,7 @@ impl KonstruadoApp {
                     yo,
                     rol,
                     ofertas: nodo.tablero(),
-                    obras: nodo.obras(),
+                    obras: nodo.obras_todas(),
                     presentes: nodo.presentes(),
                     tema: disco.0,
                     idioma: disco.1,
@@ -994,7 +994,8 @@ impl KonstruadoApp {
         let mid = self.mid();
         let sec = self.sec();
         let soy_m = self.ses.lock().unwrap().rol == Some(Rol::Mandante);
-        let todas = self.nodo.obras();
+        // Incluye archivadas: así una obra archivada no hace reaparecer su oferta.
+        let todas = self.nodo.obras_todas();
         let ofertas = self.nodo.tablero();
         let mut mias: Vec<&Oferta> = ofertas
             .iter()
@@ -1006,10 +1007,17 @@ impl KonstruadoApp {
             .filter(|o| o.mandante.id != mid && oferta_en_tablero(&o.id, &todas))
             .collect();
         ajenas.sort_by(|a, b| b.actualizado.cmp(&a.actualizado).then(b.id.cmp(&a.id)));
-        let mut mis_obras: Vec<Obra> = todas
-            .iter()
-            .filter(|o| o.estado != EstadoObra::Rechazada && o.participa(&mid))
-            .cloned()
+        let mut mis_obras: Vec<Obra> = self
+            .nodo
+            .obras()
+            .into_iter()
+            .filter(|o| {
+                o.participa(&mid)
+                    && !matches!(
+                        o.estado,
+                        EstadoObra::Rechazada | EstadoObra::Abandonada | EstadoObra::Cerrada
+                    )
+            })
             .collect();
         mis_obras.sort_by(|a, b| b.actualizado.cmp(&a.actualizado).then(b.id.cmp(&a.id)));
         let red = self.red_interna();
@@ -1596,7 +1604,7 @@ impl KonstruadoApp {
         let mid = self.mid();
         let mut obras: Vec<Obra> = self
             .nodo
-            .obras()
+            .obras_todas()
             .into_iter()
             .filter(|o| mid.is_empty() || o.participa(&mid))
             .collect();
@@ -1635,28 +1643,63 @@ impl KonstruadoApp {
         ))
     }
 
-    /// Sale de la obra solo en este equipo. No vacía la caja ni firma gasto. Avisa al peer si hay canal.
+    /// Archiva la obra solo en este equipo (oculta del tablero / Mis obras).
+    /// Conserva obra+share en disco. No vacía la caja ni firma gasto.
     pub fn salir_obra_local(&self, obra_id: String) -> Result<String, FfiError> {
+        self.archivar_obra_local(obra_id)
+    }
+
+    /// Archiva la obra conjunta solo aquí. No es «salir del trato» on-chain.
+    pub fn archivar_obra_local(&self, obra_id: String) -> Result<String, FfiError> {
         let obra = self.obra(&obra_id)?;
         let yo = self.yo()?;
         if !obra.participa(&yo.id) {
             return Err(fallo("Esta obra es de otras dos personas."));
         }
+        if matches!(
+            obra.estado,
+            EstadoObra::Abandonada | EstadoObra::Cerrada | EstadoObra::Rechazada
+        ) {
+            // Ya terminal: solo archivar/ocultar.
+        }
         let _e = self.rt.enter();
         for i in 0..obra.partidas.len() {
             self.caja.cancelar_fondeo(&obra.id, i);
         }
-        let peer = otro_de(&obra, &yo.id);
-        let _ = self
-            .nodo
-            .enviar_caja(&obra.id, &peer, &yo.id, "obra-salida", b"");
-        self.nodo.salir_obra_local(&obra.id);
+        // Por si la oferta original sigue en el tablero local.
+        self.nodo.quitar(&obra.id);
+        self.nodo.archivar_obra_local(&obra.id);
         drop(_e);
         self.persistir();
         Ok(
-            "Saliste de la obra en este equipo. No se movieron fondos. El otro puede seguir viéndola; si había caja, el share sigue en disco hasta que lo borres vos."
+            "Archivé la obra en este equipo. Ya no se ve en el tablero ni en Mis obras. No se movieron fondos; el share y el contexto quedan en disco."
                 .into(),
         )
+    }
+
+    /// Quita una oferta propia del tablero (sin contratista todavía).
+    pub fn quitar_mi_oferta(&self, oferta_id: String) -> Result<String, FfiError> {
+        let yo = self.yo()?;
+        let oferta = self
+            .nodo
+            .tablero()
+            .into_iter()
+            .find(|o| o.id == oferta_id)
+            .ok_or_else(|| fallo("Esa oferta ya no está en el tablero."))?;
+        if oferta.mandante.id != yo.id {
+            return Err(fallo("Solo podés quitar tus propias ofertas."));
+        }
+        let todas = self.nodo.obras_todas();
+        if !oferta_en_tablero(&oferta_id, &todas) {
+            return Err(fallo(
+                "Esa oferta ya tiene obra conjunta. Archivá la obra; no la quites como oferta.",
+            ));
+        }
+        let _e = self.rt.enter();
+        self.nodo.quitar(&oferta_id);
+        drop(_e);
+        self.persistir();
+        Ok("Quité la oferta del tablero.".into())
     }
 
     /// Cancela fondeo/propuesta de encierre de una partida solo en este equipo. No mueve fondos en cadena.

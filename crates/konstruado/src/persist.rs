@@ -24,7 +24,7 @@ pub struct EstadoDisco {
     /// Spend key of the stagenet hot wallet, hex. Never gossiped.
     #[serde(default)]
     pub spend_sec: String,
-    /// Obras de las que salí solo en este equipo (gossip no las vuelve a mostrar).
+    /// Obras archivadas solo en este equipo (ocultas del tablero; el almacén las conserva).
     #[serde(default)]
     pub obras_salidas: Vec<String>,
 }

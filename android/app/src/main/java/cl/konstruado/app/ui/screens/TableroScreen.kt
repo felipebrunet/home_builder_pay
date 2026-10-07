@@ -85,7 +85,12 @@ fun TableroScreen(nav: Nav, banner: Banner) {
     if (perfil.rol == "mandante") {
         Seccion("Mis ofertas publicadas")
         if (t.misOfertas.isEmpty()) Pista("Todavía no publicaste.")
-        t.misOfertas.forEach { o -> Fila(o.nombre, o.resumen) {} }
+        t.misOfertas.forEach { o ->
+            Fila(o.nombre, o.resumen) {}
+            Secundario("Quitar oferta") {
+                acciones.correr("Quité la oferta del tablero.") { app.quitarMiOferta(o.id) }
+            }
+        }
         Primario("Publicar obra") { nav.ir(Pantalla.Publicar) }
     }
     Seccion("Ofertas en la red")

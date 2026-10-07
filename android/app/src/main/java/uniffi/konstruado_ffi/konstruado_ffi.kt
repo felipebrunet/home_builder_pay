@@ -832,6 +832,10 @@ internal interface UniffiForeignFutureCompleteVoid : com.sun.jna.Callback {
 
 
 
+
+
+
+
 // For large crates we prevent `MethodTooLargeException` (see #2340)
 // N.B. the name of the extension is very misleading, since it is 
 // rather `InterfaceTooLargeException`, caused by too many methods 
@@ -860,6 +864,8 @@ fun uniffi_konstruado_ffi_checksum_method_konstruadoapp_aceptar_y_pagar(
 fun uniffi_konstruado_ffi_checksum_method_konstruadoapp_actualizar_saldo(
 ): Short
 fun uniffi_konstruado_ffi_checksum_method_konstruadoapp_agregar_destino(
+): Short
+fun uniffi_konstruado_ffi_checksum_method_konstruadoapp_archivar_obra_local(
 ): Short
 fun uniffi_konstruado_ffi_checksum_method_konstruadoapp_avisar_termino(
 ): Short
@@ -934,6 +940,8 @@ fun uniffi_konstruado_ffi_checksum_method_konstruadoapp_proponer_extra(
 fun uniffi_konstruado_ffi_checksum_method_konstruadoapp_publicar_oferta(
 ): Short
 fun uniffi_konstruado_ffi_checksum_method_konstruadoapp_quitar_destino(
+): Short
+fun uniffi_konstruado_ffi_checksum_method_konstruadoapp_quitar_mi_oferta(
 ): Short
 fun uniffi_konstruado_ffi_checksum_method_konstruadoapp_rechazar_cierre(
 ): Short
@@ -1034,6 +1042,8 @@ fun uniffi_konstruado_ffi_fn_method_konstruadoapp_actualizar_saldo(`ptr`: Pointe
 ): Unit
 fun uniffi_konstruado_ffi_fn_method_konstruadoapp_agregar_destino(`ptr`: Pointer,`destino`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): Unit
+fun uniffi_konstruado_ffi_fn_method_konstruadoapp_archivar_obra_local(`ptr`: Pointer,`obraId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+): RustBuffer.ByValue
 fun uniffi_konstruado_ffi_fn_method_konstruadoapp_avisar_termino(`ptr`: Pointer,`obraId`: RustBuffer.ByValue,`indice`: Int,`pct`: RustBuffer.ByValue,`nota`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): Unit
 fun uniffi_konstruado_ffi_fn_method_konstruadoapp_billetera(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
@@ -1108,6 +1118,8 @@ fun uniffi_konstruado_ffi_fn_method_konstruadoapp_publicar_oferta(`ptr`: Pointer
 ): RustBuffer.ByValue
 fun uniffi_konstruado_ffi_fn_method_konstruadoapp_quitar_destino(`ptr`: Pointer,`destino`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): Unit
+fun uniffi_konstruado_ffi_fn_method_konstruadoapp_quitar_mi_oferta(`ptr`: Pointer,`ofertaId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+): RustBuffer.ByValue
 fun uniffi_konstruado_ffi_fn_method_konstruadoapp_rechazar_cierre(`ptr`: Pointer,`obraId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): Unit
 fun uniffi_konstruado_ffi_fn_method_konstruadoapp_rechazar_contra(`ptr`: Pointer,`obraId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
@@ -1283,6 +1295,9 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if (lib.uniffi_konstruado_ffi_checksum_method_konstruadoapp_agregar_destino() != 7068.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if (lib.uniffi_konstruado_ffi_checksum_method_konstruadoapp_archivar_obra_local() != 17866.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if (lib.uniffi_konstruado_ffi_checksum_method_konstruadoapp_avisar_termino() != 9308.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
@@ -1394,6 +1409,9 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if (lib.uniffi_konstruado_ffi_checksum_method_konstruadoapp_quitar_destino() != 6074.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if (lib.uniffi_konstruado_ffi_checksum_method_konstruadoapp_quitar_mi_oferta() != 8670.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if (lib.uniffi_konstruado_ffi_checksum_method_konstruadoapp_rechazar_cierre() != 30182.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
@@ -1415,7 +1433,7 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if (lib.uniffi_konstruado_ffi_checksum_method_konstruadoapp_restaurar_share() != 62601.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_konstruado_ffi_checksum_method_konstruadoapp_salir_obra_local() != 49935.toShort()) {
+    if (lib.uniffi_konstruado_ffi_checksum_method_konstruadoapp_salir_obra_local() != 50242.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_konstruado_ffi_checksum_method_konstruadoapp_salir_partida_local() != 60321.toShort()) {
@@ -1856,6 +1874,11 @@ public interface KonstruadoAppInterface {
     
     fun `agregarDestino`(`destino`: kotlin.String)
     
+    /**
+     * Archiva la obra conjunta solo aquí. No es «salir del trato» on-chain.
+     */
+    fun `archivarObraLocal`(`obraId`: kotlin.String): kotlin.String
+    
     fun `avisarTermino`(`obraId`: kotlin.String, `indice`: kotlin.UInt, `pct`: kotlin.String, `nota`: kotlin.String)
     
     fun `billetera`(): BilleteraVista
@@ -1976,6 +1999,11 @@ public interface KonstruadoAppInterface {
     
     fun `quitarDestino`(`destino`: kotlin.String)
     
+    /**
+     * Quita una oferta propia del tablero (sin contratista todavía).
+     */
+    fun `quitarMiOferta`(`ofertaId`: kotlin.String): kotlin.String
+    
     fun `rechazarCierre`(`obraId`: kotlin.String)
     
     /**
@@ -1994,7 +2022,8 @@ public interface KonstruadoAppInterface {
     fun `restaurarShare`(`texto`: kotlin.String): kotlin.String
     
     /**
-     * Sale de la obra solo en este equipo. No vacía la caja ni firma gasto. Avisa al peer si hay canal.
+     * Archiva la obra solo en este equipo (oculta del tablero / Mis obras).
+     * Conserva obra+share en disco. No vacía la caja ni firma gasto.
      */
     fun `salirObraLocal`(`obraId`: kotlin.String): kotlin.String
     
@@ -2199,6 +2228,22 @@ open class KonstruadoApp: Disposable, AutoCloseable, KonstruadoAppInterface
 }
     }
     
+    
+
+    
+    /**
+     * Archiva la obra conjunta solo aquí. No es «salir del trato» on-chain.
+     */
+    @Throws(FfiException::class)override fun `archivarObraLocal`(`obraId`: kotlin.String): kotlin.String {
+            return FfiConverterString.lift(
+    callWithPointer {
+    uniffiRustCallWithError(FfiException) { _status ->
+    UniffiLib.INSTANCE.uniffi_konstruado_ffi_fn_method_konstruadoapp_archivar_obra_local(
+        it, FfiConverterString.lower(`obraId`),_status)
+}
+    }
+    )
+    }
     
 
     
@@ -2699,6 +2744,22 @@ open class KonstruadoApp: Disposable, AutoCloseable, KonstruadoAppInterface
     
 
     
+    /**
+     * Quita una oferta propia del tablero (sin contratista todavía).
+     */
+    @Throws(FfiException::class)override fun `quitarMiOferta`(`ofertaId`: kotlin.String): kotlin.String {
+            return FfiConverterString.lift(
+    callWithPointer {
+    uniffiRustCallWithError(FfiException) { _status ->
+    UniffiLib.INSTANCE.uniffi_konstruado_ffi_fn_method_konstruadoapp_quitar_mi_oferta(
+        it, FfiConverterString.lower(`ofertaId`),_status)
+}
+    }
+    )
+    }
+    
+
+    
     @Throws(FfiException::class)override fun `rechazarCierre`(`obraId`: kotlin.String)
         = 
     callWithPointer {
@@ -2789,7 +2850,8 @@ open class KonstruadoApp: Disposable, AutoCloseable, KonstruadoAppInterface
 
     
     /**
-     * Sale de la obra solo en este equipo. No vacía la caja ni firma gasto. Avisa al peer si hay canal.
+     * Archiva la obra solo en este equipo (oculta del tablero / Mis obras).
+     * Conserva obra+share en disco. No vacía la caja ni firma gasto.
      */
     @Throws(FfiException::class)override fun `salirObraLocal`(`obraId`: kotlin.String): kotlin.String {
             return FfiConverterString.lift(

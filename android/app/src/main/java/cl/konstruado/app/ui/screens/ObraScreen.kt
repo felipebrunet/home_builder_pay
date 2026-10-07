@@ -132,16 +132,30 @@ fun ObraScreen(id: String, nav: Nav, banner: Banner) {
                 Secundario("Abandonar esta obra") { confirmaAbandono = true }
             }
             if (confirmaSalidaLocal) {
-                Pista("¿Salir solo en este equipo? No mueve fondos ni firma por el otro. El otro puede seguir viendo la obra.")
-                Primario("Sí, salir solo aquí") {
+                Pista("¿Archivar en este equipo? Sale del tablero y de Mis obras. No mueve fondos; el share queda en disco.")
+                Primario("Sí, archivar aquí") {
                     acciones.correr(
-                        "Saliste de la obra en este equipo. Fondos intactos.",
+                        "Archivé la obra en este equipo. Fondos intactos.",
                         alTerminar = { confirmaSalidaLocal = false; nav.raiz(Pantalla.Tablero) },
-                    ) { app.salirObraLocal(id) }
+                    ) { app.archivarObraLocal(id) }
                 }
                 Secundario("No") { confirmaSalidaLocal = false }
             } else {
-                Secundario("Salir de esta obra (solo este equipo)") { confirmaSalidaLocal = true }
+                Secundario("Archivar esta obra") { confirmaSalidaLocal = true }
+            }
+        }
+        o.abandonada -> {
+            if (confirmaSalidaLocal) {
+                Pista("¿Archivar? Sale de Mis obras en este equipo. El contexto queda en disco.")
+                Primario("Sí, archivar") {
+                    acciones.correr(
+                        "Archivé la obra.",
+                        alTerminar = { confirmaSalidaLocal = false; nav.raiz(Pantalla.Tablero) },
+                    ) { app.archivarObraLocal(id) }
+                }
+                Secundario("No") { confirmaSalidaLocal = false }
+            } else {
+                Secundario("Archivar esta obra") { confirmaSalidaLocal = true }
             }
         }
     }

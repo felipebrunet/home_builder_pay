@@ -84,7 +84,7 @@ fn persistir(
         yo,
         rol,
         ofertas: n.tablero(),
-        obras: n.obras(),
+        obras: n.obras_todas(),
         presentes: n.presentes(),
         tema,
         idioma,
@@ -272,7 +272,7 @@ fn App() -> Element {
     let mid = yo().map(|p| p.id).unwrap_or_default();
     let mut mis_obras: Vec<Obra> = obras()
         .into_iter()
-        .filter(|o| o.estado != EstadoObra::Rechazada)
+        .filter(|o| obra_en_lista_activa(o.estado))
         .filter(|o| o.participa(&mid))
         .collect();
     mis_obras.sort_by(|a, b| b.actualizado.cmp(&a.actualizado).then(b.id.cmp(&a.id)));
@@ -397,6 +397,14 @@ fn obra_en_curso(e: EstadoObra) -> bool {
     matches!(
         e,
         EstadoObra::Contra | EstadoObra::Acordada | EstadoObra::EnMarcha
+    )
+}
+
+/// Mis obras / tablero activos: no terminales ni archivadas (archivadas ya salen de `obras()`).
+fn obra_en_lista_activa(e: EstadoObra) -> bool {
+    !matches!(
+        e,
+        EstadoObra::Rechazada | EstadoObra::Abandonada | EstadoObra::Cerrada
     )
 }
 
@@ -1323,7 +1331,11 @@ fn Tablero(
     let sec = use_context::<Signal<ClaveSec>>()().0;
     let mut buscando = use_signal(|| false);
     let mid = yo().map(|p| p.id).unwrap_or_default();
-    let todas = obras();
+    // Incluye archivadas para que no reaparezca la oferta al archivar la obra.
+    let todas = red()
+        .as_ref()
+        .map(|n| n.obras_todas())
+        .unwrap_or_else(|| obras());
     let mut mias: Vec<Oferta> = ofertas()
         .into_iter()
         .filter(|o| o.mandante.id == mid && oferta_en_tablero(&o.id, &todas))
@@ -1334,10 +1346,9 @@ fn Tablero(
         .filter(|o| o.mandante.id != mid && oferta_en_tablero(&o.id, &todas))
         .collect();
     ajenas.sort_by(|a, b| b.actualizado.cmp(&a.actualizado).then(b.id.cmp(&a.id)));
-    let mut mis_obras: Vec<Obra> = todas
-        .iter()
-        .cloned()
-        .filter(|o| o.estado != EstadoObra::Rechazada)
+    let mut mis_obras: Vec<Obra> = obras()
+        .into_iter()
+        .filter(|o| obra_en_lista_activa(o.estado))
         .filter(|o| o.participa(&mid))
         .collect();
     mis_obras.sort_by(|a, b| b.actualizado.cmp(&a.actualizado).then(b.id.cmp(&a.id)));
@@ -1435,6 +1446,18 @@ fn Tablero(
                             }
                             if let Some(r) = resumen_detalles(&o.detalles) {
                                 p { class: "meta", "{r}" }
+                            }
+                            button {
+                                class: "btn btn-ghost",
+                                onclick: {
+                                    let oid = o.id.clone();
+                                    move |_| {
+                                        let Some(nodo) = red() else { return };
+                                        nodo.quitar(&oid);
+                                        ofertas.set(nodo.tablero());
+                                    }
+                                },
+                                {lang.t("Quitar oferta", "Remove offer")}
                             }
                         }
                     }
@@ -2347,8 +2370,8 @@ fn Detalle(
                 if confirma_salida_local() {
                     p { class: "hint",
                         {lang.t(
-                            "¿Salir solo en este equipo? No mueve fondos ni firma por el otro. El otro puede seguir viendo la obra. Si había caja, el share queda en disco.",
-                            "Leave only on this device? Funds are not moved and nothing is signed for the other side. They can still see the job. If there was a box, the share stays on disk.",
+                            "¿Archivar en este equipo? Sale del tablero y de Mis obras. No mueve fondos ni corta el trato del otro. El share y el contexto quedan en disco.",
+                            "Archive on this device? It leaves the board and My jobs. Funds are not moved and the other side is not cut off. Share and context stay on disk.",
                         )}
                     }
                     button {
@@ -2357,25 +2380,19 @@ fn Detalle(
                             let obra = obra.clone();
                             let caja = caja.clone();
                             move |_| {
-                                let Some(quien) = yo() else { return };
                                 let Some(nodo) = red() else { return };
                                 for i in 0..obra.partidas.len() {
                                     caja.cancelar_fondeo(&obra.id, i);
                                 }
-                                let peer = if obra.mandante.id == quien.id {
-                                    obra.contratista.id.clone()
-                                } else {
-                                    obra.mandante.id.clone()
-                                };
-                                let _ = nodo.enviar_caja(&obra.id, &peer, &quien.id, "obra-salida", b"");
-                                nodo.salir_obra_local(&obra.id);
+                                nodo.quitar(&obra.id);
+                                nodo.archivar_obra_local(&obra.id);
                                 obras.set(nodo.obras());
                                 confirma_salida_local.set(false);
                                 err.set(None);
                                 screen.set(Screen::Tablero);
                             }
                         },
-                        {lang.t("Sí, salir solo aquí", "Yes, leave only here")}
+                        {lang.t("Sí, archivar aquí", "Yes, archive here")}
                     }
                     button {
                         class: "btn btn-ghost",
@@ -2386,7 +2403,7 @@ fn Detalle(
                     button {
                         class: "btn btn-ghost",
                         onclick: move |_| confirma_salida_local.set(true),
-                        {lang.t("Salir de esta obra (solo este equipo)", "Leave this job (this device only)")}
+                        {lang.t("Archivar esta obra", "Archive this job")}
                     }
                 }
             }
