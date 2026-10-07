@@ -31,3 +31,11 @@ artifacts-*/
 **/*view_private*
 **/*shared_view*
 *.raw
+
+# Android spike (local)
+android/.gradle/
+android/local.properties
+android/**/build/
+android/app/src/main/jniLibs/**/*.so
+android/captures/
+*.apk
