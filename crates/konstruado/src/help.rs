@@ -147,7 +147,7 @@ mod tests {
         // Version comes from [workspace.package]; HELP.md must not hardcode it.
         assert!(!VERSION.is_empty() && !VERSION.ends_with("-dev"));
         assert!(!README.contains(VERSION));
-        assert!(REPO.contains("felipebrunet/home_builder_pay"));
+        assert!(REPO.contains("felipebrunet/konstruado"));
         assert!(README.contains("Not a chat"));
         assert!(README.contains("ES / EN"));
         assert!(!README.contains("cargo run"));

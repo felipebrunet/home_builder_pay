@@ -1,7 +1,7 @@
 # Vendored from https://github.com/kayabaNerve/monero-wallet-util
 # commit 797fe701a6f9e99ae614c49479bb981de1afe8ec (branch develop).
 # crates.io 0.0.1 is an empty placeholder. std-shims comes from crates.io,
-# not the serai git pin, so this tree builds inside home_builder_pay.
+# not the serai git pin, so this tree builds inside the konstruado workspace.
 
 [package]
 name = "monero-seed"

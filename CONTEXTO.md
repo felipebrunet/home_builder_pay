@@ -63,7 +63,7 @@ git pull
 cargo run
 ```
 
-Clone del notebook: `git clone git@github.com-hbp:felipebrunet/home_builder_pay.git` (alias SSH `hbp_deploy`). En el notebook hay que tener GTK/WebKit/`libxdo-dev`/`tor`.
+Clone del notebook: `git clone git@github.com-hbp:felipebrunet/konstruado.git` (alias SSH `hbp_deploy`). En el notebook hay que tener GTK/WebKit/`libxdo-dev`/`tor`.
 
 Primero mandante (esperar `sala abierta`). Después contratista. La primera vez Tor puede tardar en bootstrap. En la otra máquina se crea una semilla nueva (Cuenta o Billetera). No se copia `xmr/semilla.txt`.
 

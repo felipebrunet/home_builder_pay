@@ -15,4 +15,4 @@ Do not put wallet seeds or multisig shares in this tree.
 
 The package manifests no longer say `[lints] workspace = true`. Nested
 workspaces are ignored when this tree is a path dependency of
-home_builder_pay, and that workspace does not define the oxide lints.
+the konstruado workspace, and that workspace does not define the oxide lints.

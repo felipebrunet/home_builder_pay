@@ -87,13 +87,13 @@ Window 1: José, **Pago la obra**, Publicar. Window 2: Juan, **La construyo** �
 cd android && ./build-apk.sh
 ```
 
-APKs are **not** stored in git (`*.apk` is ignored). Published builds go on [Releases](https://github.com/felipebrunet/home_builder_pay/releases).
+APKs are **not** stored in git (`*.apk` is ignored). Published builds go on [Releases](https://github.com/felipebrunet/konstruado/releases).
 
 ## Version and releases
 
 The version lives once, in `[workspace.package] version` of the root `Cargo.toml`. The desktop window title and **Help → About**, `konstruado-ffi` (Android About) and the APK `versionName` all read it. Bump it there, then tag `vX.Y.Z`.
 
-Each release on [Releases](https://github.com/felipebrunet/home_builder_pay/releases) carries two assets: `konstruado-X.Y.Z-android-arm64-debug.apk` and `konstruado-X.Y.Z-linux-x86_64`.
+Each release on [Releases](https://github.com/felipebrunet/konstruado/releases) carries two assets: `konstruado-X.Y.Z-android-arm64-debug.apk` and `konstruado-X.Y.Z-linux-x86_64`.
 
 ## Linux binary (not production)
 
