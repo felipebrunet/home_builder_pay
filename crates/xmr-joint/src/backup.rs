@@ -14,9 +14,15 @@ const SEED_MAGIC: &str = "konstruado single-sig v1";
 const SHARE_MAGIC: &str = "konstruado multisig-share v1";
 
 /// 25 palabras y la dirección, para comprobar al restaurar.
+///
+/// `height` es la altura de cadena al crear/exportar el respaldo. Al restaurar,
+/// el scan parte de ahí hacia adelante. `None` = respaldo viejo sin altura
+/// (fallback: ventana reciente + aviso de mirar más atrás).
 pub struct SeedBackup {
     pub net: Net,
     pub address: String,
+    /// Altura del tip al respaldar. Opcional por compatibilidad con v1 sin campo.
+    pub height: Option<u64>,
     pub words: Zeroizing<String>,
 }
 
@@ -29,12 +35,17 @@ impl Drop for SeedBackup {
 
 impl SeedBackup {
     pub fn to_text(&self) -> String {
-        format!(
-            "{SEED_MAGIC}\nnetwork {}\naddress {}\nlanguage english\n{}\n",
+        let mut out = format!(
+            "{SEED_MAGIC}\nnetwork {}\naddress {}\nlanguage english\n",
             self.net.label(),
             self.address,
-            self.words.as_str()
-        )
+        );
+        if let Some(h) = self.height {
+            out.push_str(&format!("height {h}\n"));
+        }
+        out.push_str(self.words.as_str());
+        out.push('\n');
+        out
     }
 
     pub fn parse(text: &str) -> Result<Self> {
@@ -49,13 +60,25 @@ impl SeedBackup {
         if language != "english" {
             return Err(Error::Backup("solo inglés en este esqueleto".into()));
         }
-        let words = lines.next().unwrap_or("").trim().to_string();
+        // Opcional: `height N` (respaldos nuevos). Si falta, es un v1 viejo.
+        let next = lines.next().unwrap_or("").trim();
+        let (height, words) = if let Some(rest) = next.strip_prefix("height ") {
+            let h = rest
+                .trim()
+                .parse::<u64>()
+                .map_err(|_| Error::Backup("altura de semilla inválida".into()))?;
+            let w = lines.next().unwrap_or("").trim().to_string();
+            (Some(h), w)
+        } else {
+            (None, next.to_string())
+        };
         if words.split_whitespace().count() != 25 {
             return Err(Error::Backup("la semilla tiene que tener 25 palabras".into()));
         }
         Ok(Self {
             net: Net::parse(&net).map_err(Error::Backup)?,
             address,
+            height,
             words: Zeroizing::new(words),
         })
     }
@@ -182,12 +205,22 @@ mod tests {
         let seed = SeedBackup {
             net: Net::Stagenet,
             address: "5abc".into(),
+            height: Some(1_234_567),
             words: Zeroizing::new(words.into()),
         };
         let parsed = SeedBackup::parse(&seed.to_text()).unwrap();
         assert_eq!(parsed.net, Net::Stagenet);
         assert_eq!(parsed.address, "5abc");
+        assert_eq!(parsed.height, Some(1_234_567));
         assert_eq!(parsed.words.as_str(), words);
+
+        // Respaldo viejo sin height: las palabras vienen justo después de language.
+        let viejo = format!(
+            "{SEED_MAGIC}\nnetwork stagenet\naddress 5abc\nlanguage english\n{words}\n"
+        );
+        let p2 = SeedBackup::parse(&viejo).unwrap();
+        assert_eq!(p2.height, None);
+        assert_eq!(p2.words.as_str(), words);
     }
 
     #[test]

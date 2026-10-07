@@ -52,7 +52,8 @@ pub fn a_piconero(unidades: u64) -> Option<u64> {
 pub fn fmt_xmr(pico: u64) -> String {
     let whole = pico / PICONERO;
     let mut frac = format!("{:012}", pico % PICONERO);
-    while frac.len() > 2 && frac.ends_with('0') {
+    // Mostrar al menos 4 decimales (piconero/1e12); recortar ceros solo después de eso.
+    while frac.len() > 4 && frac.ends_with('0') {
         frac.pop();
     }
     format!("{whole}.{frac}")
@@ -783,6 +784,22 @@ pub fn aviso_humano(aviso: &str, es: bool) -> String {
             "El otro reinició el fondeo. Cuando toque, confirmá o pedí de nuevo con anillos frescos.",
             "The other side restarted funding. When it is your turn, confirm or request again with fresh rings.",
         ),
+        "par-salio-obra" | "codigo:par-salio-obra" => (
+            "El otro salió de esta obra en su equipo. No mueve fondos; la caja 2-de-2 sigue si hay share.",
+            "The other side left this job on their device. Funds are not moved; the 2-of-2 box stays if shares remain.",
+        ),
+        "par-salio-partida" | "codigo:par-salio-partida" => (
+            "El otro canceló el fondeo o la propuesta de esta partida en su equipo. Los fondos en cadena no se tocan.",
+            "The other side cancelled funding or the proposal for this stage on their device. On-chain funds are untouched.",
+        ),
+        "semilla-sin-altura" | "codigo:semilla-sin-altura" => (
+            "Ese respaldo de semilla no trae altura de bloque (archivo viejo). El scan arranca en la ventana reciente; si el faucet es más viejo, pedí mirar más atrás.",
+            "That seed backup has no block height (old file). Scan starts at the recent window; if the faucet is older, ask to look further back.",
+        ),
+        s if s.starts_with("codigo:podar-gastadas:") || s.starts_with("podar-gastadas:") => (
+            "No pude comprobar qué salidas ya se gastaron en el nodo. Tocá Actualizar saldo; si sigue, probá otro daemon (is_key_image_spent).",
+            "Could not check which outputs are spent on the node. Tap Refresh balance; if it persists, try another daemon (is_key_image_spent).",
+        ),
         "esa partida no está en fondeo" => (
             "Esa partida no está en fondeo.",
             "That stage is not in funding.",
@@ -813,8 +830,12 @@ pub fn aviso_humano(aviso: &str, es: bool) -> String {
 pub fn listo_humano(code: &str, es: bool) -> String {
     let (esp, ing) = match code {
         "codigo:semilla-nueva" => (
-            "Recuperé la billetera personal. La caja de la obra no está en esas palabras: hace falta el share.",
-            "Restored the personal wallet. Those words do not hold the job's box: the share is still required.",
+            "Recuperé la billetera personal. El scan parte de la altura guardada en el respaldo. La caja de la obra no está en esas palabras: hace falta el share.",
+            "Restored the personal wallet. Scan starts at the height stored in the backup. Those words do not hold the job's box: the share is still required.",
+        ),
+        "codigo:semilla-nueva-sin-altura" => (
+            "Recuperé la billetera (respaldo sin altura). El scan usa la ventana reciente; si el faucet es viejo, pedí mirar más atrás. La caja pide el share aparte.",
+            "Restored the wallet (backup without height). Scan uses the recent window; if the faucet is old, look further back. The box still needs the share.",
         ),
         "codigo:semilla-igual" => (
             "Esas palabras ya son las de esta billetera.",
@@ -1117,6 +1138,7 @@ struct Motor {
     pedir_view: HashSet<String>,
     tip: Option<usize>,
     tip_en: Option<Instant>,
+    podar_en: Option<Instant>,
     vista: CajaVista,
     ocupado: Option<Pendiente>,
     generacion: u64,
@@ -1277,6 +1299,8 @@ enum Listo {
         entradas: Vec<EntradaNueva>,
         /// Salidas del libro que el daemon marca como gastadas (key image).
         podar: Vec<(String, u64)>,
+        /// Si el daemon no pudo decir cuáles están gastadas (RPC/ruta).
+        podar_err: Option<String>,
     },
     CajaScan {
         obra: String,
@@ -1307,6 +1331,7 @@ impl Motor {
             pedir_view: HashSet::new(),
             tip: None,
             tip_en: None,
+            podar_en: None,
             vista: CajaVista::vacia(),
             ocupado: None,
             generacion: 0,
@@ -1344,6 +1369,7 @@ impl Motor {
         let backup = SeedBackup {
             net: Net::Stagenet,
             address: wallet.address().to_string(),
+            height: self.tip.map(|t| t as u64),
             words,
         };
         backup::write_secret_file(&semilla_path(), &backup.to_text()).map_err(|e| e.to_string())?;
@@ -1398,8 +1424,16 @@ impl Motor {
 
     fn exportar_semilla(&self, path: &Path) -> Result<(), String> {
         let text = backup::read_secret_file(&semilla_path()).map_err(|e| e.to_string())?;
-        let parsed = SeedBackup::parse(&text).map_err(|e| e.to_string())?;
-        backup::write_secret_file(path, &parsed.to_text()).map_err(|e| e.to_string())
+        let mut parsed = SeedBackup::parse(&text).map_err(|e| e.to_string())?;
+        // Al exportar, grabamos la punta actual para que el restore no arranque desde génesis.
+        if let Some(tip) = self.tip {
+            parsed.height = Some(tip as u64);
+        }
+        let body = parsed.to_text();
+        // Actualiza también el archivo interno, así el height no se pierde.
+        let _ = std::fs::remove_file(semilla_path());
+        let _ = backup::write_secret_file(&semilla_path(), &body);
+        backup::write_secret_file(path, &body).map_err(|e| e.to_string())
     }
 
     fn pedir_fondeo(&mut self, obra: &Obra, partida: usize, yo: &Persona) -> Result<(), String> {
@@ -1695,6 +1729,19 @@ impl Motor {
                             &m.obra,
                             Some(i),
                             Texto::Falla("fondeo-abortado-par".into()),
+                        );
+                    }
+                }
+                "obra-salida" => {
+                    self.nota(&m.obra, None, Texto::Falla("par-salio-obra".into()));
+                }
+                "partida-salida" => {
+                    if let Ok(i) = parse_idx(&m.cuerpo) {
+                        self.limpiar_sesion_fondeo(&m.obra, i, false);
+                        self.nota(
+                            &m.obra,
+                            Some(i),
+                            Texto::Falla("par-salio-partida".into()),
                         );
                     }
                 }
@@ -2541,6 +2588,12 @@ impl Motor {
         let Some(tip) = self.tip else {
             return;
         };
+        // Si el respaldo traía una altura mayor al tip actual, no miramos el futuro.
+        if self.libro.listo && self.libro.desde > tip {
+            self.libro.desde = tip;
+            self.libro.hasta = tip.saturating_sub(1);
+            self.guardar_libro();
+        }
         if !self.libro.listo {
             let desde = tip.saturating_sub(LOOKBACK);
             self.libro.desde = desde;
@@ -2568,6 +2621,17 @@ impl Motor {
             let hasta = self.libro.desde - 1;
             let desde = hasta + 1 - n;
             self.spawn_saldo(view, desde, hasta, true);
+            return;
+        }
+        let _ = view;
+        // Al día: podar salidas gastadas. Tras restaurar seed el scan las revive
+        // y sin esta pasada el saldo (p.ej. en Android) se infla.
+        let hace = self
+            .podar_en
+            .map(|t| t.elapsed())
+            .unwrap_or(Duration::from_secs(9_999));
+        if !self.libro.entradas.is_empty() && hace >= Duration::from_secs(20) {
+            self.spawn_podar_gastadas();
         }
     }
 
@@ -2596,7 +2660,10 @@ impl Motor {
                             });
                         }
                         let tip = chain::tip(&rpc).await.unwrap_or(hasta);
-                        let podar = podar_gastadas_en_cadena(&rpc, spend.as_ref(), &crudas).await;
+                        let (podar, podar_err) = match podar_gastadas_en_cadena(&rpc, spend.as_ref(), &crudas).await {
+                            Ok(p) => (p, None),
+                            Err(e) => (Vec::new(), Some(e)),
+                        };
                         Listo::Saldo {
                             desde,
                             hasta,
@@ -2604,10 +2671,56 @@ impl Motor {
                             retro,
                             entradas,
                             podar,
+                            podar_err,
                         }
                     }
                     Err(e) => Listo::Aviso(e.to_string()),
                 },
+                Err(e) => Listo::Aviso(e.to_string()),
+            };
+            *celda.lock().unwrap() = Some(listo);
+        });
+    }
+
+    fn spawn_podar_gastadas(&mut self) {
+        if self.ocupado.is_some() || self.wallet.is_none() || self.libro.entradas.is_empty() {
+            return;
+        }
+        self.podar_en = Some(Instant::now());
+        let spend = self.wallet.as_ref().map(|w| w.spend_key().clone());
+        let crudas: Vec<(String, u64, Vec<u8>)> = self
+            .libro
+            .entradas
+            .iter()
+            .map(|e| (e.tx.clone(), e.indice, e.raw.clone()))
+            .collect();
+        let tip0 = self.tip.unwrap_or(0);
+        let celda = self.ocupar();
+        tokio::spawn(async move {
+            let listo = match chain::connect(&daemon_url()).await {
+                Ok(rpc) => {
+                    let tip = chain::tip(&rpc).await.unwrap_or(tip0);
+                    match podar_gastadas_en_cadena(&rpc, spend.as_ref(), &crudas).await {
+                        Ok(podar) => Listo::Saldo {
+                            desde: tip,
+                            hasta: tip,
+                            tip,
+                            retro: false,
+                            entradas: Vec::new(),
+                            podar,
+                            podar_err: None,
+                        },
+                        Err(e) => Listo::Saldo {
+                            desde: tip,
+                            hasta: tip,
+                            tip,
+                            retro: false,
+                            entradas: Vec::new(),
+                            podar: Vec::new(),
+                            podar_err: Some(e),
+                        },
+                    }
+                }
                 Err(e) => Listo::Aviso(e.to_string()),
             };
             *celda.lock().unwrap() = Some(listo);
@@ -2932,20 +3045,33 @@ impl Motor {
                 retro,
                 entradas,
                 podar,
+                podar_err,
             } => {
                 self.buscando = false;
                 self.scan_pausa = None;
-                self.scan_aviso = None;
                 self.tip = Some(tip);
+                let hubo_scan = !entradas.is_empty() || desde != hasta || retro;
                 self.fundir_entradas(entradas);
                 if !podar.is_empty() {
                     self.libro.marcar_gastadas(&podar);
+                    self.podar_en = Some(Instant::now());
+                }
+                if let Some(e) = podar_err {
+                    self.scan_aviso = Some(format!("codigo:podar-gastadas:{e}"));
+                } else if self
+                    .scan_aviso
+                    .as_deref()
+                    .is_some_and(|a| a.starts_with("codigo:podar-gastadas:"))
+                {
+                    self.scan_aviso = None;
+                } else if hubo_scan {
+                    self.scan_aviso = None;
                 }
                 if retro {
                     self.libro.desde = desde;
                     let n = hasta.saturating_sub(desde).saturating_add(1);
                     self.retro = self.retro.saturating_sub(n);
-                } else {
+                } else if hubo_scan {
                     self.libro.hasta = hasta;
                 }
                 self.guardar_libro();
@@ -4007,6 +4133,7 @@ impl Motor {
 
     fn restaurar_semilla(&mut self, path: &Path) -> Result<&'static str, String> {
         let text = backup::read_secret_file(path).map_err(|_| "codigo:semilla-archivo".to_string())?;
+        let altura = SeedBackup::parse(&text).ok().and_then(|b| b.height);
         let actual = self.wallet.as_ref().map(|w| w.address().to_string());
         let (addr, igual) = restaurar_semilla_en(&xmr_dir(), &text, actual.as_deref())?;
         if igual {
@@ -4020,19 +4147,33 @@ impl Motor {
             return Err("codigo:semilla-archivo".into());
         }
         if self.libro.direccion != addr {
-            self.libro = Libro::nueva(&addr);
+            self.libro = match altura {
+                Some(h) => Libro::desde_altura(&addr, h as usize),
+                None => Libro::nueva(&addr),
+            };
             self.retro = 0;
             self.forzar = false;
             self.buscando = false;
-            self.scan_aviso = None;
+            self.scan_aviso = if altura.is_none() {
+                Some("codigo:semilla-sin-altura".into())
+            } else {
+                None
+            };
             self.scan_pausa = None;
             self.envio_aviso = None;
             self.ultimo_envio = None;
             self.ultimo_fee = None;
             self.ultimo_cambio = None;
             self.guardar_libro();
+            // Que el próximo tick pode key images (salidas gastadas del respaldo).
+            self.podar_en = None;
+            self.forzar = true;
         }
-        Ok("codigo:semilla-nueva")
+        Ok(if altura.is_some() {
+            "codigo:semilla-nueva"
+        } else {
+            "codigo:semilla-nueva-sin-altura"
+        })
     }
 
     fn restaurar_share(&mut self, path: &Path, yo: &Persona, obras: &[Obra]) -> Result<&'static str, String> {
@@ -4555,12 +4696,12 @@ async fn podar_gastadas_en_cadena(
     rpc: &xmr_joint::chain::Daemon,
     spend: Option<&xmr_joint::LlaveGasto>,
     crudas: &[(String, u64, Vec<u8>)],
-) -> Vec<(String, u64)> {
+) -> Result<Vec<(String, u64)>, String> {
     let Some(spend) = spend else {
-        return Vec::new();
+        return Ok(Vec::new());
     };
     if crudas.is_empty() {
-        return Vec::new();
+        return Ok(Vec::new());
     }
     let mut images = Vec::with_capacity(crudas.len());
     let mut refs = Vec::with_capacity(crudas.len());
@@ -4572,16 +4713,16 @@ async fn podar_gastadas_en_cadena(
         refs.push((tx.clone(), *indice));
     }
     if images.is_empty() {
-        return Vec::new();
+        return Ok(Vec::new());
     }
-    match xmr_joint::chain::key_images_spent(rpc, &images).await {
-        Ok(flags) => refs
-            .into_iter()
-            .zip(flags)
-            .filter_map(|((tx, i), gastada)| gastada.then_some((tx, i)))
-            .collect(),
-        Err(_) => Vec::new(),
-    }
+    let flags = xmr_joint::chain::key_images_spent(rpc, &images)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(refs
+        .into_iter()
+        .zip(flags)
+        .filter_map(|((tx, i), gastada)| gastada.then_some((tx, i)))
+        .collect())
 }
 
 /// Índice de la salida libre más chica que cubre `minimo`. `entradas` es (monto, altura).
@@ -4782,6 +4923,18 @@ impl Libro {
             desde: 0,
             hasta: 0,
             listo: false,
+            entradas: Vec::new(),
+            gastadas: Vec::new(),
+        }
+    }
+
+    /// Arranca el scan en `altura` (inclusive) hacia la punta. No desde génesis.
+    fn desde_altura(direccion: &str, altura: usize) -> Self {
+        Self {
+            direccion: direccion.to_string(),
+            desde: altura,
+            hasta: altura.saturating_sub(1),
+            listo: true,
             entradas: Vec::new(),
             gastadas: Vec::new(),
         }
@@ -5127,16 +5280,16 @@ mod tests {
         assert!(!motor_libro.ya_gastada("bb", 0));
         let total: u64 = motor_libro.entradas.iter().map(|e| e.monto).sum();
         assert_eq!(total, 495_000_000_000);
-        assert_eq!(fmt_xmr(total), "0.495");
+        assert_eq!(fmt_xmr(total), "0.4950");
     }
 
     #[test]
     fn dos_mil_son_cero_cero_cuatro_xmr() {
         let pico = a_piconero(2_000).unwrap();
         assert_eq!(pico, 40_000_000_000);
-        assert_eq!(fmt_xmr(pico), "0.04");
+        assert_eq!(fmt_xmr(pico), "0.0400");
         assert!(a_piconero(u64::MAX).is_none());
-        assert_eq!(maximo_envio(pico).as_deref(), Some("0.039"));
+        assert_eq!(maximo_envio(pico).as_deref(), Some("0.0390"));
         assert!(maximo_envio(FEE_CUSHION).is_none());
     }
 
@@ -5199,25 +5352,25 @@ mod tests {
     fn la_partida_muestra_el_total_y_lo_de_cada_lado() {
         let s = saldo_partida(true, PartidaEstado::Encerrada, 50, true, "felipe", "Don").unwrap();
         assert!(s.estado.contains("Fondeada"));
-        assert!(s.detalle.contains("Total en la caja: 0.002 XMR"));
-        assert!(s.detalle.contains("felipe aportó 0.001 XMR"));
-        assert!(s.detalle.contains("Don aportó 0.001 XMR"));
+        assert!(s.detalle.contains("Total en la caja: 0.0020 XMR"));
+        assert!(s.detalle.contains("felipe aportó 0.0010 XMR"));
+        assert!(s.detalle.contains("Don aportó 0.0010 XMR"));
         assert!(s.candado.is_some());
 
         let trato = saldo_partida(false, PartidaEstado::EnTrato, 50, true, "felipe", "Don").unwrap();
         assert!(trato.estado.contains("In deal"));
-        assert!(trato.detalle.contains("Total in the box: 0.002 XMR"));
+        assert!(trato.detalle.contains("Total in the box: 0.0020 XMR"));
 
         let pagada = saldo_partida(true, PartidaEstado::Pagada, 50, true, "felipe", "Don").unwrap();
         assert!(pagada.estado.contains("ya no tiene saldo"));
-        assert!(pagada.detalle.contains("0.002 XMR"));
+        assert!(pagada.detalle.contains("0.0020 XMR"));
         assert!(pagada.candado.is_none());
 
         let espera = saldo_partida(true, PartidaEstado::Encerrando, 50, false, "felipe", "Don").unwrap();
         assert!(espera.estado.contains("Todavía no hay saldo"));
         assert_eq!(
             saldo_corto(true, PartidaEstado::Encerrada, 50, true).as_deref(),
-            Some("0.002 XMR en la caja")
+            Some("0.0020 XMR en la caja")
         );
         assert!(saldo_partida(true, PartidaEstado::Pendiente, 50, false, "a", "b").is_none());
     }
@@ -5235,11 +5388,13 @@ mod tests {
         let una = SeedBackup {
             net: Net::Stagenet,
             address: w1.address().to_string(),
+            height: Some(100),
             words: words1,
         };
         let otra = SeedBackup {
             net: Net::Stagenet,
             address: w2.address().to_string(),
+            height: None,
             words: words2,
         };
         let (addr, igual) = restaurar_semilla_en(&dir, &una.to_text(), None).unwrap();

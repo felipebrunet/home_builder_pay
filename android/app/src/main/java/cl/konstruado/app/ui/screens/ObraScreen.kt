@@ -83,6 +83,7 @@ fun ObraScreen(id: String, nav: Nav, banner: Banner) {
         return
     }
     var confirmaAbandono by remember(id) { mutableStateOf(false) }
+    var confirmaSalidaLocal by remember(id) { mutableStateOf(false) }
     var extraTexto by remember(id) { mutableStateOf("") }
     var extraMonto by remember(id) { mutableStateOf("") }
     Row { Titulo(o.nombre) }
@@ -129,6 +130,18 @@ fun ObraScreen(id: String, nav: Nav, banner: Banner) {
                 Secundario("No") { confirmaAbandono = false }
             } else {
                 Secundario("Abandonar esta obra") { confirmaAbandono = true }
+            }
+            if (confirmaSalidaLocal) {
+                Pista("¿Salir solo en este equipo? No mueve fondos ni firma por el otro. El otro puede seguir viendo la obra.")
+                Primario("Sí, salir solo aquí") {
+                    acciones.correr(
+                        "Saliste de la obra en este equipo. Fondos intactos.",
+                        alTerminar = { confirmaSalidaLocal = false; nav.raiz(Pantalla.Tablero) },
+                    ) { app.salirObraLocal(id) }
+                }
+                Secundario("No") { confirmaSalidaLocal = false }
+            } else {
+                Secundario("Salir de esta obra (solo este equipo)") { confirmaSalidaLocal = true }
             }
         }
     }

@@ -824,6 +824,14 @@ internal interface UniffiForeignFutureCompleteVoid : com.sun.jna.Callback {
 
 
 
+
+
+
+
+
+
+
+
 // For large crates we prevent `MethodTooLargeException` (see #2340)
 // N.B. the name of the extension is very misleading, since it is 
 // rather `InterfaceTooLargeException`, caused by too many methods 
@@ -885,6 +893,8 @@ fun uniffi_konstruado_ffi_checksum_method_konstruadoapp_empezar_fondeo_de_nuevo(
 ): Short
 fun uniffi_konstruado_ffi_checksum_method_konstruadoapp_enviar(
 ): Short
+fun uniffi_konstruado_ffi_checksum_method_konstruadoapp_exportar_obras(
+): Short
 fun uniffi_konstruado_ffi_checksum_method_konstruadoapp_exportar_semilla(
 ): Short
 fun uniffi_konstruado_ffi_checksum_method_konstruadoapp_exportar_share(
@@ -894,6 +904,8 @@ fun uniffi_konstruado_ffi_checksum_method_konstruadoapp_fijar_daemon(
 fun uniffi_konstruado_ffi_checksum_method_konstruadoapp_guardar(
 ): Short
 fun uniffi_konstruado_ffi_checksum_method_konstruadoapp_guardar_cuenta(
+): Short
+fun uniffi_konstruado_ffi_checksum_method_konstruadoapp_importar_obras(
 ): Short
 fun uniffi_konstruado_ffi_checksum_method_konstruadoapp_maximo_envio(
 ): Short
@@ -936,6 +948,10 @@ fun uniffi_konstruado_ffi_checksum_method_konstruadoapp_reintentar_fondeo(
 fun uniffi_konstruado_ffi_checksum_method_konstruadoapp_restaurar_semilla(
 ): Short
 fun uniffi_konstruado_ffi_checksum_method_konstruadoapp_restaurar_share(
+): Short
+fun uniffi_konstruado_ffi_checksum_method_konstruadoapp_salir_obra_local(
+): Short
+fun uniffi_konstruado_ffi_checksum_method_konstruadoapp_salir_partida_local(
 ): Short
 fun uniffi_konstruado_ffi_checksum_method_konstruadoapp_tablero(
 ): Short
@@ -1050,6 +1066,8 @@ fun uniffi_konstruado_ffi_fn_method_konstruadoapp_empezar_fondeo_de_nuevo(`ptr`:
 ): Unit
 fun uniffi_konstruado_ffi_fn_method_konstruadoapp_enviar(`ptr`: Pointer,`destino`: RustBuffer.ByValue,`montoXmr`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): Unit
+fun uniffi_konstruado_ffi_fn_method_konstruadoapp_exportar_obras(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
+): RustBuffer.ByValue
 fun uniffi_konstruado_ffi_fn_method_konstruadoapp_exportar_semilla(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
 fun uniffi_konstruado_ffi_fn_method_konstruadoapp_exportar_share(`ptr`: Pointer,`obraId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
@@ -1059,6 +1077,8 @@ fun uniffi_konstruado_ffi_fn_method_konstruadoapp_fijar_daemon(`ptr`: Pointer,`u
 fun uniffi_konstruado_ffi_fn_method_konstruadoapp_guardar(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
 ): Unit
 fun uniffi_konstruado_ffi_fn_method_konstruadoapp_guardar_cuenta(`ptr`: Pointer,`nombre`: RustBuffer.ByValue,`rol`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+): RustBuffer.ByValue
+fun uniffi_konstruado_ffi_fn_method_konstruadoapp_importar_obras(`ptr`: Pointer,`texto`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
 fun uniffi_konstruado_ffi_fn_method_konstruadoapp_maximo_envio(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
@@ -1101,6 +1121,10 @@ fun uniffi_konstruado_ffi_fn_method_konstruadoapp_reintentar_fondeo(`ptr`: Point
 fun uniffi_konstruado_ffi_fn_method_konstruadoapp_restaurar_semilla(`ptr`: Pointer,`texto`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
 fun uniffi_konstruado_ffi_fn_method_konstruadoapp_restaurar_share(`ptr`: Pointer,`texto`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+): RustBuffer.ByValue
+fun uniffi_konstruado_ffi_fn_method_konstruadoapp_salir_obra_local(`ptr`: Pointer,`obraId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+): RustBuffer.ByValue
+fun uniffi_konstruado_ffi_fn_method_konstruadoapp_salir_partida_local(`ptr`: Pointer,`obraId`: RustBuffer.ByValue,`indice`: Int,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
 fun uniffi_konstruado_ffi_fn_method_konstruadoapp_tablero(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
@@ -1307,6 +1331,9 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if (lib.uniffi_konstruado_ffi_checksum_method_konstruadoapp_enviar() != 19560.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if (lib.uniffi_konstruado_ffi_checksum_method_konstruadoapp_exportar_obras() != 65531.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if (lib.uniffi_konstruado_ffi_checksum_method_konstruadoapp_exportar_semilla() != 7100.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
@@ -1320,6 +1347,9 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_konstruado_ffi_checksum_method_konstruadoapp_guardar_cuenta() != 63302.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_konstruado_ffi_checksum_method_konstruadoapp_importar_obras() != 7994.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_konstruado_ffi_checksum_method_konstruadoapp_maximo_envio() != 4243.toShort()) {
@@ -1383,6 +1413,12 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_konstruado_ffi_checksum_method_konstruadoapp_restaurar_share() != 62601.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_konstruado_ffi_checksum_method_konstruadoapp_salir_obra_local() != 49935.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_konstruado_ffi_checksum_method_konstruadoapp_salir_partida_local() != 60321.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_konstruado_ffi_checksum_method_konstruadoapp_tablero() != 64277.toShort()) {
@@ -1872,6 +1908,11 @@ public interface KonstruadoAppInterface {
     fun `enviar`(`destino`: kotlin.String, `montoXmr`: kotlin.String)
     
     /**
+     * JSON del perfil de obras/ofertas (sin seed ni share). Puede estar desfasado vs el peer.
+     */
+    fun `exportarObras`(): kotlin.String
+    
+    /**
      * Texto del respaldo de las 25 palabras (para guardarlo con el selector de Android).
      */
     fun `exportarSemilla`(): kotlin.String
@@ -1892,6 +1933,11 @@ public interface KonstruadoAppInterface {
     fun `guardar`()
     
     fun `guardarCuenta`(`nombre`: kotlin.String, `rol`: kotlin.String): PerfilVista
+    
+    /**
+     * Importa obras/ofertas de un respaldo. No trae seed ni share; avisa que puede estar viejo.
+     */
+    fun `importarObras`(`texto`: kotlin.String): kotlin.String
     
     fun `maximoEnvio`(): kotlin.String?
     
@@ -1946,6 +1992,16 @@ public interface KonstruadoAppInterface {
     fun `restaurarSemilla`(`texto`: kotlin.String): kotlin.String
     
     fun `restaurarShare`(`texto`: kotlin.String): kotlin.String
+    
+    /**
+     * Sale de la obra solo en este equipo. No vacía la caja ni firma gasto. Avisa al peer si hay canal.
+     */
+    fun `salirObraLocal`(`obraId`: kotlin.String): kotlin.String
+    
+    /**
+     * Cancela fondeo/propuesta de encierre de una partida solo en este equipo. No mueve fondos en cadena.
+     */
+    fun `salirPartidaLocal`(`obraId`: kotlin.String, `indice`: kotlin.UInt): kotlin.String
     
     fun `tablero`(): TableroVista
     
@@ -2358,6 +2414,22 @@ open class KonstruadoApp: Disposable, AutoCloseable, KonstruadoAppInterface
 
     
     /**
+     * JSON del perfil de obras/ofertas (sin seed ni share). Puede estar desfasado vs el peer.
+     */
+    @Throws(FfiException::class)override fun `exportarObras`(): kotlin.String {
+            return FfiConverterString.lift(
+    callWithPointer {
+    uniffiRustCallWithError(FfiException) { _status ->
+    UniffiLib.INSTANCE.uniffi_konstruado_ffi_fn_method_konstruadoapp_exportar_obras(
+        it, _status)
+}
+    }
+    )
+    }
+    
+
+    
+    /**
      * Texto del respaldo de las 25 palabras (para guardarlo con el selector de Android).
      */
     @Throws(FfiException::class)override fun `exportarSemilla`(): kotlin.String {
@@ -2425,6 +2497,22 @@ open class KonstruadoApp: Disposable, AutoCloseable, KonstruadoAppInterface
     uniffiRustCallWithError(FfiException) { _status ->
     UniffiLib.INSTANCE.uniffi_konstruado_ffi_fn_method_konstruadoapp_guardar_cuenta(
         it, FfiConverterString.lower(`nombre`),FfiConverterString.lower(`rol`),_status)
+}
+    }
+    )
+    }
+    
+
+    
+    /**
+     * Importa obras/ofertas de un respaldo. No trae seed ni share; avisa que puede estar viejo.
+     */
+    @Throws(FfiException::class)override fun `importarObras`(`texto`: kotlin.String): kotlin.String {
+            return FfiConverterString.lift(
+    callWithPointer {
+    uniffiRustCallWithError(FfiException) { _status ->
+    UniffiLib.INSTANCE.uniffi_konstruado_ffi_fn_method_konstruadoapp_importar_obras(
+        it, FfiConverterString.lower(`texto`),_status)
 }
     }
     )
@@ -2693,6 +2781,38 @@ open class KonstruadoApp: Disposable, AutoCloseable, KonstruadoAppInterface
     uniffiRustCallWithError(FfiException) { _status ->
     UniffiLib.INSTANCE.uniffi_konstruado_ffi_fn_method_konstruadoapp_restaurar_share(
         it, FfiConverterString.lower(`texto`),_status)
+}
+    }
+    )
+    }
+    
+
+    
+    /**
+     * Sale de la obra solo en este equipo. No vacía la caja ni firma gasto. Avisa al peer si hay canal.
+     */
+    @Throws(FfiException::class)override fun `salirObraLocal`(`obraId`: kotlin.String): kotlin.String {
+            return FfiConverterString.lift(
+    callWithPointer {
+    uniffiRustCallWithError(FfiException) { _status ->
+    UniffiLib.INSTANCE.uniffi_konstruado_ffi_fn_method_konstruadoapp_salir_obra_local(
+        it, FfiConverterString.lower(`obraId`),_status)
+}
+    }
+    )
+    }
+    
+
+    
+    /**
+     * Cancela fondeo/propuesta de encierre de una partida solo en este equipo. No mueve fondos en cadena.
+     */
+    @Throws(FfiException::class)override fun `salirPartidaLocal`(`obraId`: kotlin.String, `indice`: kotlin.UInt): kotlin.String {
+            return FfiConverterString.lift(
+    callWithPointer {
+    uniffiRustCallWithError(FfiException) { _status ->
+    UniffiLib.INSTANCE.uniffi_konstruado_ffi_fn_method_konstruadoapp_salir_partida_local(
+        it, FfiConverterString.lower(`obraId`),FfiConverterUInt.lower(`indice`),_status)
 }
     }
     )

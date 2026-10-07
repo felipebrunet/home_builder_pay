@@ -118,15 +118,16 @@ pub async fn publish_bytes(rpc: &Daemon, bytes: &[u8]) -> Result<()> {
 
 /// Pregunta al daemon qué key images ya se gastaron (0 = libre, 1/2 = gastada).
 ///
+/// Va por la ruta HTTP `/is_key_image_spent` (no es JSON-RPC: ahí responde Method not found).
 /// En nodos con `restricted-rpc` puede fallar: el caller trata el error como "no supe".
 pub async fn key_images_spent(rpc: &Daemon, images: &[[u8; 32]]) -> Result<Vec<bool>> {
     if images.is_empty() {
         return Ok(Vec::new());
     }
     let hexes: Vec<String> = images.iter().map(hex::encode).collect();
-    let params = serde_json::to_string(&hexes).map_err(|e| Error::Chain(e.to_string()))?;
+    let params = serde_json::json!({ "key_images": hexes }).to_string();
     let raw = rpc
-        .json_rpc_call("is_key_image_spent", Some(params), 256 * 1024)
+        .rpc_call("is_key_image_spent", Some(params), 256 * 1024)
         .await
         .map_err(|e| Error::Chain(e.to_string()))?;
     let v: serde_json::Value =

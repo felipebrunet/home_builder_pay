@@ -66,6 +66,8 @@ cargo run
 
 The UI is Spanish by default. Switch to English with **ES / EN** in the top bar (or in the account screen). The deal itself does not change.
 
+Wallet seed backups store the **block height** at export time; restore scans from that height forward (old seed files without height keep the recent-window fallback — use **look further back** if needed). **Job profile backup** (obras/ofertas JSON) is separate from seed and share; local leave from a job does not move funds.
+
 State is saved in `~/.konstruado/estado.json` (override with `KONSTRUADO_DATOS`). The seed and the per-job share are under `xmr/` in that same directory, mode 0600, and are not inside `estado.json`.
 
 Two users on one PC need two data dirs:
@@ -104,7 +106,7 @@ To rebuild it:
 ```bash
 cargo build -p konstruado --release
 mkdir -p dist
-cp target/release/konstruado dist/konstruado-0.2.1-linux-x86_64
+cp target/release/konstruado dist/konstruado-0.2.2-linux-x86_64
 ```
 
 How to use the app (roles, two machines, the deal) is **Help → README** inside the window, not this file.

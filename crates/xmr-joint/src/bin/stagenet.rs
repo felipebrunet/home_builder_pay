@@ -180,6 +180,7 @@ fn write_seed(dir: &Path, role: &str, address: &str, words: &str) -> Result<(), 
     let backup = SeedBackup {
         net: Net::Stagenet,
         address: address.to_string(),
+        height: None,
         words: zeroize::Zeroizing::new(words.to_string()),
     };
     backup::write_secret_file(&seed_path(dir, role), &backup.to_text()).map_err(|e| e.to_string())

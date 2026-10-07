@@ -90,6 +90,7 @@ fn persistir(
         idioma,
         clave_sec,
         spend_sec,
+        obras_salidas: n.obras_salidas(),
     });
 }
 
@@ -203,6 +204,7 @@ fn App() -> Element {
         let caja_motor = caja_motor.clone();
         let ofertas0 = guardado.ofertas.clone();
         let mut obras0 = guardado.obras.clone();
+        let salidas0 = guardado.obras_salidas.clone();
         let sec0 = guardado.clave_sec.clone();
         if let Some(p) = guardado.yo.clone() {
             for o in &mut obras0 {
@@ -221,6 +223,7 @@ fn App() -> Element {
         async move {
         match Nodo::arrancar().await {
             Ok(n) => {
+                n.fijar_obras_salidas(salidas0);
                 n.hidratar(ofertas0, obras0, presentes0);
                 if let Some(p) = yo() {
                     n.actualizar_yo(p);
@@ -366,7 +369,7 @@ fn App() -> Element {
                             Cuenta { nombre, rol, yo, red, obras, screen, err, tema, caja: caja_ui.clone(), vista: vista_caja }
                         },
                         Screen::Billetera => rsx! {
-                            Billetera { yo, obras, screen, err, caja: caja_ui.clone(), vista: vista_caja }
+                            Billetera { yo, obras, red, screen, err, caja: caja_ui.clone(), vista: vista_caja }
                         },
                         Screen::Help => rsx! {
                             help::Help { yo, screen, vista: help_vista() }
@@ -1008,7 +1011,7 @@ fn Cuenta(
                     {lang.t("Crear billetera de stagenet", "Create stagenet wallet")}
                 }
             }
-            RestaurarLlaves { caja: caja.clone(), yo, obras, vista, err }
+            RestaurarLlaves { caja: caja.clone(), yo, obras, red, vista, err }
             button {
                 class: "btn btn-primary",
                 onclick: move |_| {
@@ -1058,6 +1061,7 @@ fn Cuenta(
 fn Billetera(
     yo: Signal<Option<Persona>>,
     obras: Signal<Vec<Obra>>,
+    red: Signal<Option<Nodo>>,
     screen: Signal<Screen>,
     mut err: Signal<Option<String>>,
     caja: caja::Caja,
@@ -1209,7 +1213,7 @@ fn Billetera(
                     },
                     {lang.t("Guardar las 25 palabras", "Save the 25 words")}
                 }
-                RestaurarLlaves { caja: caja.clone(), yo, obras, vista, err }
+                RestaurarLlaves { caja: caja.clone(), yo, obras, red, vista, err }
                 div { class: "paso", b { "2" } {lang.t("Enviar", "Send")} }
                 label { class: "et", {lang.t("DESTINO", "DESTINATION")} }
                 input {
@@ -1288,7 +1292,7 @@ fn Billetera(
                     },
                     {lang.t("Crear billetera de stagenet", "Create stagenet wallet")}
                 }
-                RestaurarLlaves { caja: caja.clone(), yo, obras, vista, err }
+                RestaurarLlaves { caja: caja.clone(), yo, obras, red, vista, err }
             }
             button {
                 class: "btn btn-ghost",
@@ -1748,6 +1752,7 @@ fn RestaurarLlaves(
     caja: caja::Caja,
     yo: Signal<Option<Persona>>,
     obras: Signal<Vec<Obra>>,
+    red: Signal<Option<Nodo>>,
     vista: Signal<caja::CajaVista>,
     mut err: Signal<Option<String>>,
 ) -> Element {
@@ -1759,8 +1764,8 @@ fn RestaurarLlaves(
     rsx! {
         p { class: "hint",
             {lang.t(
-                "Recuperar las 25 palabras trae tu dirección personal. No trae la caja de la obra ni tu nombre en el trato.",
-                "Restoring the 25 words brings back your personal address. It does not bring the job's box or your name on the deal.",
+                "Recuperar las 25 palabras trae tu dirección personal. Si el archivo trae altura de bloque, el scan parte de ahí; si es un respaldo viejo sin altura, usa la ventana reciente (podés mirar más atrás). No trae la caja ni tu nombre en el trato.",
+                "Restoring the 25 words brings back your personal address. If the file has a block height, scan starts there; old backups without height use the recent window (you can look further back). It does not bring the box or your name on the deal.",
             )}
         }
         button {
@@ -1807,6 +1812,100 @@ fn RestaurarLlaves(
                 }
             },
             {lang.t("Recuperar un share", "Restore a share")}
+        }
+        p { class: "hint",
+            {lang.t(
+                "Respaldo de obras: guarda el perfil (obras y ofertas) para reinstalar. Puede estar desfasado respecto al otro; la cadena y el share mandan para el dinero. No incluye seed ni share.",
+                "Job backup: saves the profile (jobs and offers) for reinstall. It may be behind the peer; chain and share rule the money. It does not include seed or share.",
+            )}
+        }
+        button {
+            class: "btn btn-ghost",
+            onclick: move |_| {
+                let Some(nodo) = red() else {
+                    err.set(Some(lang_now().t("La red todavía no arrancó.", "The network is not up yet.").into()));
+                    return;
+                };
+                let mid = yo().map(|p| p.id).unwrap_or_default();
+                let mut mis: Vec<Obra> = nodo
+                    .obras()
+                    .into_iter()
+                    .filter(|o| mid.is_empty() || o.participa(&mid))
+                    .collect();
+                mis.sort_by(|a, b| b.actualizado.cmp(&a.actualizado).then(b.id.cmp(&a.id)));
+                let ofertas: Vec<_> = nodo
+                    .tablero()
+                    .into_iter()
+                    .filter(|o| mid.is_empty() || o.mandante.id == mid)
+                    .collect();
+                match persist::exportar_perfil_obras(&mis, &ofertas) {
+                    Ok(raw) => {
+                        let Some(path) = rfd::FileDialog::new()
+                            .set_file_name("konstruado-obras.json")
+                            .save_file()
+                        else {
+                            return;
+                        };
+                        match std::fs::write(&path, raw) {
+                            Ok(()) => {
+                                err.set(None);
+                                ok.set(Some(lang_now().t(
+                                    "Guardé el respaldo de obras.",
+                                    "Saved the job backup.",
+                                ).into()));
+                            }
+                            Err(e) => err.set(Some(format!("{e}"))),
+                        }
+                    }
+                    Err(e) => err.set(Some(e)),
+                }
+            },
+            {lang.t("Guardar respaldo de obras", "Save job backup")}
+        }
+        button {
+            class: "btn btn-ghost",
+            onclick: move |_| {
+                let Some(nodo) = red() else {
+                    err.set(Some(lang_now().t("La red todavía no arrancó.", "The network is not up yet.").into()));
+                    return;
+                };
+                let Some(path) = rfd::FileDialog::new().pick_file() else { return };
+                let Ok(raw) = std::fs::read_to_string(&path) else {
+                    err.set(Some(lang_now().t("No pude leer ese archivo.", "Could not read that file.").into()));
+                    return;
+                };
+                match persist::importar_perfil_obras(&raw) {
+                    Ok(r) => {
+                        let n_obras = r.obras.len();
+                        let n_ofertas = r.ofertas.len();
+                        for o in r.ofertas {
+                            nodo.publicar(o);
+                        }
+                        let sec = consume_context::<Signal<ClaveSec>>()().0;
+                        for mut obra in r.obras {
+                            nodo.olvidar_salida_obra(&obra.id);
+                            if let Some(q) = yo() {
+                                if obra.participa(&q.id) {
+                                    let _ = obra.preparar_para_red(&q.id, &q.clave_pub, &sec);
+                                }
+                            }
+                            nodo.publicar_obra(obra);
+                        }
+                        obras.set(nodo.obras());
+                        err.set(None);
+                        ok.set(Some(match lang_now() {
+                            Idioma::Es => format!(
+                                "Importé {n_obras} obra(s) y {n_ofertas} oferta(s). Puede estar desfasado vs el otro; recuperá el share si lo tenés."
+                            ),
+                            Idioma::En => format!(
+                                "Imported {n_obras} job(s) and {n_ofertas} offer(s). It may be behind the peer; restore the share if you have it."
+                            ),
+                        }));
+                    }
+                    Err(e) => err.set(Some(e)),
+                }
+            },
+            {lang.t("Recuperar respaldo de obras", "Restore job backup")}
         }
         if let Some(m) = ok() {
             p { class: "hint", "{m}" }
@@ -1988,6 +2087,7 @@ fn Detalle(
     vista: Signal<caja::CajaVista>,
 ) -> Element {
     let mut confirma_abandono = use_signal(|| false);
+    let mut confirma_salida_local = use_signal(|| false);
     let mut export_msg = use_signal(|| None::<String>);
     let mut extra_nom = use_signal(String::new);
     let mut extra_monto = use_signal(String::new);
@@ -2240,6 +2340,53 @@ fn Detalle(
                         class: "btn btn-ghost",
                         onclick: move |_| confirma_abandono.set(true),
                         {lang.t("Abandonar esta obra", "Abandon this job")}
+                    }
+                }
+            }
+            if se_puede_abandonar {
+                if confirma_salida_local() {
+                    p { class: "hint",
+                        {lang.t(
+                            "¿Salir solo en este equipo? No mueve fondos ni firma por el otro. El otro puede seguir viendo la obra. Si había caja, el share queda en disco.",
+                            "Leave only on this device? Funds are not moved and nothing is signed for the other side. They can still see the job. If there was a box, the share stays on disk.",
+                        )}
+                    }
+                    button {
+                        class: "btn btn-primary",
+                        onclick: {
+                            let obra = obra.clone();
+                            let caja = caja.clone();
+                            move |_| {
+                                let Some(quien) = yo() else { return };
+                                let Some(nodo) = red() else { return };
+                                for i in 0..obra.partidas.len() {
+                                    caja.cancelar_fondeo(&obra.id, i);
+                                }
+                                let peer = if obra.mandante.id == quien.id {
+                                    obra.contratista.id.clone()
+                                } else {
+                                    obra.mandante.id.clone()
+                                };
+                                let _ = nodo.enviar_caja(&obra.id, &peer, &quien.id, "obra-salida", b"");
+                                nodo.salir_obra_local(&obra.id);
+                                obras.set(nodo.obras());
+                                confirma_salida_local.set(false);
+                                err.set(None);
+                                screen.set(Screen::Tablero);
+                            }
+                        },
+                        {lang.t("Sí, salir solo aquí", "Yes, leave only here")}
+                    }
+                    button {
+                        class: "btn btn-ghost",
+                        onclick: move |_| confirma_salida_local.set(false),
+                        {lang.t("No", "No")}
+                    }
+                } else {
+                    button {
+                        class: "btn btn-ghost",
+                        onclick: move |_| confirma_salida_local.set(true),
+                        {lang.t("Salir de esta obra (solo este equipo)", "Leave this job (this device only)")}
                     }
                 }
             }
@@ -2849,6 +2996,47 @@ fn VerPartida(
                         },
                         {lang.t("Proponer este porcentaje", "Propose this percentage")}
                     }
+                }
+            }
+            if !cortada && (soy_m || soy_c) {
+                div { style: "height: 16px;" }
+                button {
+                    class: "btn btn-ghost",
+                    onclick: {
+                        let mut obra = obra.clone();
+                        let caja = caja.clone();
+                        move |_| {
+                            let Some(quien) = yo() else { return };
+                            let Some(nodo) = red() else { return };
+                            caja.cancelar_fondeo(&obra.id, i);
+                            if obra.partidas.get(i).map(|p| p.estado == PartidaEstado::Encerrando).unwrap_or(false) {
+                                match obra.encerrar_cancelar(i, &quien) {
+                                    Ok(()) => {
+                                        publicar_trato(&nodo, obra.clone(), yo(), err);
+                                    }
+                                    Err(e) => {
+                                        err.set(Some(lang_now().error(&e)));
+                                        return;
+                                    }
+                                }
+                            }
+                            let peer = if obra.mandante.id == quien.id {
+                                obra.contratista.id.clone()
+                            } else {
+                                obra.mandante.id.clone()
+                            };
+                            let cuerpo = i.to_string();
+                            let _ = nodo.enviar_caja(&obra.id, &peer, &quien.id, "partida-salida", cuerpo.as_bytes());
+                            err.set(None);
+                        }
+                    },
+                    {lang.t("Abandonar partida (solo este equipo)", "Leave stage (this device only)")}
+                }
+                p { class: "hint",
+                    {lang.t(
+                        "Cancela fondeo o propuesta locales. No mueve monedas ni firma por el otro. Si ya está Encerrada en cadena, la caja sigue.",
+                        "Cancels local funding or proposal. Does not move coins or sign for the other side. If already Locked on-chain, the box stays.",
+                    )}
                 }
             }
         }

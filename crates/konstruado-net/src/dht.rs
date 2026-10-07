@@ -69,6 +69,8 @@ struct Inner {
     /// Celular: sin dirección entrante, solo sesiones vivas y destinos fijos.
     movil: bool,
     destinos: HashSet<PeerAddr>,
+    /// Obras que salí solo en este equipo: no se muestran aunque el peer las gossipée.
+    obras_salidas: HashSet<String>,
 }
 
 #[derive(Clone)]
@@ -239,6 +241,7 @@ impl Nodo {
                 sesion_seq: 0,
                 movil,
                 destinos: HashSet::new(),
+                obras_salidas: HashSet::new(),
             })),
             handle: handle.clone(),
         };
@@ -626,6 +629,7 @@ impl Nodo {
         let key = key_hex(&clave_obras());
         {
             let mut g = self.inner.lock().unwrap();
+            g.obras_salidas.remove(&obra.id);
             let mut list = g
                 .store
                 .get(&key)
@@ -645,6 +649,46 @@ impl Nodo {
             .get(&key)
             .map(|b| decode_obras(b))
             .unwrap_or_default()
+            .into_iter()
+            .filter(|o| !g.obras_salidas.contains(&o.id))
+            .collect()
+    }
+
+    /// Ids de obras ocultas por salida local (para persistir).
+    pub fn obras_salidas(&self) -> Vec<String> {
+        self.inner
+            .lock()
+            .unwrap()
+            .obras_salidas
+            .iter()
+            .cloned()
+            .collect()
+    }
+
+    /// Carga la lista de salidas locales al arrancar.
+    pub fn fijar_obras_salidas(&self, ids: Vec<String>) {
+        let mut g = self.inner.lock().unwrap();
+        g.obras_salidas = ids.into_iter().collect();
+    }
+
+    /// Quita la obra de este equipo y la marca para que gossip no la devuelva.
+    /// No mueve fondos ni publica un estado Abandonada al peer.
+    pub fn salir_obra_local(&self, obra_id: &str) {
+        let mut g = self.inner.lock().unwrap();
+        g.obras_salidas.insert(obra_id.to_string());
+        let key = key_hex(&clave_obras());
+        let mut list = g
+            .store
+            .get(&key)
+            .map(|b| decode_obras(b))
+            .unwrap_or_default();
+        list.retain(|o| o.id != obra_id);
+        g.store.insert(key, encode_obras(&list));
+    }
+
+    /// Al reimportar un respaldo, la obra vuelve a ser visible.
+    pub fn olvidar_salida_obra(&self, obra_id: &str) {
+        self.inner.lock().unwrap().obras_salidas.remove(obra_id);
     }
 
     pub fn actualizar_yo(&self, persona: Persona) {

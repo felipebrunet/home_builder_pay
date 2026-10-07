@@ -600,6 +600,7 @@ impl KonstruadoApp {
             idioma: s.idioma.clone(),
             clave_sec: s.clave_sec.clone(),
             spend_sec: s.spend_sec.clone(),
+            obras_salidas: self.nodo.obras_salidas(),
         });
     }
 
@@ -706,6 +707,7 @@ impl KonstruadoApp {
                     idioma: disco.1,
                     clave_sec: sec,
                     spend_sec: disco.2,
+                    obras_salidas: nodo.obras_salidas(),
                 });
                 tokio::time::sleep(Duration::from_secs(1)).await;
             }
@@ -846,6 +848,7 @@ impl KonstruadoApp {
             .collect();
         {
             let _e = rt.enter();
+            nodo.fijar_obras_salidas(g.obras_salidas.clone());
             nodo.hidratar(g.ofertas.clone(), obras0, presentes0);
             if let Some(p) = g.yo.clone() {
                 nodo.actualizar_yo(p);
@@ -1586,6 +1589,115 @@ impl KonstruadoApp {
     pub fn crear_semilla(&self) -> Result<String, FfiError> {
         let _e = self.rt.enter();
         self.caja.crear_semilla().map_err(err_caja)
+    }
+
+    /// JSON del perfil de obras/ofertas (sin seed ni share). Puede estar desfasado vs el peer.
+    pub fn exportar_obras(&self) -> Result<String, FfiError> {
+        let mid = self.mid();
+        let mut obras: Vec<Obra> = self
+            .nodo
+            .obras()
+            .into_iter()
+            .filter(|o| mid.is_empty() || o.participa(&mid))
+            .collect();
+        obras.sort_by(|a, b| b.actualizado.cmp(&a.actualizado).then(b.id.cmp(&a.id)));
+        let ofertas = self
+            .nodo
+            .tablero()
+            .into_iter()
+            .filter(|o| mid.is_empty() || o.mandante.id == mid)
+            .collect::<Vec<_>>();
+        persist::exportar_perfil_obras(&obras, &ofertas).map_err(fallo)
+    }
+
+    /// Importa obras/ofertas de un respaldo. No trae seed ni share; avisa que puede estar viejo.
+    pub fn importar_obras(&self, texto: String) -> Result<String, FfiError> {
+        let r = persist::importar_perfil_obras(&texto).map_err(fallo)?;
+        let n_obras = r.obras.len();
+        let n_ofertas = r.ofertas.len();
+        let _e = self.rt.enter();
+        for o in r.ofertas {
+            self.nodo.publicar(o);
+        }
+        for mut obra in r.obras {
+            self.nodo.olvidar_salida_obra(&obra.id);
+            if let Ok(q) = self.yo() {
+                if obra.participa(&q.id) {
+                    let _ = obra.preparar_para_red(&q.id, &q.clave_pub, &self.sec());
+                }
+            }
+            self.nodo.publicar_obra(obra);
+        }
+        drop(_e);
+        self.persistir();
+        Ok(format!(
+            "Importé {n_obras} obra(s) y {n_ofertas} oferta(s). El estado puede estar desfasado respecto al otro; la cadena y el share mandan para el dinero. Si tenés el share, recuperalo después."
+        ))
+    }
+
+    /// Sale de la obra solo en este equipo. No vacía la caja ni firma gasto. Avisa al peer si hay canal.
+    pub fn salir_obra_local(&self, obra_id: String) -> Result<String, FfiError> {
+        let obra = self.obra(&obra_id)?;
+        let yo = self.yo()?;
+        if !obra.participa(&yo.id) {
+            return Err(fallo("Esta obra es de otras dos personas."));
+        }
+        let _e = self.rt.enter();
+        for i in 0..obra.partidas.len() {
+            self.caja.cancelar_fondeo(&obra.id, i);
+        }
+        let peer = otro_de(&obra, &yo.id);
+        let _ = self
+            .nodo
+            .enviar_caja(&obra.id, &peer, &yo.id, "obra-salida", b"");
+        self.nodo.salir_obra_local(&obra.id);
+        drop(_e);
+        self.persistir();
+        Ok(
+            "Saliste de la obra en este equipo. No se movieron fondos. El otro puede seguir viéndola; si había caja, el share sigue en disco hasta que lo borres vos."
+                .into(),
+        )
+    }
+
+    /// Cancela fondeo/propuesta de encierre de una partida solo en este equipo. No mueve fondos en cadena.
+    pub fn salir_partida_local(&self, obra_id: String, indice: u32) -> Result<String, FfiError> {
+        let mut obra = self.obra(&obra_id)?;
+        let yo = self.yo()?;
+        if !obra.participa(&yo.id) {
+            return Err(fallo("Esta obra es de otras dos personas."));
+        }
+        let i = indice as usize;
+        if obra.partidas.get(i).is_none() {
+            return Err(fallo("No está esa partida."));
+        }
+        let _e = self.rt.enter();
+        self.caja.cancelar_fondeo(&obra.id, i);
+        let mut aviso = String::from(
+            "Cancelé el fondeo local de esta partida. Los fondos ya en la caja 2-de-2 no se tocan.",
+        );
+        if obra.partidas[i].estado == PartidaEstado::Encerrando {
+            match obra.encerrar_cancelar(i, &yo) {
+                Ok(()) => {
+                    let _ = self.publicar_trato(obra.clone(), &yo);
+                    aviso.push_str(" También volví la propuesta de encierre a Pendiente en este equipo.");
+                }
+                Err(_) => {
+                    aviso.push_str(" La propuesta de encierre no se pudo revertir sola (hace falta el otro o ya no está Encerrando).");
+                }
+            }
+        }
+        let peer = otro_de(&obra, &yo.id);
+        let cuerpo = indice.to_string();
+        let _ = self.nodo.enviar_caja(
+            &obra.id,
+            &peer,
+            &yo.id,
+            "partida-salida",
+            cuerpo.as_bytes(),
+        );
+        drop(_e);
+        self.persistir();
+        Ok(aviso)
     }
 
     /// Texto del respaldo de las 25 palabras (para guardarlo con el selector de Android).
