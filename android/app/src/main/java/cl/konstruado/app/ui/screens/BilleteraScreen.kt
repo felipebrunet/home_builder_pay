@@ -33,14 +33,22 @@ import cl.konstruado.app.ui.rememberGuardarArchivo
 import cl.konstruado.app.ui.sondear
 
 @Composable
-private fun Restaurar(acciones: Acciones) {
+private fun Restaurar(acciones: Acciones, banner: Banner) {
     val app = AppHolder.a
     val abrirSemilla = rememberAbrirArchivo(acciones) { app.restaurarSemilla(it) }
     val abrirShare = rememberAbrirArchivo(acciones) { app.restaurarShare(it) }
+    val guardarObras = rememberGuardarArchivo(
+        acciones, banner, { app.exportarObras() },
+        "Guardé el respaldo de obras. No incluye seed ni share; puede estar desfasado vs el otro.",
+    )
+    val abrirObras = rememberAbrirArchivo(acciones) { app.importarObras(it) }
     Pista("Recuperar las 25 palabras trae tu dirección personal. No trae la caja de la obra ni tu nombre en el trato.")
     Secundario("Recuperar las 25 palabras") { abrirSemilla() }
     Pista("Recuperar un share trae la caja de una obra que ya está en este equipo. Tiene que ser el tuyo: el del otro lado no sirve.")
     Secundario("Recuperar un share") { abrirShare() }
+    Pista("Respaldo de obras: el perfil (obras/ofertas) para reinstalar. Puede estar desfasado respecto al otro; la cadena y el share mandan para el dinero. No incluye seed ni share.")
+    Secundario("Guardar respaldo de obras") { guardarObras("konstruado-obras.json") }
+    Secundario("Recuperar respaldo de obras") { abrirObras() }
 }
 
 @Composable
@@ -73,7 +81,7 @@ fun BilleteraScreen(banner: Banner) {
         Pista(b.escala)
         Pista("Todavía no hay semilla en este equipo. Se crean 25 palabras nuevas y quedan en el almacenamiento privado de la app.")
         Primario("Crear billetera de stagenet") { acciones.correr("Billetera creada. Guardá las 25 palabras.") { app.crearSemilla() } }
-        Restaurar(acciones)
+        Restaurar(acciones, banner)
         return
     }
     Text("${b.total} XMR", style = MaterialTheme.typography.displaySmall, fontWeight = FontWeight.SemiBold)
@@ -92,8 +100,9 @@ fun BilleteraScreen(banner: Banner) {
     Seccion("1 · Recibir")
     Copiable("Tu dirección stagenet", dir)
     Pista("El scan no ve monedas más viejas que lo que ya miramos: si el faucet es viejo, pedí mirar más atrás.")
+    Pista("Al guardar las 25 palabras también queda la altura de bloque del nodo; al recuperar, el scan parte de ahí (no desde el génesis).")
     Secundario("Guardar las 25 palabras") { guardarPalabras("konstruado-semilla.txt") }
-    Restaurar(acciones)
+    Restaurar(acciones, banner)
     Seccion("2 · Enviar")
     OutlinedTextField(destino, { destino = it }, label = { Text("Dirección de stagenet") }, modifier = Modifier.fillMaxWidth())
     OutlinedTextField(monto, { monto = it }, label = { Text("Monto en XMR") }, placeholder = { Text("0.04") }, modifier = Modifier.fillMaxWidth())

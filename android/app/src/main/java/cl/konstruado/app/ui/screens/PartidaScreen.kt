@@ -149,5 +149,14 @@ fun PartidaScreen(obraId: String, indice: UInt, banner: Banner) {
             }
         }
     }
+    if (!p.cortada) {
+        Secundario("Abandonar partida (solo este equipo)") {
+            acciones.correr(
+                "Cancelé fondeo/propuesta locales. Fondos en cadena intactos.",
+                yaEnPantalla = yaVisible,
+            ) { app.salirPartidaLocal(obraId, indice) }
+        }
+        Pista("Cancela fondeo o propuesta locales. No mueve monedas ni firma por el otro.")
+    }
     Pista("Encerrada y Pagada se marcan solo cuando el motor ve la transacción en la cadena.")
 }

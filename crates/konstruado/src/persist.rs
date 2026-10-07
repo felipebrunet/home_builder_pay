@@ -24,6 +24,43 @@ pub struct EstadoDisco {
     /// Spend key of the stagenet hot wallet, hex. Never gossiped.
     #[serde(default)]
     pub spend_sec: String,
+    /// Obras de las que salí solo en este equipo (gossip no las vuelve a mostrar).
+    #[serde(default)]
+    pub obras_salidas: Vec<String>,
+}
+
+/// Respaldo portable de obras/ofertas (sin seed, share ni claves).
+/// Sirve para recuperar el perfil tras reinstalar; chain+share mandan para el dinero.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct RespaldoPerfil {
+    pub formato: String,
+    #[serde(default)]
+    pub obras: Vec<Obra>,
+    #[serde(default)]
+    pub ofertas: Vec<Oferta>,
+}
+
+pub const FORMATO_RESPALDO_OBRAS: &str = "konstruado-obras-v1";
+
+pub fn exportar_perfil_obras(obras: &[Obra], ofertas: &[Oferta]) -> Result<String, String> {
+    let r = RespaldoPerfil {
+        formato: FORMATO_RESPALDO_OBRAS.into(),
+        obras: obras.to_vec(),
+        ofertas: ofertas.to_vec(),
+    };
+    serde_json::to_string_pretty(&r).map_err(|e| format!("No pude armar el respaldo: {e}"))
+}
+
+pub fn importar_perfil_obras(texto: &str) -> Result<RespaldoPerfil, String> {
+    let r: RespaldoPerfil = serde_json::from_str(texto.trim())
+        .map_err(|e| format!("Ese archivo no es un respaldo de obras de Konstruado: {e}"))?;
+    if r.formato != FORMATO_RESPALDO_OBRAS && !r.formato.starts_with("konstruado-obras-") {
+        return Err(format!("Formato de respaldo desconocido: {}", r.formato));
+    }
+    if r.obras.is_empty() && r.ofertas.is_empty() {
+        return Err("El respaldo no trae obras ni ofertas.".into());
+    }
+    Ok(r)
 }
 
 fn tema_vivo() -> String {
@@ -87,11 +124,12 @@ pub fn guardar(e: &EstadoDisco) {
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
     fn roundtrip() {
+        let _g = datos_test_lock();
         let dir = std::env::temp_dir().join(format!("konstruado-persist-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
+        let prev = std::env::var_os("KONSTRUADO_DATOS");
         unsafe { std::env::set_var("KONSTRUADO_DATOS", &dir) };
         let yo = Persona::nueva("Don Dinero").unwrap();
         let e = EstadoDisco {
@@ -104,6 +142,7 @@ mod tests {
             idioma: "en".into(),
             clave_sec: String::new(),
             spend_sec: String::new(),
+            obras_salidas: vec![],
         };
         guardar(&e);
         let b = cargar();
@@ -111,11 +150,36 @@ mod tests {
         assert_eq!(b.rol, Some(Rol::Mandante));
         assert_eq!(b.tema, "vivo");
         assert_eq!(b.idioma, "en");
+        match prev {
+            Some(v) => unsafe { std::env::set_var("KONSTRUADO_DATOS", v) },
+            None => unsafe { std::env::remove_var("KONSTRUADO_DATOS") },
+        }
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn respaldo_obras_json_vacio_falla() {
+        assert!(importar_perfil_obras(r#"{"formato":"konstruado-obras-v1"}"#).is_err());
+        let ok = exportar_perfil_obras(&[], &[]).unwrap();
+        // export allows empty vecs but import rejects empty
+        assert!(importar_perfil_obras(&ok).is_err());
+        let r = RespaldoPerfil {
+            formato: FORMATO_RESPALDO_OBRAS.into(),
+            obras: vec![],
+            ofertas: vec![],
+        };
+        let raw = serde_json::to_string(&r).unwrap();
+        assert!(importar_perfil_obras(&raw).is_err());
     }
 }
 
 /// Archivo con la URL propia del daemon stagenet (`daemon.url` en el dir de datos).
+#[cfg(test)]
+pub(crate) fn datos_test_lock() -> std::sync::MutexGuard<'static, ()> {
+    static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    LOCK.lock().unwrap_or_else(|e| e.into_inner())
+}
+
 fn path_daemon() -> PathBuf {
     dir().join("daemon.url")
 }
@@ -165,13 +229,10 @@ pub fn fijar_daemon_persistido(url: Option<&str>) -> Result<String, String> {
 #[cfg(test)]
 mod daemon_tests {
     use super::*;
-    use std::sync::Mutex;
-
-    static LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
     fn daemon_persistido_y_fallback() {
-        let _g = LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = datos_test_lock();
         let dir = std::env::temp_dir().join(format!("konstruado-daemon-persist-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         let _ = std::fs::create_dir_all(&dir);
