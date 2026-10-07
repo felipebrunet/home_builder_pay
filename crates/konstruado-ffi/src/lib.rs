@@ -279,6 +279,10 @@ pub struct DaemonPrueba {
     pub ms: u64,
     /// Texto listo para mostrar (español).
     pub mensaje: String,
+    /// Nodo de la red local / Tailscale (no pasa por Tor nunca).
+    pub local: bool,
+    /// Ruta legible: «directo por la red local, sin Tor», «por la VPN del teléfono…».
+    pub ruta: String,
 }
 
 #[derive(Clone, Debug, uniffi::Record)]
@@ -979,9 +983,11 @@ impl KonstruadoApp {
             socks_port: ORBOT_SOCKS,
             onion_sala: RENDEZVOUS_ONION.into(),
             pasos: vec![
-                "Instalá Orbot y encendelo (modo VPN recomendado: así también pasa el daemon de Monero).".into(),
+                "Instalá Orbot y encendelo. No hace falta el modo VPN: Konstruado usa el proxy SOCKS de Orbot para la sala.".into(),
                 "Dejá el proxy SOCKS de Orbot en 127.0.0.1:9050 (viene así).".into(),
                 "En Cuenta → Red tocá «Usar Orbot». El teléfono marca la sala horneada.".into(),
+                "El nodo Monero no usa el SOCKS: Konstruado lo llama directo. Un nodo de tu red local o Tailscale (192.168.x, 10.x, 100.x) va directo y nunca por Tor; un nodo público también va directo (ve tu IP), salvo que la VPN de Orbot capture a Konstruado, y ahí va por Tor.".into(),
+                "Si usás la VPN de Orbot con un nodo local, dejá Konstruado afuera: en «Elegir aplicaciones» marcá otra app y no Konstruado (sin ninguna marcada Orbot captura todo el teléfono), o usá «Modo de usuarie avanzado» (solo SOCKS, sin VPN).".into(),
                 "La sala la hospeda una PC: el mandante de escritorio, o `konstruado-sala`.".into(),
                 "Dos teléfonos se hablan a través de esa PC (relay).".into(),
             ],
@@ -1845,16 +1851,36 @@ impl KonstruadoApp {
     ///
     /// No gasta monedas: solo mide si el daemon responde. Guarda el último
     /// resultado (éxito o fallo) para mostrarlo en Cuenta y Billetera.
-    pub fn probar_daemon(&self) -> DaemonPrueba {
-        let r = self.rt.block_on(caja::probar_daemon(ES));
+    ///
+    /// `vpn_captura`: lo que Kotlin ve en `ConnectivityManager` (la red por defecto
+    /// de la app es una VPN, p. ej. Orbot en modo VPN). `None` = no se sabe.
+    pub fn probar_daemon(&self, vpn_captura: Option<bool>) -> DaemonPrueba {
+        let vpn = match vpn_captura {
+            Some(true) => caja::VpnApp::Captura,
+            Some(false) => caja::VpnApp::Ninguna,
+            None => caja::VpnApp::Desconocida,
+        };
+        let r = self.rt.block_on(caja::probar_daemon_con_vpn(ES, vpn));
         let prueba = DaemonPrueba {
             ok: r.ok,
             url: r.url,
             tip: r.tip,
             ms: r.ms,
             mensaje: r.mensaje,
+            local: r.local,
+            ruta: r.ruta,
         };
         guardar_prueba(&self.ultima_prueba, prueba)
+    }
+
+    /// `true` si el nodo activo es de la red local / Tailscale (va directo, nunca por Tor).
+    pub fn daemon_es_local(&self) -> bool {
+        xmr_joint::daemon_es_local()
+    }
+
+    /// Aviso para mostrar antes de probar: nodo local + VPN capturando la app.
+    pub fn aviso_vpn_daemon(&self, vpn_captura: bool) -> Option<String> {
+        (vpn_captura && xmr_joint::daemon_es_local()).then(|| caja::pista_vpn_local(ES).to_string())
     }
 
     /// Último resultado de «Probar RPC del nodo» (éxito o fallo), si ya se probó.

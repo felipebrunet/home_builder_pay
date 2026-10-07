@@ -15,6 +15,9 @@ use crate::{Error, Result};
 
 pub type Daemon = MoneroDaemon<SimpleRequestTransport>;
 
+/// Conecta al daemon por HTTP(S). TCP directo: sin SOCKS ni proxies del entorno
+/// (ni el SOCKS de Orbot de la sala). Un nodo LAN/Tailscale va siempre directo;
+/// solo una VPN del sistema que capture a la app (Orbot en modo VPN) lo desvía.
 pub async fn connect(url: &str) -> Result<Daemon> {
     SimpleRequestTransport::new(url.to_string())
         .await

@@ -52,11 +52,22 @@ Alguien tiene que **hospedar la sala** (un solo anfitrión por vez, la clave est
 cambió (sesiones vivas, `PeerAddr::Buzon`, campo `saltos` en Caja). Un escritorio
 viejo no entrega mensajes a un teléfono.
 
-### Monero por Orbot
+### Monero y Orbot
 
-`monero-simple-request-rpc` no habla SOCKS. Para que el tráfico del daemon pase
-por Tor, usá **Orbot en modo VPN** e incluí Konstruado en las apps enrutadas. En
-modo solo-proxy, el gossip va por Tor pero el daemon va directo por HTTPS.
+`monero-simple-request-rpc` no habla SOCKS: el RPC del daemon siempre abre TCP
+directo, aunque «Usar Orbot» esté encendido (ese SOCKS es solo para la sala).
+
+- **Nodo local / Tailscale** (192.168.x, 10.x, 172.16–31.x, 100.64/10, `.local`):
+  va directo por la red local y nunca por Tor. Tor no llega a IPs privadas.
+- **Nodo público**: va directo por internet (el nodo ve tu IP), salvo que la VPN
+  de Orbot capture a Konstruado; ahí va por Tor.
+- **Orbot en modo VPN + nodo local**: si la VPN captura a Konstruado, la conexión
+  muere con «connection reset». Android no deja saltar la VPN de Orbot (Orbot no
+  llama a `VpnService.Builder.allowBypass()`, netd rechaza `bindSocket`). Dejá
+  Konstruado afuera: en Orbot → «Elegir aplicaciones» marcá **otra** app y no
+  Konstruado (sin ninguna marcada Orbot vuelve a «VPN de dispositivo completo»),
+  o usá «Modo de usuarie avanzado» (solo SOCKS, sin VPN). La app detecta la VPN y
+  lo avisa en Cuenta y en «Probar RPC del nodo».
 
 ### Nodo Monero propio (LAN / Tailscale)
 
@@ -77,7 +88,7 @@ modo solo-proxy, el gossip va por Tor pero el daemon va directo por HTTPS.
 
 1. En una PC: compilá el escritorio de este árbol y abrilo como **mandante**
    (hospeda la sala), o corré `konstruado-sala` (con `tor` instalado).
-2. En cada teléfono: instalar el APK y Orbot; encender Orbot (VPN recomendado).
+2. En cada teléfono: instalar el APK y Orbot; encender Orbot (no hace falta el modo VPN; la sala usa su SOCKS).
 3. En la app: Bienvenida → nombre y rol (uno mandante, otro contratista).
    Cuenta → Red: «Usar Orbot» encendido (127.0.0.1:9050) → Aplicar.
 4. Esperar «Conectado a la sala» en el Tablero (publicar el onion puede tardar ~30 s).
@@ -147,7 +158,8 @@ Cada par imprime `PASO CAJA <dirección>`: tiene que ser la misma en los dos.
 ## Limitaciones conocidas
 
 - El teléfono no hospeda onion: sin una PC con la sala, dos teléfonos no se encuentran.
-- Daemon de Monero por Tor solo con Orbot en modo VPN.
+- Daemon público por Tor solo con Orbot en modo VPN capturando a Konstruado, y en
+  ese modo un nodo LAN no responde (ver «Monero y Orbot»).
 - Fondeo/pago real necesitan monedas de faucet de stagenet en las dos billeteras;
   sin saldo, el motor lo dice y no arma nada.
 - Un solo perfil por instalación (la carpeta de datos es global al proceso).

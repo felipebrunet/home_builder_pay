@@ -26,6 +26,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import cl.konstruado.app.AppHolder
 import cl.konstruado.app.Prefs
 import cl.konstruado.app.abrirOrbot
+import cl.konstruado.app.appEnVpn
 import cl.konstruado.app.ui.Banner
 import cl.konstruado.app.ui.ErrorTexto
 import cl.konstruado.app.ui.Pista
@@ -108,6 +109,9 @@ fun CuentaScreen(banner: Banner) {
     )
     Pista("Guardar fija el nodo para scan, saldo, fondeo y pago. «Usar por defecto» vuelve a $daemonDefecto.")
     Pista("Ejemplo LAN/Tailscale: http://192.168.1.83:38081 o http://100.x.y.z:38081 (RPC stagenet; el público usa :38089).")
+    Pista("Un nodo de la red local o Tailscale va siempre directo, nunca por Tor ni por el SOCKS de Orbot.")
+    val vpnAhora = appEnVpn(ctx)
+    app.avisoVpnDaemon(vpnAhora == true)?.let { ErrorTexto(it) }
     OutlinedTextField(
         daemonUrl, { daemonUrl = it },
         label = { Text("URL del nodo (http://host:puerto)") },
@@ -128,13 +132,13 @@ fun CuentaScreen(banner: Banner) {
             banner.ok.value = "Volví al nodo público: $u"
         }
     }
-    Pista("«Probar RPC del nodo» solo pide la punta (altura de bloque) por HTTP al nodo activo. No gasta monedas ni prueba Orbot.")
+    Pista("«Probar RPC del nodo» solo pide la punta (altura de bloque) por HTTP al nodo activo. No gasta monedas ni prueba la sala.")
     Secundario(if (probando) "Probando RPC…" else "Probar RPC del nodo", enabled = !probando) {
         probando = true
         banner.ok.value = null
         banner.error.value = null
         acciones.pedir(
-            { app.probarDaemon() },
+            { app.probarDaemon(appEnVpn(ctx)) },
             alFinal = { probando = false },
         ) { r ->
             pruebaLocal = r
@@ -151,6 +155,7 @@ fun CuentaScreen(banner: Banner) {
                 )
                 Text(r.mensaje, style = MaterialTheme.typography.bodyMedium)
                 Pista("URL: ${r.url}")
+                Pista("Ruta: ${r.ruta}")
                 r.tip?.let { Pista("Punta (bloque): $it") }
                 Pista("Tiempo: ${r.ms} ms")
             }

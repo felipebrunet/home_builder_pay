@@ -4,6 +4,8 @@ import android.Manifest
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
 import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
@@ -102,4 +104,24 @@ fun abrirOrbot(c: Context): Boolean {
     i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
     c.startActivity(i)
     return true
+}
+
+/**
+ * `true` si la red por defecto de esta app es una VPN (p. ej. Orbot en modo VPN
+ * capturando a Konstruado), `false` si no, `null` si no se puede saber.
+ *
+ * Android devuelve la red por defecto *de este UID*: si Orbot está en modo
+ * «Elegir aplicaciones» y Konstruado no está marcada, da Wi‑Fi y no la VPN.
+ * No se puede saltar la VPN de Orbot con bindSocket: Orbot no llama a
+ * VpnService.Builder.allowBypass(), así que netd rechaza el socket (EPERM).
+ */
+fun appEnVpn(c: Context): Boolean? {
+    return try {
+        val cm = c.getSystemService(ConnectivityManager::class.java) ?: return null
+        val red = cm.activeNetwork ?: return false
+        val caps = cm.getNetworkCapabilities(red) ?: return null
+        caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN)
+    } catch (t: Throwable) {
+        null
+    }
 }

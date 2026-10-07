@@ -58,7 +58,7 @@ Notes inside a job are sealed for the two people. Someone else on the network ca
 
 ## Node
 
-By default the app uses the public stagenet node. In the account screen, **NODE URL** + **Save node** sets your own (LAN or Tailscale, e.g. `http://100.64.0.2:38081`) for scan, balance, funding and payout. **Use default** goes back to the public node. **Test node RPC** checks it.
+By default the app uses the public stagenet node. In the account screen, **NODE URL** + **Save node** sets your own (LAN or Tailscale, e.g. `http://100.64.0.2:38081`) for scan, balance, funding and payout. **Use default** goes back to the public node. **Test node RPC** checks it. Node RPC never goes through Tor or the room's SOCKS proxy: a LAN/Tailscale node is reached directly, and the test says which route it used. On a phone, Orbot's VPN mode must not capture Konstruado when the node is on your LAN (Tor cannot reach private IPs); the room keeps using Orbot's SOCKS.
 
 ## Backups
 

@@ -109,6 +109,76 @@ pub fn fijar_daemon(url: Option<&str>) -> Result<(), String> {
     }
 }
 
+/// Host de una URL de daemon (sin esquema, usuario, puerto ni corchetes IPv6).
+pub fn host_de_url(url: &str) -> Option<String> {
+    let s = url.trim();
+    let rest = s
+        .strip_prefix("https://")
+        .or_else(|| s.strip_prefix("http://"))
+        .unwrap_or(s);
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or(rest);
+    let authority = authority.rsplit_once('@').map(|(_, h)| h).unwrap_or(authority);
+    let host = if let Some(v6) = authority.strip_prefix('[') {
+        v6.split_once(']').map(|(h, _)| h).unwrap_or(v6)
+    } else {
+        authority.rsplit_once(':').map(|(h, _)| h).unwrap_or(authority)
+    };
+    let host = host.trim().trim_end_matches('.');
+    (!host.is_empty()).then(|| host.to_ascii_lowercase())
+}
+
+/// `true` si el host es de la red local / privada y no tiene sentido mandarlo por Tor:
+/// RFC1918 (10/8, 172.16/12, 192.168/16), CGNAT/Tailscale 100.64/10, loopback,
+/// link-local, IPv6 ULA (fc00::/7) y link-local (fe80::/10), `localhost` y nombres
+/// `.local`, `.lan`, `.home.arpa`, `.internal`, `.ts.net` (MagicDNS de Tailscale).
+///
+/// Un salida de Tor nunca llega a esas direcciones. El RPC del daemon no usa SOCKS
+/// (va directo por TCP); esta clasificación sirve para explicar la ruta y para
+/// detectar cuando una VPN de todo el teléfono (Orbot) lo está capturando.
+pub fn es_host_local(host: &str) -> bool {
+    use std::net::IpAddr;
+    let h = host.trim().trim_start_matches('[').trim_end_matches(']').trim_end_matches('.');
+    let h = h.to_ascii_lowercase();
+    if let Ok(ip) = h.parse::<IpAddr>() {
+        return match ip {
+            IpAddr::V4(v4) => ipv4_local(v4),
+            IpAddr::V6(v6) => {
+                if let Some(v4) = v6.to_ipv4_mapped() {
+                    return ipv4_local(v4);
+                }
+                let seg0 = v6.segments()[0];
+                v6.is_loopback()
+                    || v6.is_unspecified()
+                    || (seg0 & 0xfe00) == 0xfc00 // ULA fc00::/7
+                    || (seg0 & 0xffc0) == 0xfe80 // link-local fe80::/10
+            }
+        };
+    }
+    h == "localhost"
+        || [".localhost", ".local", ".lan", ".home.arpa", ".internal", ".ts.net"]
+            .iter()
+            .any(|suf| h.ends_with(suf))
+}
+
+fn ipv4_local(v4: std::net::Ipv4Addr) -> bool {
+    let o = v4.octets();
+    v4.is_private()
+        || v4.is_loopback()
+        || v4.is_link_local()
+        || v4.is_unspecified()
+        || (o[0] == 100 && (o[1] & 0xc0) == 64) // 100.64.0.0/10 (CGNAT / Tailscale)
+}
+
+/// `true` si la URL apunta a un nodo de la red local / Tailscale.
+pub fn url_es_local(url: &str) -> bool {
+    host_de_url(url).is_some_and(|h| es_host_local(&h))
+}
+
+/// `true` si el daemon activo es un nodo local (LAN / Tailscale).
+pub fn daemon_es_local() -> bool {
+    url_es_local(&daemon_url())
+}
+
 /// Red lógica. `regtest` no se ofrece: el esqueleto se prueba en stagenet.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Net {
@@ -217,5 +287,41 @@ mod tests {
         assert_eq!(daemon_url(), "http://100.64.0.2:38081");
         fijar_daemon(None).unwrap();
         assert!(daemon_es_defecto());
+    }
+
+    #[test]
+    fn hosts_locales() {
+        for u in [
+            "http://192.168.1.83:38081",
+            "http://10.0.0.5:38081/json_rpc",
+            "http://172.16.4.2:38081",
+            "http://172.31.255.1:38081",
+            "http://100.64.0.2:38081",
+            "http://100.127.1.1:38081",
+            "http://127.0.0.1:38081",
+            "http://169.254.3.3:38081",
+            "http://[::1]:38081",
+            "http://[fd7a:115c:a1e0::1]:38081",
+            "http://[fe80::1]:38081",
+            "http://user:pw@192.168.0.10:38081",
+            "http://localhost:38081",
+            "http://monero.local:38081",
+            "http://pc.tail1234.ts.net:38081",
+        ] {
+            assert!(url_es_local(u), "{u} debería ser local");
+        }
+        for u in [
+            STAGENET_DAEMON,
+            "http://172.32.0.1:38081",
+            "http://100.128.0.1:38081",
+            "http://8.8.8.8:38081",
+            "http://[2001:db8::1]:38081",
+            "https://node.example.com:38089",
+            "http://localhost.example.com:1",
+        ] {
+            assert!(!url_es_local(u), "{u} no debería ser local");
+        }
+        assert_eq!(host_de_url("http://[::1]:38081").as_deref(), Some("::1"));
+        assert_eq!(host_de_url("https://a:b@Host.EXAMPLE:1/x").as_deref(), Some("host.example"));
     }
 }

@@ -25,7 +25,7 @@ pub use zeroize::Zeroizing;
 
 /// Llave de gasto de la billetera personal. No sale de la máquina.
 pub type LlaveGasto = Zeroizing<monero_wallet::ed25519::Scalar>;
-pub use network::{daemon_es_defecto, daemon_url, fijar_daemon, validar_daemon_url, Net, FEE_CUSHION, PICONERO, STAGENET_DAEMON};
+pub use network::{daemon_es_defecto, daemon_es_local, daemon_url, es_host_local, fijar_daemon, host_de_url, url_es_local, validar_daemon_url, Net, FEE_CUSHION, PICONERO, STAGENET_DAEMON};
 pub use spend::{SpendProposal, SpendSession, Split};
 pub use wallet::SingleWallet;
 

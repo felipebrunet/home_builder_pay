@@ -28,7 +28,7 @@ use xmr_joint::fund::{self, view_del_mandante};
 use xmr_joint::personal::{self, elegir_montos};
 use xmr_joint::spend::{self, SpendProposal, SpendSession, SpendSigned};
 use xmr_joint::wallet::SingleWallet;
-use xmr_joint::{daemon_url, OutputWithDecoys, Net, FEE_CUSHION, PICONERO};
+use xmr_joint::{daemon_url, url_es_local, OutputWithDecoys, Net, FEE_CUSHION, PICONERO};
 
 use konstruado_core::{EstadoObra, Obra, PartidaEstado, Persona, Rol};
 use konstruado_net::{CajaMsg, Nodo};
@@ -579,6 +579,15 @@ pub fn humanizar_error_cadena(raw: &str, es: bool) -> String {
             "El nodo rechazó la conexión. ¿monerod escucha en esa IP:puerto? En la PC: --rpc-bind-ip 0.0.0.0 --confirm-external-bind (y sin restricted-rpc si querés RPC completo).",
             "The node refused the connection. Is monerod listening on that IP:port? On the PC use --rpc-bind-ip 0.0.0.0 --confirm-external-bind.",
         )
+    } else if low_c.contains("connection reset")
+        || low_c.contains("reset by peer")
+        || low_c.contains("econnreset")
+        || low_c.contains("connectionreset")
+    {
+        (
+            "La conexión con el nodo se cortó apenas abrió (connection reset). Si el nodo es de tu red local y Orbot está en modo VPN capturando a Konstruado, Orbot la manda por Tor y Tor no llega a IPs privadas: dejá Konstruado fuera de la VPN de Orbot. Si no, revisá que monerod siga en marcha.",
+            "The node connection was reset right after opening. If the node is on your local network and Orbot's VPN mode is capturing Konstruado, Orbot sends it through Tor and Tor cannot reach private IPs: keep Konstruado out of Orbot's VPN. Otherwise check that monerod is still running.",
+        )
     } else if low_c.contains("network is unreachable")
         || low_c.contains("no route to host")
         || low_c.contains("host is unreachable")
@@ -931,11 +940,65 @@ pub struct PruebaDaemon {
     pub tip: Option<u64>,
     pub ms: u64,
     pub mensaje: String,
+    /// El nodo es de la red local / Tailscale (192.168.x, 10.x, 100.64/10…).
+    pub local: bool,
+    /// Ruta legible por la que salió la conexión.
+    pub ruta: String,
+}
+
+/// Qué sabe la UI de la VPN del sistema para esta app (solo Android la detecta).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum VpnApp {
+    /// No se sabe (escritorio, o Android sin dato).
+    Desconocida,
+    /// La red por defecto de la app no es una VPN.
+    Ninguna,
+    /// Una VPN de todo el teléfono (p. ej. Orbot en modo VPN) captura el tráfico de la app.
+    Captura,
+}
+
+/// Ruta del RPC del daemon. El transporte (`monero-simple-request-rpc`) no usa
+/// SOCKS ni proxies del entorno: siempre abre TCP directo. Lo único que lo desvía
+/// es una VPN del sistema que capture a la app (Orbot en modo VPN → Tor).
+pub fn ruta_daemon(url: &str, vpn: VpnApp, es: bool) -> String {
+    let local = url_es_local(url);
+    let (e, i) = match (local, vpn) {
+        (true, VpnApp::Captura) => (
+            "red local, pero una VPN del teléfono (Orbot) captura la app",
+            "local network, but a phone VPN (Orbot) captures the app",
+        ),
+        (true, _) => ("directo por la red local, sin Tor", "direct over the local network, no Tor"),
+        (false, VpnApp::Captura) => (
+            "por la VPN del teléfono (con Orbot, por Tor)",
+            "through the phone VPN (with Orbot, over Tor)",
+        ),
+        (false, _) => (
+            "directo por internet, sin Tor (el nodo ve tu IP)",
+            "direct over the internet, no Tor (the node sees your IP)",
+        ),
+    };
+    if es { e.into() } else { i.into() }
+}
+
+/// Pista cuando el nodo local falla con una VPN capturando la app.
+pub fn pista_vpn_local(es: bool) -> &'static str {
+    if es {
+        "Orbot en modo VPN está capturando la conexión a la red local: la manda por Tor y Tor no llega a IPs privadas como esta. Android no deja que una app se salte la VPN de Orbot. Arreglo: en Orbot → «Elegir aplicaciones» marcá al menos otra app y dejá Konstruado sin marcar (si no hay ninguna marcada, Orbot vuelve a «VPN de dispositivo completo»), o apagá la VPN con «Modo de usuarie avanzado» en los ajustes de Orbot. La sala sigue yendo por Tor a través del SOCKS 127.0.0.1:9050."
+    } else {
+        "Orbot's VPN mode is capturing the connection to your local network: it sends it through Tor and Tor cannot reach private IPs like this one. Android does not let an app bypass Orbot's VPN. Fix: in Orbot → \"Choose apps\" select at least one other app and leave Konstruado unselected (with none selected Orbot goes back to \"Full Device VPN\"), or turn the VPN off with Orbot's \"Power User Mode\". The room still goes over Tor through SOCKS 127.0.0.1:9050."
+    }
 }
 
 /// Pide la punta al daemon activo. No gasta monedas.
 pub async fn probar_daemon(es: bool) -> PruebaDaemon {
+    probar_daemon_con_vpn(es, VpnApp::Desconocida).await
+}
+
+/// Igual que [`probar_daemon`], con lo que la UI sabe de la VPN del sistema.
+pub async fn probar_daemon_con_vpn(es: bool, vpn: VpnApp) -> PruebaDaemon {
     let url = daemon_url();
+    let local = url_es_local(&url);
+    let ruta = ruta_daemon(&url, vpn, es);
     let t0 = Instant::now();
     let res = match chain::connect(&url).await {
         Ok(rpc) => match chain::tip(&rpc).await {
@@ -952,13 +1015,19 @@ pub async fn probar_daemon(es: bool) -> PruebaDaemon {
             tip: Some(tip),
             ms,
             mensaje: if es {
-                format!("RPC OK: el nodo {url} respondió la punta en el bloque {tip} ({ms} ms).")
+                format!("RPC OK: el nodo {url} respondió la punta en el bloque {tip} ({ms} ms, {ruta}).")
             } else {
-                format!("RPC OK: node {url} answered tip at block {tip} ({ms} ms).")
+                format!("RPC OK: node {url} answered tip at block {tip} ({ms} ms, {ruta}).")
             },
+            local,
+            ruta,
         },
         Err(e) => {
-            let base = humanizar_error_cadena(&e, es);
+            let base = if local && vpn == VpnApp::Captura {
+                pista_vpn_local(es).to_string()
+            } else {
+                humanizar_error_cadena(&e, es)
+            };
             PruebaDaemon {
                 ok: false,
                 url: url.clone(),
@@ -969,6 +1038,8 @@ pub async fn probar_daemon(es: bool) -> PruebaDaemon {
                 } else {
                     format!("{base} URL: {url}. Failed after {ms} ms.")
                 },
+                local,
+                ruta,
             }
         }
     }
@@ -5243,6 +5314,28 @@ mod tests {
         );
         assert!(m.contains("timeout"), "{m}");
         assert!(!m.contains("Elapsed(())"), "{m}");
+    }
+
+    #[test]
+    fn humaniza_reset_del_nodo() {
+        let m = humanizar_error_cadena(
+            "cadena: interface error (Hyper(hyper::Error(Io, Os { code: 104, kind: ConnectionReset, message: \"Connection reset by peer\" })))",
+            true,
+        );
+        assert!(m.contains("Orbot"), "{m}");
+        assert!(!m.contains("hyper::Error"), "{m}");
+    }
+
+    #[test]
+    fn ruta_del_daemon_local_y_publica() {
+        let lan = "http://192.168.1.83:38081";
+        assert!(ruta_daemon(lan, VpnApp::Ninguna, true).contains("red local"));
+        assert!(ruta_daemon(lan, VpnApp::Desconocida, true).contains("sin Tor"));
+        assert!(ruta_daemon(lan, VpnApp::Captura, true).contains("VPN"));
+        let publico = xmr_joint::STAGENET_DAEMON;
+        assert!(ruta_daemon(publico, VpnApp::Captura, true).contains("Tor"));
+        assert!(ruta_daemon(publico, VpnApp::Ninguna, true).contains("ve tu IP"));
+        assert!(pista_vpn_local(true).contains("Elegir aplicaciones"));
     }
 
     #[test]

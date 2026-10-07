@@ -836,6 +836,10 @@ internal interface UniffiForeignFutureCompleteVoid : com.sun.jna.Callback {
 
 
 
+
+
+
+
 // For large crates we prevent `MethodTooLargeException` (see #2340)
 // N.B. the name of the extension is very misleading, since it is 
 // rather `InterfaceTooLargeException`, caused by too many methods 
@@ -869,6 +873,8 @@ fun uniffi_konstruado_ffi_checksum_method_konstruadoapp_archivar_obra_local(
 ): Short
 fun uniffi_konstruado_ffi_checksum_method_konstruadoapp_avisar_termino(
 ): Short
+fun uniffi_konstruado_ffi_checksum_method_konstruadoapp_aviso_vpn_daemon(
+): Short
 fun uniffi_konstruado_ffi_checksum_method_konstruadoapp_billetera(
 ): Short
 fun uniffi_konstruado_ffi_checksum_method_konstruadoapp_buscar(
@@ -890,6 +896,8 @@ fun uniffi_konstruado_ffi_checksum_method_konstruadoapp_crear_semilla(
 fun uniffi_konstruado_ffi_checksum_method_konstruadoapp_daemon_activo(
 ): Short
 fun uniffi_konstruado_ffi_checksum_method_konstruadoapp_daemon_es_defecto(
+): Short
+fun uniffi_konstruado_ffi_checksum_method_konstruadoapp_daemon_es_local(
 ): Short
 fun uniffi_konstruado_ffi_checksum_method_konstruadoapp_daemon_por_defecto(
 ): Short
@@ -1046,6 +1054,8 @@ fun uniffi_konstruado_ffi_fn_method_konstruadoapp_archivar_obra_local(`ptr`: Poi
 ): RustBuffer.ByValue
 fun uniffi_konstruado_ffi_fn_method_konstruadoapp_avisar_termino(`ptr`: Pointer,`obraId`: RustBuffer.ByValue,`indice`: Int,`pct`: RustBuffer.ByValue,`nota`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): Unit
+fun uniffi_konstruado_ffi_fn_method_konstruadoapp_aviso_vpn_daemon(`ptr`: Pointer,`vpnCaptura`: Byte,uniffi_out_err: UniffiRustCallStatus, 
+): RustBuffer.ByValue
 fun uniffi_konstruado_ffi_fn_method_konstruadoapp_billetera(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
 fun uniffi_konstruado_ffi_fn_method_konstruadoapp_buscar(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
@@ -1067,6 +1077,8 @@ fun uniffi_konstruado_ffi_fn_method_konstruadoapp_crear_semilla(`ptr`: Pointer,u
 fun uniffi_konstruado_ffi_fn_method_konstruadoapp_daemon_activo(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
 fun uniffi_konstruado_ffi_fn_method_konstruadoapp_daemon_es_defecto(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
+): Byte
+fun uniffi_konstruado_ffi_fn_method_konstruadoapp_daemon_es_local(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
 ): Byte
 fun uniffi_konstruado_ffi_fn_method_konstruadoapp_daemon_por_defecto(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
@@ -1108,7 +1120,7 @@ fun uniffi_konstruado_ffi_fn_method_konstruadoapp_perfil(`ptr`: Pointer,uniffi_o
 ): RustBuffer.ByValue
 fun uniffi_konstruado_ffi_fn_method_konstruadoapp_previa_aceptar(`ptr`: Pointer,`ofertaId`: RustBuffer.ByValue,`garantia`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
-fun uniffi_konstruado_ffi_fn_method_konstruadoapp_probar_daemon(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
+fun uniffi_konstruado_ffi_fn_method_konstruadoapp_probar_daemon(`ptr`: Pointer,`vpnCaptura`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
 fun uniffi_konstruado_ffi_fn_method_konstruadoapp_proponer_encerrar(`ptr`: Pointer,`obraId`: RustBuffer.ByValue,`indice`: Int,uniffi_out_err: UniffiRustCallStatus, 
 ): Unit
@@ -1301,6 +1313,9 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if (lib.uniffi_konstruado_ffi_checksum_method_konstruadoapp_avisar_termino() != 9308.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if (lib.uniffi_konstruado_ffi_checksum_method_konstruadoapp_aviso_vpn_daemon() != 28034.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if (lib.uniffi_konstruado_ffi_checksum_method_konstruadoapp_billetera() != 12739.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
@@ -1332,6 +1347,9 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_konstruado_ffi_checksum_method_konstruadoapp_daemon_es_defecto() != 38206.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_konstruado_ffi_checksum_method_konstruadoapp_daemon_es_local() != 63723.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_konstruado_ffi_checksum_method_konstruadoapp_daemon_por_defecto() != 1710.toShort()) {
@@ -1394,7 +1412,7 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if (lib.uniffi_konstruado_ffi_checksum_method_konstruadoapp_previa_aceptar() != 26330.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_konstruado_ffi_checksum_method_konstruadoapp_probar_daemon() != 57548.toShort()) {
+    if (lib.uniffi_konstruado_ffi_checksum_method_konstruadoapp_probar_daemon() != 20989.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_konstruado_ffi_checksum_method_konstruadoapp_proponer_encerrar() != 47893.toShort()) {
@@ -1881,6 +1899,11 @@ public interface KonstruadoAppInterface {
     
     fun `avisarTermino`(`obraId`: kotlin.String, `indice`: kotlin.UInt, `pct`: kotlin.String, `nota`: kotlin.String)
     
+    /**
+     * Aviso para mostrar antes de probar: nodo local + VPN capturando la app.
+     */
+    fun `avisoVpnDaemon`(`vpnCaptura`: kotlin.Boolean): kotlin.String?
+    
     fun `billetera`(): BilleteraVista
     
     /**
@@ -1915,6 +1938,11 @@ public interface KonstruadoAppInterface {
     fun `daemonActivo`(): kotlin.String
     
     fun `daemonEsDefecto`(): kotlin.Boolean
+    
+    /**
+     * `true` si el nodo activo es de la red local / Tailscale (va directo, nunca por Tor).
+     */
+    fun `daemonEsLocal`(): kotlin.Boolean
     
     /**
      * Nodo público de stagenet (fallback).
@@ -1988,8 +2016,11 @@ public interface KonstruadoAppInterface {
      *
      * No gasta monedas: solo mide si el daemon responde. Guarda el último
      * resultado (éxito o fallo) para mostrarlo en Cuenta y Billetera.
+     *
+     * `vpn_captura`: lo que Kotlin ve en `ConnectivityManager` (la red por defecto
+     * de la app es una VPN, p. ej. Orbot en modo VPN). `None` = no se sabe.
      */
-    fun `probarDaemon`(): DaemonPrueba
+    fun `probarDaemon`(`vpnCaptura`: kotlin.Boolean?): DaemonPrueba
     
     fun `proponerEncerrar`(`obraId`: kotlin.String, `indice`: kotlin.UInt)
     
@@ -2258,6 +2289,21 @@ open class KonstruadoApp: Disposable, AutoCloseable, KonstruadoAppInterface
     
     
 
+    
+    /**
+     * Aviso para mostrar antes de probar: nodo local + VPN capturando la app.
+     */override fun `avisoVpnDaemon`(`vpnCaptura`: kotlin.Boolean): kotlin.String? {
+            return FfiConverterOptionalString.lift(
+    callWithPointer {
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_konstruado_ffi_fn_method_konstruadoapp_aviso_vpn_daemon(
+        it, FfiConverterBoolean.lower(`vpnCaptura`),_status)
+}
+    }
+    )
+    }
+    
+
     override fun `billetera`(): BilleteraVista {
             return FfiConverterTypeBilleteraVista.lift(
     callWithPointer {
@@ -2396,6 +2442,21 @@ open class KonstruadoApp: Disposable, AutoCloseable, KonstruadoAppInterface
     callWithPointer {
     uniffiRustCall() { _status ->
     UniffiLib.INSTANCE.uniffi_konstruado_ffi_fn_method_konstruadoapp_daemon_es_defecto(
+        it, _status)
+}
+    }
+    )
+    }
+    
+
+    
+    /**
+     * `true` si el nodo activo es de la red local / Tailscale (va directo, nunca por Tor).
+     */override fun `daemonEsLocal`(): kotlin.Boolean {
+            return FfiConverterBoolean.lift(
+    callWithPointer {
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_konstruado_ffi_fn_method_konstruadoapp_daemon_es_local(
         it, _status)
 }
     }
@@ -2683,12 +2744,15 @@ open class KonstruadoApp: Disposable, AutoCloseable, KonstruadoAppInterface
      *
      * No gasta monedas: solo mide si el daemon responde. Guarda el último
      * resultado (éxito o fallo) para mostrarlo en Cuenta y Billetera.
-     */override fun `probarDaemon`(): DaemonPrueba {
+     *
+     * `vpn_captura`: lo que Kotlin ve en `ConnectivityManager` (la red por defecto
+     * de la app es una VPN, p. ej. Orbot en modo VPN). `None` = no se sabe.
+     */override fun `probarDaemon`(`vpnCaptura`: kotlin.Boolean?): DaemonPrueba {
             return FfiConverterTypeDaemonPrueba.lift(
     callWithPointer {
     uniffiRustCall() { _status ->
     UniffiLib.INSTANCE.uniffi_konstruado_ffi_fn_method_konstruadoapp_probar_daemon(
-        it, _status)
+        it, FfiConverterOptionalBoolean.lower(`vpnCaptura`),_status)
 }
     }
     )
@@ -3187,7 +3251,15 @@ data class DaemonPrueba (
     /**
      * Texto listo para mostrar (español).
      */
-    var `mensaje`: kotlin.String
+    var `mensaje`: kotlin.String, 
+    /**
+     * Nodo de la red local / Tailscale (no pasa por Tor nunca).
+     */
+    var `local`: kotlin.Boolean, 
+    /**
+     * Ruta legible: «directo por la red local, sin Tor», «por la VPN del teléfono…».
+     */
+    var `ruta`: kotlin.String
 ) {
     
     companion object
@@ -3204,6 +3276,8 @@ public object FfiConverterTypeDaemonPrueba: FfiConverterRustBuffer<DaemonPrueba>
             FfiConverterOptionalULong.read(buf),
             FfiConverterULong.read(buf),
             FfiConverterString.read(buf),
+            FfiConverterBoolean.read(buf),
+            FfiConverterString.read(buf),
         )
     }
 
@@ -3212,7 +3286,9 @@ public object FfiConverterTypeDaemonPrueba: FfiConverterRustBuffer<DaemonPrueba>
             FfiConverterString.allocationSize(value.`url`) +
             FfiConverterOptionalULong.allocationSize(value.`tip`) +
             FfiConverterULong.allocationSize(value.`ms`) +
-            FfiConverterString.allocationSize(value.`mensaje`)
+            FfiConverterString.allocationSize(value.`mensaje`) +
+            FfiConverterBoolean.allocationSize(value.`local`) +
+            FfiConverterString.allocationSize(value.`ruta`)
     )
 
     override fun write(value: DaemonPrueba, buf: ByteBuffer) {
@@ -3221,6 +3297,8 @@ public object FfiConverterTypeDaemonPrueba: FfiConverterRustBuffer<DaemonPrueba>
             FfiConverterOptionalULong.write(value.`tip`, buf)
             FfiConverterULong.write(value.`ms`, buf)
             FfiConverterString.write(value.`mensaje`, buf)
+            FfiConverterBoolean.write(value.`local`, buf)
+            FfiConverterString.write(value.`ruta`, buf)
     }
 }
 
@@ -4211,6 +4289,38 @@ public object FfiConverterOptionalULong: FfiConverterRustBuffer<kotlin.ULong?> {
         } else {
             buf.put(1)
             FfiConverterULong.write(value, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterOptionalBoolean: FfiConverterRustBuffer<kotlin.Boolean?> {
+    override fun read(buf: ByteBuffer): kotlin.Boolean? {
+        if (buf.get().toInt() == 0) {
+            return null
+        }
+        return FfiConverterBoolean.read(buf)
+    }
+
+    override fun allocationSize(value: kotlin.Boolean?): ULong {
+        if (value == null) {
+            return 1UL
+        } else {
+            return 1UL + FfiConverterBoolean.allocationSize(value)
+        }
+    }
+
+    override fun write(value: kotlin.Boolean?, buf: ByteBuffer) {
+        if (value == null) {
+            buf.put(0)
+        } else {
+            buf.put(1)
+            FfiConverterBoolean.write(value, buf)
         }
     }
 }
