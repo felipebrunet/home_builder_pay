@@ -2,6 +2,8 @@
 
 Producto de escritorio (Dioxus) para un **trato de obra entre dos personas**, sin servidor. No es un chat. El mandante publica un aviso; el contratista lo ve y acepta o contraoferta. Las notas del trato van cifradas entre los dos (X25519 + ChaCha20-Poly1305). Monero vive en `xmr-joint` y la ventana lo usa en stagenet contra `https://stagenet.xmr.kernal.eu:38089`. `monero_fn` sigue en 4: el dominio no finge el fondeo. Encerrada y Pagada se marcan cuando un scan local ve la transacción en un bloque. No hay Bitcoin. No se probó un broadcast.
 
+Homologación desktop↔Android: fondeo CLSAG, `fund-abort`, saldos, DKG y gossip viven en `caja.rs` (compartido vía path include en FFI). UI solo Dioxus vs Compose. Tor propio en PC; Orbot en el teléfono. Sala siempre hospedada en PC/`konstruado-sala`.
+
 Hablamos en español. UI rioplatense/chilena (“Poné”, “te toca”) por defecto; el usuario puede pasar a **English** (ES/EN en la barra y en Cuenta). El trato no cambia.
 
 ## Crates
@@ -10,8 +12,9 @@ Hablamos en español. UI rioplatense/chilena (“Poné”, “te toca”) por de
 |---|---|
 | `konstruado-core` | Dominio: persona, oferta, obra, partidas, contra, extra, recibo, fusión, notas cifradas. Sin UI ni Tor. |
 | `konstruado-net` | Encuentro: TCP local `17432`, gossip DHT, Tor propio + onion horneado. |
-| `konstruado` | Ventana: pantallas, persistir, exportar, temas, idioma. |
-| `xmr-joint` | Semilla de 25 palabras, DKG 2-de-2, fondeo atómico y gasto con dos destinos. La ventana lo llama desde `caja.rs`. |
+| `konstruado` | Ventana Dioxus: pantallas, persistir, exportar, temas, idioma. Incluye `caja.rs` (motor Monero). |
+| `konstruado-ffi` | UniFFI: mismo `caja.rs` / `persist.rs` / `i18n.rs` para Android Compose. |
+| `xmr-joint` | Semilla de 25 palabras, DKG 2-de-2, fondeo atómico y gasto con dos destinos. La caja lo llama. |
 
 El split está bien. No hace falta un refactor grande. `main.rs` es largo; partir pantallas solo si duele.
 
@@ -38,7 +41,7 @@ No son un chat de usuarios: se ven **obras y avisos**, no una lista tipo WhatsAp
 - Misma PC: se encuentran por `127.0.0.1:17432` sin esperar Tor. La escucha sigue en `127.0.0.1` salvo `KONSTRUADO_ESCUCHAR=0.0.0.0` (prueba en la LAN).
 - Dos PCs: hace falta el paquete `tor`. El contratista puede **Buscar ofertas**. Sigue marcando la sala para bajar obras nuevas.
 - Un teléfono no tiene dirección entrante. Se anuncia como `PeerAddr::Buzon` y mantiene una sesión viva hacia la sala. La caja va por esa sesión; si se cae, la PC la guarda (máximo 64) y la entrega al volver. Dos teléfonos se hablan por la PC que hospeda, con tope de 3 `saltos`. Entre dos PCs la caja sigue yendo directo. El campo `saltos` tiene `serde(default)`: un par viejo lo ignora, pero no entiende `Buzon`.
-- Solo un anfitrión del onion horneado. Si el mandante es el teléfono, la sala la hospeda una PC: contratista con `KONSTRUADO_HOSPEDAR_SALA=1`, o `cargo run -p konstruado-net --bin konstruado-sala`. La app Android no vive en este repo.
+- Solo un anfitrión del onion horneado. Si el mandante es el teléfono, la sala la hospeda una PC: contratista con `KONSTRUADO_HOSPEDAR_SALA=1`, o `cargo run -p konstruado-net --bin konstruado-sala`. Android (`android/`) entra en modo celular vía Orbot SOCKS; no hospeda onion.
 - `fusionar` en obras **no retrocede** estados (Pendiente → Encerrada → En trato → Pagada).
 
 ## Persistencia y UI
@@ -68,7 +71,7 @@ Primero mandante (esperar `sala abierta`). Después contratista. La primera vez 
 
 `third_party/monero-oxide` es el snapshot `731657ae` con tres parches (CLSAG con máscara, `sum_output_masks` público, `input_sum` / `external_payments`). No van secretos ahí.
 
-Daemon fijo, sin campo en la ventana: `https://stagenet.xmr.kernal.eu:38089` (HTTPS, RPC restringido, `webpki-roots`). El binario `stagenet` usa el mismo por defecto. `check` llegó a la punta por ese URL. `get_block`, `get_outs` y `send_raw_transaction` no se probaron: un fondeo en vivo puede rechazarse.
+Daemon por defecto: `https://stagenet.xmr.kernal.eu:38089` (HTTPS, RPC restringido, `webpki-roots`). Escritorio y Android pueden fijar uno propio (LAN/Tailscale) en Cuenta; queda en `daemon.url` bajo `KONSTRUADO_DATOS` (o `KONSTRUADO_DAEMON`). El binario `stagenet` usa el público por defecto. Un fondeo en vivo puede rechazarse; **Empezar el fondeo de nuevo** limpia la sesión CLSAG y pide decoys frescos (`fund-abort`).
 
 1 unidad del trato = 20 000 000 piconero = 0,00002 XMR (`PICONERO_POR_UNIDAD`). La garantía de 2000 son 0,04 XMR por lado.
 
@@ -91,10 +94,8 @@ cargo run -p xmr-joint --bin stagenet -- check
 ## Qué no hacer sin que lo pidan
 
 - Marcar Encerrada o Pagada sin ver la tx en un bloque, o poner semilla, share o view en el gossip o en `estado.json`.
-- Un campo para cambiar el daemon. La ventana usa solo `STAGENET_DAEMON`.
 - Bitcoin.
 - Reutilizar secretos de laboratorio o commitear semillas / shares.
-- Android / APK. Otro proyecto (Orbot, mandante en PC).
 - Reescribir iced/Tauri.
 - Meter un servidor o un keyword que el usuario tipeé.
 - Refactor cosmético de `main.rs`.

@@ -104,7 +104,7 @@ To rebuild it:
 ```bash
 cargo build -p konstruado --release
 mkdir -p dist
-cp target/release/konstruado dist/konstruado-0.2.0-linux-x86_64
+cp target/release/konstruado dist/konstruado-0.2.1-linux-x86_64
 ```
 
 How to use the app (roles, two machines, the deal) is **Help → README** inside the window, not this file.

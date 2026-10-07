@@ -841,6 +841,119 @@ pub struct Hecho {
     pub pago: Option<String>,
 }
 
+
+/// Misma regla en Dioxus y Compose: reinicio solo con partida Encerrando y freno del motor.
+pub fn puede_empezar_fondeo_de_nuevo(encerrando: bool, frenado: bool) -> bool {
+    encerrando && frenado
+}
+
+fn otro_id_obra(obra: &Obra, yo: &str) -> String {
+    if yo == obra.mandante.id {
+        obra.contratista.id.clone()
+    } else {
+        obra.mandante.id.clone()
+    }
+}
+
+/// Sella notas y extras en claro antes de republicar. Escritorio y Android llaman esto.
+pub fn sellar_obras_guardadas(nodo: &Nodo, yo: &Persona, sec: &str) {
+    for obra in nodo.obras() {
+        if !obra.participa(&yo.id) {
+            continue;
+        }
+        let mut sealed = obra.clone();
+        if sealed.preparar_para_red(&yo.id, &yo.clave_pub, sec).is_ok() && sealed != obra {
+            nodo.publicar_obra(sealed);
+        }
+    }
+}
+
+/// Encerrada/Pagada solo cuando el motor vio la tx. Un solo camino para ambos clientes.
+pub fn aplicar_hechos_monero(nodo: &Nodo, yo: &Persona, sec: &str, hechos: &[Hecho]) {
+    for h in hechos {
+        let mut obras = nodo.obras();
+        let Some(obra) = obras.iter_mut().find(|o| o.id == h.obra) else {
+            continue;
+        };
+        let otro = otro_id_obra(obra, &yo.id);
+        if !nodo.trato_alineado(&yo.id, &otro) {
+            continue;
+        }
+        let mut publico = false;
+        if let Some(txid) = &h.fondeo {
+            let confirma = obra.partidas.get(h.partida).is_some_and(|p| {
+                p.estado == PartidaEstado::Encerrando
+                    && p.encerrado_por.as_ref().is_some_and(|q| q.id != yo.id)
+            });
+            if confirma && obra.encerrar_confirmar(h.partida, yo).is_ok() {
+                obra.partidas[h.partida].fondeo_txid = Some(txid.clone());
+                publico = true;
+            }
+        }
+        if let Some(txid) = &h.pago {
+            if obra.aceptar_pago(h.partida, yo).is_ok() {
+                obra.partidas[h.partida].pago_txid = Some(txid.clone());
+                publico = true;
+            }
+        }
+        if publico && obra.preparar_para_red(&yo.id, &yo.clave_pub, sec).is_ok() {
+            nodo.publicar_obra(obra.clone());
+        }
+    }
+}
+
+/// Resultado de «Probar RPC del nodo» (escritorio y Android).
+#[derive(Clone, Debug)]
+pub struct PruebaDaemon {
+    pub ok: bool,
+    pub url: String,
+    pub tip: Option<u64>,
+    pub ms: u64,
+    pub mensaje: String,
+}
+
+/// Pide la punta al daemon activo. No gasta monedas.
+pub async fn probar_daemon(es: bool) -> PruebaDaemon {
+    let url = daemon_url();
+    let t0 = Instant::now();
+    let res = match chain::connect(&url).await {
+        Ok(rpc) => match chain::tip(&rpc).await {
+            Ok(n) => Ok(n as u64),
+            Err(e) => Err(e.to_string()),
+        },
+        Err(e) => Err(e.to_string()),
+    };
+    let ms = t0.elapsed().as_millis() as u64;
+    match res {
+        Ok(tip) => PruebaDaemon {
+            ok: true,
+            url: url.clone(),
+            tip: Some(tip),
+            ms,
+            mensaje: if es {
+                format!("RPC OK: el nodo {url} respondió la punta en el bloque {tip} ({ms} ms).")
+            } else {
+                format!("RPC OK: node {url} answered tip at block {tip} ({ms} ms).")
+            },
+        },
+        Err(e) => {
+            let base = humanizar_error_cadena(&e, es);
+            PruebaDaemon {
+                ok: false,
+                url: url.clone(),
+                tip: None,
+                ms,
+                mensaje: if es {
+                    format!("{base} URL: {url}. Tardó {ms} ms antes de fallar.")
+                } else {
+                    format!("{base} URL: {url}. Failed after {ms} ms.")
+                },
+            }
+        }
+    }
+}
+
+
 #[derive(Clone)]
 pub struct Caja {
     inner: Arc<Mutex<Motor>>,
@@ -4959,6 +5072,15 @@ async fn ver_txid(view: xmr_joint::ViewPair, txid: &str) -> Result<bool, String>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+
+    #[test]
+    fn puede_empezar_solo_con_freno() {
+        assert!(puede_empezar_fondeo_de_nuevo(true, true));
+        assert!(!puede_empezar_fondeo_de_nuevo(true, false));
+        assert!(!puede_empezar_fondeo_de_nuevo(false, true));
+        assert!(!puede_empezar_fondeo_de_nuevo(false, false));
+    }
 
     #[test]
     fn humaniza_timeout_del_nodo() {

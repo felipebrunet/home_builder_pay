@@ -114,3 +114,86 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
+
+/// Archivo con la URL propia del daemon stagenet (`daemon.url` en el dir de datos).
+fn path_daemon() -> PathBuf {
+    dir().join("daemon.url")
+}
+
+/// Al arrancar: carga `daemon.url`, si no `KONSTRUADO_DAEMON`, si no el público.
+/// Misma semántica en escritorio y Android (vía FFI).
+pub fn cargar_daemon_al_arrancar() -> Result<(), String> {
+    let p = path_daemon();
+    match std::fs::read_to_string(&p) {
+        Ok(s) if !s.trim().is_empty() => {
+            xmr_joint::fijar_daemon(Some(s.trim()))?;
+        }
+        Ok(_) | Err(_) => {
+            if let Ok(env) = std::env::var("KONSTRUADO_DAEMON") {
+                if !env.trim().is_empty() {
+                    xmr_joint::fijar_daemon(Some(env.trim()))?;
+                    return Ok(());
+                }
+            }
+            let _ = xmr_joint::fijar_daemon(None);
+        }
+    }
+    Ok(())
+}
+
+/// Activa y persiste un nodo propio. `None` / vacío = público (borra `daemon.url`).
+/// Devuelve la URL activa.
+pub fn fijar_daemon_persistido(url: Option<&str>) -> Result<String, String> {
+    let p = path_daemon();
+    let _ = std::fs::create_dir_all(dir());
+    match url.map(str::trim).filter(|s| !s.is_empty()) {
+        None => {
+            xmr_joint::fijar_daemon(None)?;
+            let _ = std::fs::remove_file(&p);
+            Ok(xmr_joint::daemon_url())
+        }
+        Some(raw) => {
+            let ok = xmr_joint::validar_daemon_url(raw)?;
+            xmr_joint::fijar_daemon(Some(&ok))?;
+            std::fs::write(&p, format!("{ok}\n"))
+                .map_err(|e| format!("No pude guardar el nodo: {e}"))?;
+            Ok(ok)
+        }
+    }
+}
+
+#[cfg(test)]
+mod daemon_tests {
+    use super::*;
+    use std::sync::Mutex;
+
+    static LOCK: Mutex<()> = Mutex::new(());
+
+    #[test]
+    fn daemon_persistido_y_fallback() {
+        let _g = LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = std::env::temp_dir().join(format!("konstruado-daemon-persist-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::create_dir_all(&dir);
+        let prev = std::env::var_os("KONSTRUADO_DATOS");
+        unsafe { std::env::set_var("KONSTRUADO_DATOS", &dir) };
+        let _ = xmr_joint::fijar_daemon(None);
+        cargar_daemon_al_arrancar().unwrap();
+        assert!(xmr_joint::daemon_es_defecto());
+        assert_eq!(xmr_joint::daemon_url(), xmr_joint::STAGENET_DAEMON);
+        let ok = fijar_daemon_persistido(Some("http://100.64.0.2:38081")).unwrap();
+        assert_eq!(ok, "http://100.64.0.2:38081");
+        let _ = xmr_joint::fijar_daemon(None);
+        cargar_daemon_al_arrancar().unwrap();
+        assert_eq!(xmr_joint::daemon_url(), "http://100.64.0.2:38081");
+        fijar_daemon_persistido(None).unwrap();
+        let _ = xmr_joint::fijar_daemon(None);
+        cargar_daemon_al_arrancar().unwrap();
+        assert!(xmr_joint::daemon_es_defecto());
+        match prev {
+            Some(v) => unsafe { std::env::set_var("KONSTRUADO_DATOS", v) },
+            None => unsafe { std::env::remove_var("KONSTRUADO_DATOS") },
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}

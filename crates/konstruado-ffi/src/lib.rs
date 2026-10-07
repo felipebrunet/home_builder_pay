@@ -386,51 +386,12 @@ fn otro_de(obra: &Obra, yo: &str) -> String {
     }
 }
 
-/// Sella notas y extras que quedaron en claro (igual que el escritorio).
 fn sellar_guardadas(nodo: &Nodo, yo: &Persona, sec: &str) {
-    for obra in nodo.obras() {
-        if !obra.participa(&yo.id) {
-            continue;
-        }
-        let mut sealed = obra.clone();
-        if sealed.preparar_para_red(&yo.id, &yo.clave_pub, sec).is_ok() && sealed != obra {
-            nodo.publicar_obra(sealed);
-        }
-    }
+    caja::sellar_obras_guardadas(nodo, yo, sec);
 }
 
-/// Encerrada/Pagada solo cuando el motor vio la transacción (igual que el escritorio).
 fn aplicar_monero(nodo: &Nodo, yo: &Persona, sec: &str, hechos: &[caja::Hecho]) {
-    for h in hechos {
-        let mut obras = nodo.obras();
-        let Some(obra) = obras.iter_mut().find(|o| o.id == h.obra) else {
-            continue;
-        };
-        let otro = otro_de(obra, &yo.id);
-        if !nodo.trato_alineado(&yo.id, &otro) {
-            continue;
-        }
-        let mut publico = false;
-        if let Some(txid) = &h.fondeo {
-            let confirma = obra.partidas.get(h.partida).is_some_and(|p| {
-                p.estado == PartidaEstado::Encerrando
-                    && p.encerrado_por.as_ref().is_some_and(|q| q.id != yo.id)
-            });
-            if confirma && obra.encerrar_confirmar(h.partida, yo).is_ok() {
-                obra.partidas[h.partida].fondeo_txid = Some(txid.clone());
-                publico = true;
-            }
-        }
-        if let Some(txid) = &h.pago {
-            if obra.aceptar_pago(h.partida, yo).is_ok() {
-                obra.partidas[h.partida].pago_txid = Some(txid.clone());
-                publico = true;
-            }
-        }
-        if publico && obra.preparar_para_red(&yo.id, &yo.clave_pub, sec).is_ok() {
-            nodo.publicar_obra(obra.clone());
-        }
-    }
+    caja::aplicar_hechos_monero(nodo, yo, sec, hechos);
 }
 
 fn mirada_de(v: &caja::CajaVista, obra: &str) -> Option<MiradaVista> {
@@ -802,42 +763,6 @@ impl KonstruadoApp {
 }
 
 
-fn path_daemon(datos: &PathBuf) -> PathBuf {
-    datos.join("daemon.url")
-}
-
-fn cargar_daemon_persistido(datos: &PathBuf) -> Result<(), FfiError> {
-    let p = path_daemon(datos);
-    match std::fs::read_to_string(&p) {
-        Ok(s) if !s.trim().is_empty() => {
-            xmr_joint::fijar_daemon(Some(s.trim())).map_err(fallo)?;
-        }
-        Ok(_) | Err(_) => {
-            if let Ok(env) = std::env::var("KONSTRUADO_DAEMON") {
-                if !env.trim().is_empty() {
-                    xmr_joint::fijar_daemon(Some(env.trim())).map_err(fallo)?;
-                    return Ok(());
-                }
-            }
-            let _ = xmr_joint::fijar_daemon(None);
-        }
-    }
-    Ok(())
-}
-
-fn persistir_daemon(datos: &PathBuf, url: Option<&str>) -> Result<(), FfiError> {
-    let p = path_daemon(datos);
-    match url.map(str::trim).filter(|s| !s.is_empty()) {
-        None => {
-            let _ = std::fs::remove_file(&p);
-            Ok(())
-        }
-        Some(u) => {
-            std::fs::write(&p, format!("{u}\n")).map_err(|e| fallo(format!("No pude guardar el nodo: {e}")))
-        }
-    }
-}
-
 fn guardar_prueba(app_prueba: &Mutex<Option<DaemonPrueba>>, p: DaemonPrueba) -> DaemonPrueba {
     if let Ok(mut g) = app_prueba.lock() {
         *g = Some(p.clone());
@@ -864,7 +789,7 @@ impl KonstruadoApp {
         let datos = PathBuf::from(&datos_dir);
         std::fs::create_dir_all(&datos).map_err(|e| fallo(format!("Carpeta de datos: {e}")))?;
         std::env::set_var("KONSTRUADO_DATOS", &datos_dir);
-        cargar_daemon_persistido(&datos)?;
+        persist::cargar_daemon_al_arrancar().map_err(fallo)?;
         let mut g = persist::cargar();
         if let Some(yo) = g.yo.as_mut() {
             let (sec, pubk) = asegurar_clave(&g.clave_sec, &yo.clave_pub);
@@ -1520,13 +1445,10 @@ impl KonstruadoApp {
             pista,
             puede_proponer_encerrar: pendiente && !contra && activa,
             puede_cancelar_propuesta: encerrando && soy_prop_enc && !frenado,
-            puede_reintentar_fondeo: false,
-            puede_empezar_fondeo_de_nuevo: encerrando
-                && (frenado
-                    || fondeo_curso.as_ref().is_some_and(|t| {
-                        let s = t.mostrar(ES).to_ascii_lowercase();
-                        s.contains("rechaz") || s.contains("reinici") || s.contains("decoy")
-                    })),
+            // Misma regla que el escritorio (`caja::puede_empezar_fondeo_de_nuevo`).
+            // `puede_reintentar_fondeo` queda como alias de UI (Android ORs ambos).
+            puede_reintentar_fondeo: caja::puede_empezar_fondeo_de_nuevo(encerrando, frenado),
+            puede_empezar_fondeo_de_nuevo: caja::puede_empezar_fondeo_de_nuevo(encerrando, frenado),
             puede_confirmar_fondear: encerrando && !soy_prop_enc && !frenado && fondeo_curso.is_none(),
             puede_no_encerrar: encerrando && !(soy_prop_enc && !frenado),
             puede_avisar_termino: !cortada && p.estado == PartidaEstado::Encerrada && soy_c,
@@ -1749,23 +1671,19 @@ impl KonstruadoApp {
 
     /// Guarda y activa un nodo propio. Vacío o solo espacios = error (usá `usar_daemon_por_defecto`).
     pub fn fijar_daemon(&self, url: String) -> Result<String, FfiError> {
-        let ok = xmr_joint::validar_daemon_url(&url).map_err(fallo)?;
-        xmr_joint::fijar_daemon(Some(&ok)).map_err(fallo)?;
-        persistir_daemon(&self.datos, Some(&ok))?;
-        // Fuerza un tip fresco en el próximo tick.
+        let ok = persist::fijar_daemon_persistido(Some(&url)).map_err(fallo)?;
         self.caja.pedir_actualizacion();
         Ok(ok)
     }
 
     /// Vuelve al nodo público y borra la URL guardada.
     pub fn usar_daemon_por_defecto(&self) -> Result<String, FfiError> {
-        xmr_joint::fijar_daemon(None).map_err(fallo)?;
-        persistir_daemon(&self.datos, None)?;
+        let ok = persist::fijar_daemon_persistido(None).map_err(fallo)?;
         if let Ok(mut g) = self.ultima_prueba.lock() {
             *g = None;
         }
         self.caja.pedir_actualizacion();
-        Ok(xmr_joint::STAGENET_DAEMON.to_string())
+        Ok(ok)
     }
 
     /// Pide la punta (get_info / tip) al nodo activo por RPC HTTP(S).
@@ -1773,38 +1691,13 @@ impl KonstruadoApp {
     /// No gasta monedas: solo mide si el daemon responde. Guarda el último
     /// resultado (éxito o fallo) para mostrarlo en Cuenta y Billetera.
     pub fn probar_daemon(&self) -> DaemonPrueba {
-        let url = xmr_joint::daemon_url();
-        let t0 = std::time::Instant::now();
-        let res = self.rt.block_on(async {
-            match xmr_joint::chain::connect(&url).await {
-                Ok(rpc) => match xmr_joint::chain::tip(&rpc).await {
-                    Ok(n) => Ok(n as u64),
-                    Err(e) => Err(e.to_string()),
-                },
-                Err(e) => Err(e.to_string()),
-            }
-        });
-        let ms = t0.elapsed().as_millis() as u64;
-        let prueba = match res {
-            Ok(tip) => DaemonPrueba {
-                ok: true,
-                url: url.clone(),
-                tip: Some(tip),
-                ms,
-                mensaje: format!(
-                    "RPC OK: el nodo {url} respondió la punta en el bloque {tip} ({ms} ms)."
-                ),
-            },
-            Err(e) => {
-                let base = caja::humanizar_error_cadena(&e, true);
-                DaemonPrueba {
-                    ok: false,
-                    url: url.clone(),
-                    tip: None,
-                    ms,
-                    mensaje: format!("{base} URL: {url}. Tardó {ms} ms antes de fallar."),
-                }
-            }
+        let r = self.rt.block_on(caja::probar_daemon(ES));
+        let prueba = DaemonPrueba {
+            ok: r.ok,
+            url: r.url,
+            tip: r.tip,
+            ms: r.ms,
+            mensaje: r.mensaje,
         };
         guardar_prueba(&self.ultima_prueba, prueba)
     }
@@ -1837,29 +1730,5 @@ mod ffi_tests {
         assert_eq!(recorta_nota("x".repeat(MAX_NOTA + 5)).chars().count(), MAX_NOTA);
     }
 
-    #[test]
-    fn daemon_persistido_y_fallback() {
-        let dir = tempfile_dir();
-        let _ = xmr_joint::fijar_daemon(None);
-        cargar_daemon_persistido(&dir).unwrap();
-        assert!(xmr_joint::daemon_es_defecto());
-        assert_eq!(xmr_joint::daemon_url(), xmr_joint::STAGENET_DAEMON);
-        let ok = xmr_joint::validar_daemon_url("http://100.64.0.2:38081").unwrap();
-        xmr_joint::fijar_daemon(Some(&ok)).unwrap();
-        persistir_daemon(&dir, Some(&ok)).unwrap();
-        let _ = xmr_joint::fijar_daemon(None);
-        cargar_daemon_persistido(&dir).unwrap();
-        assert_eq!(xmr_joint::daemon_url(), "http://100.64.0.2:38081");
-        persistir_daemon(&dir, None).unwrap();
-        let _ = xmr_joint::fijar_daemon(None);
-        cargar_daemon_persistido(&dir).unwrap();
-        assert!(xmr_joint::daemon_es_defecto());
-    }
 
-    fn tempfile_dir() -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("konstruado-daemon-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        dir
-    }
 }

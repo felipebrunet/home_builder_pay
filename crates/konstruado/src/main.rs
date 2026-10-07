@@ -17,6 +17,9 @@ const CSS: &str = include_str!("ui.css");
 
 fn main() {
     preparar_grafica();
+    if let Err(e) = persist::cargar_daemon_al_arrancar() {
+        eprintln!("daemon: {e}");
+    }
     let window = dioxus::desktop::WindowBuilder::new()
         .with_title(concat!("Konstruado ", env!("CARGO_PKG_VERSION")))
         .with_inner_size(dioxus::desktop::LogicalSize::new(1100.0, 760.0))
@@ -471,59 +474,12 @@ fn exigir_sesion(
     }
 }
 
-/// Sella notas y extras que quedaron en claro. Si falta la clave del otro, la obra no se toca.
 fn sellar_guardadas(nodo: &Nodo, yo: &Persona, sec: &str) {
-    for obra in nodo.obras() {
-        if !obra.participa(&yo.id) {
-            continue;
-        }
-        let mut sealed = obra.clone();
-        if lista_para_publicar(&mut sealed, yo, sec) && sealed != obra {
-            nodo.publicar_obra(sealed);
-        }
-    }
-}
-
-/// True cuando la obra ya no tiene texto en claro. Si no se puede sellar, queda como estaba.
-fn lista_para_publicar(obra: &mut Obra, yo: &Persona, sec: &str) -> bool {
-    obra.preparar_para_red(&yo.id, &yo.clave_pub, sec).is_ok()
+    caja::sellar_obras_guardadas(nodo, yo, sec);
 }
 
 fn aplicar_monero(nodo: &Nodo, yo: &Persona, sec: &str, hechos: &[caja::Hecho]) {
-    for h in hechos {
-        let mut obras = nodo.obras();
-        let Some(obra) = obras.iter_mut().find(|o| o.id == h.obra) else {
-            continue;
-        };
-        let otro = if yo.id == obra.mandante.id {
-            obra.contratista.id.clone()
-        } else {
-            obra.mandante.id.clone()
-        };
-        if !nodo.trato_alineado(&yo.id, &otro) {
-            continue;
-        }
-        let mut publico = false;
-        if let Some(txid) = &h.fondeo {
-            let confirma = obra.partidas.get(h.partida).is_some_and(|p| {
-                p.estado == PartidaEstado::Encerrando
-                    && p.encerrado_por.as_ref().is_some_and(|q| q.id != yo.id)
-            });
-            if confirma && obra.encerrar_confirmar(h.partida, yo).is_ok() {
-                obra.partidas[h.partida].fondeo_txid = Some(txid.clone());
-                publico = true;
-            }
-        }
-        if let Some(txid) = &h.pago {
-            if obra.aceptar_pago(h.partida, yo).is_ok() {
-                obra.partidas[h.partida].pago_txid = Some(txid.clone());
-                publico = true;
-            }
-        }
-        if publico && lista_para_publicar(obra, yo, sec) {
-            nodo.publicar_obra(obra.clone());
-        }
-    }
+    caja::aplicar_hechos_monero(nodo, yo, sec, hechos);
 }
 
 /// True while waiting for a dump; not when the other is simply offline.
@@ -841,6 +797,16 @@ fn Cuenta(
     let lang = idioma();
     let caja_palabras = caja.clone();
     let caja_crear = caja.clone();
+    let caja_daemon = caja.clone();
+    let mut daemon_url = use_signal(|| {
+        if xmr_joint::daemon_es_defecto() {
+            String::new()
+        } else {
+            xmr_joint::daemon_url()
+        }
+    });
+    let mut daemon_aviso = use_signal(|| Option::<String>::None);
+    let mut daemon_probando = use_signal(|| false);
     rsx! {
         div { class: "pane narrow",
             h1 { {lang.t("Tu cuenta", "Your account")} }
@@ -899,7 +865,110 @@ fn Cuenta(
                 }
             }
             div { class: "paso", b { "5" } "Stagenet" }
-            p { class: "hint", "{vista().daemon}" }
+            p { class: "hint",
+                {
+                    let d = vista().daemon.clone();
+                    if xmr_joint::daemon_es_defecto() {
+                        match lang {
+                            Idioma::Es => format!("Activo (público): {d}"),
+                            Idioma::En => format!("Active (public): {d}"),
+                        }
+                    } else {
+                        match lang {
+                            Idioma::Es => format!("Activo (propio): {d}"),
+                            Idioma::En => format!("Active (custom): {d}"),
+                        }
+                    }
+                }
+            }
+            p { class: "hint",
+                {lang.t(
+                    "Guardar fija el nodo para scan, saldo, fondeo y pago. «Usar por defecto» vuelve al público.",
+                    "Save sets the node for scan, balance, funding and payout. Use default goes back to the public daemon.",
+                )}
+            }
+            label { class: "et", {lang.t("URL DEL NODO", "NODE URL")} }
+            input {
+                r#type: "text",
+                value: "{daemon_url}",
+                placeholder: "{xmr_joint::STAGENET_DAEMON}",
+                oninput: move |e| daemon_url.set(e.value()),
+            }
+            div { class: "row",
+                button {
+                    class: "btn btn-primary",
+                    onclick: {
+                        let caja_daemon = caja_daemon.clone();
+                        move |_| {
+                            match persist::fijar_daemon_persistido(Some(&daemon_url())) {
+                                Ok(u) => {
+                                    daemon_url.set(if xmr_joint::daemon_es_defecto() {
+                                        String::new()
+                                    } else {
+                                        u.clone()
+                                    });
+                                    daemon_aviso.set(Some(match lang_now() {
+                                        Idioma::Es => format!("Nodo guardado: {u}"),
+                                        Idioma::En => format!("Node saved: {u}"),
+                                    }));
+                                    caja_daemon.pedir_actualizacion();
+                                    err.set(None);
+                                }
+                                Err(e) => {
+                                    daemon_aviso.set(None);
+                                    err.set(Some(e));
+                                }
+                            }
+                        }
+                    },
+                    {lang.t("Guardar nodo", "Save node")}
+                }
+                button {
+                    class: "btn btn-ghost",
+                    onclick: {
+                        let caja_daemon = caja_daemon.clone();
+                        move |_| {
+                            match persist::fijar_daemon_persistido(None) {
+                                Ok(u) => {
+                                    daemon_url.set(String::new());
+                                    daemon_aviso.set(Some(match lang_now() {
+                                        Idioma::Es => format!("Volví al nodo público: {u}"),
+                                        Idioma::En => format!("Back to public node: {u}"),
+                                    }));
+                                    caja_daemon.pedir_actualizacion();
+                                    err.set(None);
+                                }
+                                Err(e) => err.set(Some(e)),
+                            }
+                        }
+                    },
+                    {lang.t("Usar por defecto", "Use default")}
+                }
+                button {
+                    class: "btn btn-ghost",
+                    disabled: daemon_probando(),
+                    onclick: move |_| {
+                        if daemon_probando() {
+                            return;
+                        }
+                        daemon_probando.set(true);
+                        let es = lang_now() == Idioma::Es;
+                        spawn(async move {
+                            let r = caja::probar_daemon(es).await;
+                            daemon_aviso.set(Some(r.mensaje));
+                            daemon_probando.set(false);
+                        });
+                    },
+                    if daemon_probando() {
+                        {lang.t("Probando RPC…", "Testing RPC…")}
+                    } else {
+                        {lang.t("Probar RPC del nodo", "Test node RPC")}
+                    }
+                }
+            }
+            if let Some(a) = daemon_aviso() {
+                p { class: "hint", "{a}" }
+            }
             button {
                 class: "btn btn-ghost",
                 onclick: move |_| screen.set(Screen::Billetera),
@@ -2573,7 +2642,7 @@ fn VerPartida(
                         },
                         {lang.t("Cancelar propuesta", "Cancel proposal")}
                     }
-                } else if frenado {
+                } else if caja::puede_empezar_fondeo_de_nuevo(true, frenado) {
                     button {
                         class: "btn btn-primary",
                         onclick: {
