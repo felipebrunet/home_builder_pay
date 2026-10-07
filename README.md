@@ -85,3 +85,5 @@ cp target/release/konstruado dist/konstruado-0.1.0-linux-x86_64-dev
 ```
 
 How to use the app (roles, two machines, the deal) is **Help → README** inside the window, not this file.
+
+hola
