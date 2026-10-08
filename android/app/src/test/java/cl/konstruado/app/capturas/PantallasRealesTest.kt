@@ -22,6 +22,8 @@ import cl.konstruado.app.ui.screens.CuentaScreen
 import cl.konstruado.app.ui.screens.ObraScreen
 import cl.konstruado.app.ui.screens.PartidaScreen
 import cl.konstruado.app.ui.screens.TableroScreen
+import cl.konstruado.app.ui.rememberAcciones
+import cl.konstruado.app.ui.screens.VerSemilla
 import cl.konstruado.app.ui.theme.KonstruadoTheme
 import com.github.takahirom.roborazzi.captureRoboImage
 import org.junit.Assume.assumeTrue
@@ -104,4 +106,29 @@ class PantallasRealesTest {
     @Test fun bienvenidaRestaurar() {
         app(); foto("android-bienvenida-restaurar", "Restaurar") { BienvenidaScreen(Banner(), ModoBienvenida.Restaurar) {} }
     }
+
+    @Test fun semillaOculta() {
+        app()
+        foto("android-semilla-oculta", "Semilla") {
+            val b = Banner()
+            VerSemilla(rememberAcciones(b), b, pasoInicial = 0, verVkInicial = true)
+        }
+    }
+
+    @Test fun semillaAviso() {
+        app()
+        foto("android-semilla-aviso", "Semilla") {
+            val b = Banner()
+            VerSemilla(rememberAcciones(b), b, pasoInicial = 1)
+        }
+    }
+
+    @Test fun semillaRevelada() {
+        app()
+        foto("android-semilla-revelada", "Semilla") {
+            val b = Banner()
+            VerSemilla(rememberAcciones(b), b, pasoInicial = 2, verVkInicial = true)
+        }
+    }
 }
+

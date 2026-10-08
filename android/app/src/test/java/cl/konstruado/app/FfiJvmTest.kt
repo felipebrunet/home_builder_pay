@@ -47,6 +47,15 @@ class FfiJvmTest {
         assertTrue(mala is FfiException.Fallo)
         app.respaldoGuardado()
         assertFalse(app.estadoRespaldo().falta)
+        // Las 25 palabras: same as Feather / monero-wallet-cli; view key matches restore.
+        assertEquals(3, app.avisosVerSemilla().size)
+        assertTrue(app.semillaPortapapelesSeg() >= 30u)
+        val sem = app.verSemilla()
+        assertEquals(25, sem.palabras.trim().split(Regex("\\s+")).size)
+        assertEquals(addr, sem.direccion)
+        val llaves = app.llavesBilletera()!!
+        assertEquals(addr, llaves.direccion)
+        assertEquals(64, llaves.viewKey.length)
         // Daemon configurable: público por defecto, propio persistido, volver.
         assertTrue(app.daemonEsDefecto())
         assertEquals(app.daemonPorDefecto(), app.daemonActivo())

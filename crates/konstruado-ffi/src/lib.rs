@@ -306,6 +306,25 @@ pub struct RespaldoResumen {
 }
 
 #[derive(Clone, Debug, uniffi::Record)]
+pub struct SemillaVistaFfi {
+    /// Las 25 palabras en una sola línea, separadas por espacios.
+    pub palabras: String,
+    pub altura: Option<u64>,
+    pub direccion: String,
+    /// Advertencias a mostrar antes / junto a las palabras.
+    pub avisos: Vec<String>,
+    /// Texto al copiar (incluye el aviso de borrado del portapapeles).
+    pub aviso_copia: String,
+}
+
+#[derive(Clone, Debug, uniffi::Record)]
+pub struct LlavesBilleteraFfi {
+    pub direccion: String,
+    pub view_key: String,
+    pub ayuda: String,
+}
+
+#[derive(Clone, Debug, uniffi::Record)]
 pub struct MovVista {
     pub monto: String,
     pub detalle: String,
@@ -1887,6 +1906,39 @@ impl KonstruadoApp {
         respaldo::preparar(&self.datos, &datos, &clave, reemplazar)
             .map(|_| ())
             .map_err(|e| fallo(respaldo::aviso(&e, ES)))
+    }
+
+    /// Las 25 palabras de la billetera personal. Solo después de la advertencia
+    /// en la UI. Android pone FLAG_SECURE y limpia el portapapeles.
+    pub fn ver_semilla(&self) -> Result<SemillaVistaFfi, FfiError> {
+        let v = self.caja.ver_semilla().map_err(err_caja)?;
+        Ok(SemillaVistaFfi {
+            palabras: v.palabras.as_str().to_string(),
+            altura: v.altura,
+            direccion: v.direccion,
+            avisos: caja::aviso_ver_semilla(ES),
+            aviso_copia: caja::aviso_copia_semilla(ES),
+        })
+    }
+
+    /// Dirección + view key privada (solo lectura) de la billetera personal.
+    pub fn llaves_billetera(&self) -> Option<LlavesBilleteraFfi> {
+        self.caja.llaves_billetera().map(|l| LlavesBilleteraFfi {
+            direccion: l.direccion,
+            view_key: l.view_key,
+            ayuda: caja::ayuda_view_key_billetera(ES).into(),
+        })
+    }
+
+    /// Segundos tras los que Android (y el escritorio, si puede) borran el
+    /// portapapeles si todavía tiene la semilla.
+    pub fn semilla_portapapeles_seg(&self) -> u64 {
+        caja::SEMILLA_PORTAPAPELES_SEG
+    }
+
+    /// Textos de la advertencia previa a mostrar las 25 palabras (sin leer la semilla).
+    pub fn avisos_ver_semilla(&self) -> Vec<String> {
+        caja::aviso_ver_semilla(ES)
     }
 
     /// Importa obras/ofertas de un respaldo. No trae seed ni share; avisa que puede estar viejo.

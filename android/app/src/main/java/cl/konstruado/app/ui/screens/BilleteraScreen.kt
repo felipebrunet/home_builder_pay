@@ -65,6 +65,8 @@ private fun Respaldos(acciones: Acciones, banner: Banner, hayCuenta: Boolean) {
     if (hayCuenta) {
         RespaldoCompleto(acciones, banner)
         Divisor()
+        VerSemilla(acciones, banner)
+        Divisor()
     }
     RestaurarRespaldo(acciones, banner)
     Divisor()

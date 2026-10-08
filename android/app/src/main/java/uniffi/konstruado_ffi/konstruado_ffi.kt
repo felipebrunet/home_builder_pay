@@ -848,6 +848,14 @@ internal interface UniffiForeignFutureCompleteVoid : com.sun.jna.Callback {
 
 
 
+
+
+
+
+
+
+
+
 // For large crates we prevent `MethodTooLargeException` (see #2340)
 // N.B. the name of the extension is very misleading, since it is 
 // rather `InterfaceTooLargeException`, caused by too many methods 
@@ -882,6 +890,8 @@ fun uniffi_konstruado_ffi_checksum_method_konstruadoapp_archivar_obra_local(
 fun uniffi_konstruado_ffi_checksum_method_konstruadoapp_avisar_termino(
 ): Short
 fun uniffi_konstruado_ffi_checksum_method_konstruadoapp_aviso_vpn_daemon(
+): Short
+fun uniffi_konstruado_ffi_checksum_method_konstruadoapp_avisos_ver_semilla(
 ): Short
 fun uniffi_konstruado_ffi_checksum_method_konstruadoapp_billetera(
 ): Short
@@ -928,6 +938,8 @@ fun uniffi_konstruado_ffi_checksum_method_konstruadoapp_guardar(
 fun uniffi_konstruado_ffi_checksum_method_konstruadoapp_guardar_cuenta(
 ): Short
 fun uniffi_konstruado_ffi_checksum_method_konstruadoapp_importar_obras(
+): Short
+fun uniffi_konstruado_ffi_checksum_method_konstruadoapp_llaves_billetera(
 ): Short
 fun uniffi_konstruado_ffi_checksum_method_konstruadoapp_maximo_envio(
 ): Short
@@ -985,11 +997,15 @@ fun uniffi_konstruado_ffi_checksum_method_konstruadoapp_salir_obra_local(
 ): Short
 fun uniffi_konstruado_ffi_checksum_method_konstruadoapp_salir_partida_local(
 ): Short
+fun uniffi_konstruado_ffi_checksum_method_konstruadoapp_semilla_portapapeles_seg(
+): Short
 fun uniffi_konstruado_ffi_checksum_method_konstruadoapp_tablero(
 ): Short
 fun uniffi_konstruado_ffi_checksum_method_konstruadoapp_ultima_prueba_daemon(
 ): Short
 fun uniffi_konstruado_ffi_checksum_method_konstruadoapp_usar_daemon_por_defecto(
+): Short
+fun uniffi_konstruado_ffi_checksum_method_konstruadoapp_ver_semilla(
 ): Short
 fun uniffi_konstruado_ffi_checksum_method_konstruadoapp_version(
 ): Short
@@ -1072,6 +1088,8 @@ fun uniffi_konstruado_ffi_fn_method_konstruadoapp_avisar_termino(`ptr`: Pointer,
 ): Unit
 fun uniffi_konstruado_ffi_fn_method_konstruadoapp_aviso_vpn_daemon(`ptr`: Pointer,`vpnCaptura`: Byte,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
+fun uniffi_konstruado_ffi_fn_method_konstruadoapp_avisos_ver_semilla(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
+): RustBuffer.ByValue
 fun uniffi_konstruado_ffi_fn_method_konstruadoapp_billetera(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
 fun uniffi_konstruado_ffi_fn_method_konstruadoapp_buscar(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
@@ -1117,6 +1135,8 @@ fun uniffi_konstruado_ffi_fn_method_konstruadoapp_guardar(`ptr`: Pointer,uniffi_
 fun uniffi_konstruado_ffi_fn_method_konstruadoapp_guardar_cuenta(`ptr`: Pointer,`nombre`: RustBuffer.ByValue,`rol`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
 fun uniffi_konstruado_ffi_fn_method_konstruadoapp_importar_obras(`ptr`: Pointer,`texto`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+): RustBuffer.ByValue
+fun uniffi_konstruado_ffi_fn_method_konstruadoapp_llaves_billetera(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
 fun uniffi_konstruado_ffi_fn_method_konstruadoapp_maximo_envio(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
@@ -1174,11 +1194,15 @@ fun uniffi_konstruado_ffi_fn_method_konstruadoapp_salir_obra_local(`ptr`: Pointe
 ): RustBuffer.ByValue
 fun uniffi_konstruado_ffi_fn_method_konstruadoapp_salir_partida_local(`ptr`: Pointer,`obraId`: RustBuffer.ByValue,`indice`: Int,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
+fun uniffi_konstruado_ffi_fn_method_konstruadoapp_semilla_portapapeles_seg(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
+): Long
 fun uniffi_konstruado_ffi_fn_method_konstruadoapp_tablero(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
 fun uniffi_konstruado_ffi_fn_method_konstruadoapp_ultima_prueba_daemon(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
 fun uniffi_konstruado_ffi_fn_method_konstruadoapp_usar_daemon_por_defecto(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
+): RustBuffer.ByValue
+fun uniffi_konstruado_ffi_fn_method_konstruadoapp_ver_semilla(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
 fun uniffi_konstruado_ffi_fn_method_konstruadoapp_version(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
@@ -1340,6 +1364,9 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if (lib.uniffi_konstruado_ffi_checksum_method_konstruadoapp_aviso_vpn_daemon() != 28034.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if (lib.uniffi_konstruado_ffi_checksum_method_konstruadoapp_avisos_ver_semilla() != 64048.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if (lib.uniffi_konstruado_ffi_checksum_method_konstruadoapp_billetera() != 12739.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
@@ -1407,6 +1434,9 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_konstruado_ffi_checksum_method_konstruadoapp_importar_obras() != 7994.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_konstruado_ffi_checksum_method_konstruadoapp_llaves_billetera() != 19081.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_konstruado_ffi_checksum_method_konstruadoapp_maximo_envio() != 4243.toShort()) {
@@ -1493,6 +1523,9 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if (lib.uniffi_konstruado_ffi_checksum_method_konstruadoapp_salir_partida_local() != 60321.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if (lib.uniffi_konstruado_ffi_checksum_method_konstruadoapp_semilla_portapapeles_seg() != 15006.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if (lib.uniffi_konstruado_ffi_checksum_method_konstruadoapp_tablero() != 64277.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
@@ -1500,6 +1533,9 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_konstruado_ffi_checksum_method_konstruadoapp_usar_daemon_por_defecto() != 63345.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_konstruado_ffi_checksum_method_konstruadoapp_ver_semilla() != 6842.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_konstruado_ffi_checksum_method_konstruadoapp_version() != 56014.toShort()) {
@@ -1959,6 +1995,11 @@ public interface KonstruadoAppInterface {
      */
     fun `avisoVpnDaemon`(`vpnCaptura`: kotlin.Boolean): kotlin.String?
     
+    /**
+     * Textos de la advertencia previa a mostrar las 25 palabras (sin leer la semilla).
+     */
+    fun `avisosVerSemilla`(): List<kotlin.String>
+    
     fun `billetera`(): BilleteraVista
     
     /**
@@ -2042,6 +2083,11 @@ public interface KonstruadoAppInterface {
      * Importa obras/ofertas de un respaldo. No trae seed ni share; avisa que puede estar viejo.
      */
     fun `importarObras`(`texto`: kotlin.String): kotlin.String
+    
+    /**
+     * Dirección + view key privada (solo lectura) de la billetera personal.
+     */
+    fun `llavesBilletera`(): LlavesBilleteraFfi?
     
     fun `maximoEnvio`(): kotlin.String?
     
@@ -2140,6 +2186,12 @@ public interface KonstruadoAppInterface {
      */
     fun `salirPartidaLocal`(`obraId`: kotlin.String, `indice`: kotlin.UInt): kotlin.String
     
+    /**
+     * Segundos tras los que Android (y el escritorio, si puede) borran el
+     * portapapeles si todavía tiene la semilla.
+     */
+    fun `semillaPortapapelesSeg`(): kotlin.ULong
+    
     fun `tablero`(): TableroVista
     
     /**
@@ -2151,6 +2203,12 @@ public interface KonstruadoAppInterface {
      * Vuelve al nodo público y borra la URL guardada.
      */
     fun `usarDaemonPorDefecto`(): kotlin.String
+    
+    /**
+     * Las 25 palabras de la billetera personal. Solo después de la advertencia
+     * en la UI. Android pone FLAG_SECURE y limpia el portapapeles.
+     */
+    fun `verSemilla`(): SemillaVistaFfi
     
     fun `version`(): kotlin.String
     
@@ -2375,6 +2433,21 @@ open class KonstruadoApp: Disposable, AutoCloseable, KonstruadoAppInterface
     uniffiRustCall() { _status ->
     UniffiLib.INSTANCE.uniffi_konstruado_ffi_fn_method_konstruadoapp_aviso_vpn_daemon(
         it, FfiConverterBoolean.lower(`vpnCaptura`),_status)
+}
+    }
+    )
+    }
+    
+
+    
+    /**
+     * Textos de la advertencia previa a mostrar las 25 palabras (sin leer la semilla).
+     */override fun `avisosVerSemilla`(): List<kotlin.String> {
+            return FfiConverterSequenceString.lift(
+    callWithPointer {
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_konstruado_ffi_fn_method_konstruadoapp_avisos_ver_semilla(
+        it, _status)
 }
     }
     )
@@ -2692,6 +2765,21 @@ open class KonstruadoApp: Disposable, AutoCloseable, KonstruadoAppInterface
     uniffiRustCallWithError(FfiException) { _status ->
     UniffiLib.INSTANCE.uniffi_konstruado_ffi_fn_method_konstruadoapp_importar_obras(
         it, FfiConverterString.lower(`texto`),_status)
+}
+    }
+    )
+    }
+    
+
+    
+    /**
+     * Dirección + view key privada (solo lectura) de la billetera personal.
+     */override fun `llavesBilletera`(): LlavesBilleteraFfi? {
+            return FfiConverterOptionalTypeLlavesBilleteraFfi.lift(
+    callWithPointer {
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_konstruado_ffi_fn_method_konstruadoapp_llaves_billetera(
+        it, _status)
 }
     }
     )
@@ -3083,6 +3171,22 @@ open class KonstruadoApp: Disposable, AutoCloseable, KonstruadoAppInterface
     }
     
 
+    
+    /**
+     * Segundos tras los que Android (y el escritorio, si puede) borran el
+     * portapapeles si todavía tiene la semilla.
+     */override fun `semillaPortapapelesSeg`(): kotlin.ULong {
+            return FfiConverterULong.lift(
+    callWithPointer {
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_konstruado_ffi_fn_method_konstruadoapp_semilla_portapapeles_seg(
+        it, _status)
+}
+    }
+    )
+    }
+    
+
     override fun `tablero`(): TableroVista {
             return FfiConverterTypeTableroVista.lift(
     callWithPointer {
@@ -3119,6 +3223,23 @@ open class KonstruadoApp: Disposable, AutoCloseable, KonstruadoAppInterface
     callWithPointer {
     uniffiRustCallWithError(FfiException) { _status ->
     UniffiLib.INSTANCE.uniffi_konstruado_ffi_fn_method_konstruadoapp_usar_daemon_por_defecto(
+        it, _status)
+}
+    }
+    )
+    }
+    
+
+    
+    /**
+     * Las 25 palabras de la billetera personal. Solo después de la advertencia
+     * en la UI. Android pone FLAG_SECURE y limpia el portapapeles.
+     */
+    @Throws(FfiException::class)override fun `verSemilla`(): SemillaVistaFfi {
+            return FfiConverterTypeSemillaVistaFfi.lift(
+    callWithPointer {
+    uniffiRustCallWithError(FfiException) { _status ->
+    UniffiLib.INSTANCE.uniffi_konstruado_ffi_fn_method_konstruadoapp_ver_semilla(
         it, _status)
 }
     }
@@ -3505,6 +3626,42 @@ public object FfiConverterTypeExtraVista: FfiConverterRustBuffer<ExtraVista> {
             FfiConverterBoolean.write(value.`mia`, buf)
             FfiConverterString.write(value.`monto`, buf)
             FfiConverterString.write(value.`por`, buf)
+    }
+}
+
+
+
+data class LlavesBilleteraFfi (
+    var `direccion`: kotlin.String, 
+    var `viewKey`: kotlin.String, 
+    var `ayuda`: kotlin.String
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeLlavesBilleteraFfi: FfiConverterRustBuffer<LlavesBilleteraFfi> {
+    override fun read(buf: ByteBuffer): LlavesBilleteraFfi {
+        return LlavesBilleteraFfi(
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: LlavesBilleteraFfi) = (
+            FfiConverterString.allocationSize(value.`direccion`) +
+            FfiConverterString.allocationSize(value.`viewKey`) +
+            FfiConverterString.allocationSize(value.`ayuda`)
+    )
+
+    override fun write(value: LlavesBilleteraFfi, buf: ByteBuffer) {
+            FfiConverterString.write(value.`direccion`, buf)
+            FfiConverterString.write(value.`viewKey`, buf)
+            FfiConverterString.write(value.`ayuda`, buf)
     }
 }
 
@@ -4513,6 +4670,59 @@ public object FfiConverterTypeSalaEstado: FfiConverterRustBuffer<SalaEstado> {
 
 
 
+data class SemillaVistaFfi (
+    /**
+     * Las 25 palabras en una sola línea, separadas por espacios.
+     */
+    var `palabras`: kotlin.String, 
+    var `altura`: kotlin.ULong?, 
+    var `direccion`: kotlin.String, 
+    /**
+     * Advertencias a mostrar antes / junto a las palabras.
+     */
+    var `avisos`: List<kotlin.String>, 
+    /**
+     * Texto al copiar (incluye el aviso de borrado del portapapeles).
+     */
+    var `avisoCopia`: kotlin.String
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeSemillaVistaFfi: FfiConverterRustBuffer<SemillaVistaFfi> {
+    override fun read(buf: ByteBuffer): SemillaVistaFfi {
+        return SemillaVistaFfi(
+            FfiConverterString.read(buf),
+            FfiConverterOptionalULong.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterSequenceString.read(buf),
+            FfiConverterString.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: SemillaVistaFfi) = (
+            FfiConverterString.allocationSize(value.`palabras`) +
+            FfiConverterOptionalULong.allocationSize(value.`altura`) +
+            FfiConverterString.allocationSize(value.`direccion`) +
+            FfiConverterSequenceString.allocationSize(value.`avisos`) +
+            FfiConverterString.allocationSize(value.`avisoCopia`)
+    )
+
+    override fun write(value: SemillaVistaFfi, buf: ByteBuffer) {
+            FfiConverterString.write(value.`palabras`, buf)
+            FfiConverterOptionalULong.write(value.`altura`, buf)
+            FfiConverterString.write(value.`direccion`, buf)
+            FfiConverterSequenceString.write(value.`avisos`, buf)
+            FfiConverterString.write(value.`avisoCopia`, buf)
+    }
+}
+
+
+
 data class TableroVista (
     var `red`: RedVista, 
     var `avisos`: List<AvisoVista>, 
@@ -4838,6 +5048,38 @@ public object FfiConverterOptionalTypeExtraVista: FfiConverterRustBuffer<ExtraVi
         } else {
             buf.put(1)
             FfiConverterTypeExtraVista.write(value, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterOptionalTypeLlavesBilleteraFfi: FfiConverterRustBuffer<LlavesBilleteraFfi?> {
+    override fun read(buf: ByteBuffer): LlavesBilleteraFfi? {
+        if (buf.get().toInt() == 0) {
+            return null
+        }
+        return FfiConverterTypeLlavesBilleteraFfi.read(buf)
+    }
+
+    override fun allocationSize(value: LlavesBilleteraFfi?): ULong {
+        if (value == null) {
+            return 1UL
+        } else {
+            return 1UL + FfiConverterTypeLlavesBilleteraFfi.allocationSize(value)
+        }
+    }
+
+    override fun write(value: LlavesBilleteraFfi?, buf: ByteBuffer) {
+        if (value == null) {
+            buf.put(0)
+        } else {
+            buf.put(1)
+            FfiConverterTypeLlavesBilleteraFfi.write(value, buf)
         }
     }
 }
