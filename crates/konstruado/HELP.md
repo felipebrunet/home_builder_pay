@@ -78,6 +78,8 @@ By default the app uses the public stagenet node. In the account screen, **NODE 
 
 ## Backups
 
+**Show the 25 words** (Wallet → Backups and recovery) reveals the personal English Monero seed after a confirmation. Whoever has those words can spend the personal balance; they do **not** recover job boxes (those need the shares in the full backup). The restore height is shown so Feather or monero-wallet-cli can scan from the right block. Copy is allowed; the clipboard is cleared after about a minute if it still holds the seed. On the phone, screenshots and screen recording are blocked while the words are visible. The same section also shows the personal address and private view key (view-only: balance and incoming, not spending).
+
 One encrypted file holds everything this device needs: the seed and its block height, your jobs and offers (archived ones too), the share of every job box, your name and role, the node URL, theme and language. Export it in **Wallet → Backups and recovery → Export full backup**. Pick a password (at least 8 characters); without it the file cannot be opened and there is no way to recover it. The file ends in `.kbak`. Keep it off this device.
 
 The file is versioned (`KSTRBAK` header), the key comes from the password with Argon2id (64 MiB, 3 passes) and the content is sealed with XChaCha20-Poly1305. A wrong password or a damaged file is refused without writing anything.

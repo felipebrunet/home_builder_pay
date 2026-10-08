@@ -63,6 +63,10 @@ Both shares have to sign. One share is not a transaction. 1 domain unit = 0.0000
 
 Atomic spending and the multisig/FROST box path stay separate in the code; do not mix them.
 
+## Personal seed (view words)
+
+**Billetera → Respaldos y recuperación → Ver las 25 palabras** shows the personal single-sig mnemonic after a confirmation. The words are the standard Monero English seed (same derivation as Feather / monero-wallet-cli: spend from the 25 words, view = keccak(spend)). Job boxes are **not** recovered from this seed — they need the FROST shares in the full `.kbak`. The restore height is shown next to the words. Copy is allowed; the clipboard is cleared after 60 s if it still holds the seed (on Android the clip is marked `EXTRA_IS_SENSITIVE`). Android sets `FLAG_SECURE` while the words are on screen. The same block also shows the personal address and private view key for a view-only check without exposing the seed.
+
 ## Full backup
 
 **Billetera → Respaldos y recuperación → Exportar respaldo completo** writes one file, `konstruado-respaldo-<YYYY-MM-DD>.kbak`:
