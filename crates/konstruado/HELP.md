@@ -34,13 +34,25 @@ Both confirm the lock. The contractor reports finish with a percent and a short 
 
 If nothing is locked, abandon is one-sided. If funds are at risk, closing needs both.
 
-**Archive this job** hides a joint job on this device only: it leaves the board and My jobs. It does not move funds and does not cut the other side off. Share and context stay on disk. **Remove offer** is for your own offer nobody took yet.
+**Archive this job** hides a joint job on this device only: it leaves the board and My jobs. It does not move funds and does not cut the other side off. Share and context stay on disk.
+
+**Remove offer** is for your own offer nobody took yet. It asks once more, then withdraws the offer for everyone: it leaves your board and the contractor's too, and it does not come back when the other side reconnects. Only the client who posted it can remove it, and only while no job exists for it. Once a contractor has taken it, open the job instead.
 
 Inside a stage, **Leave stage (this device only)** cancels a local funding or proposal. It does not move coins or sign for the other side. If the stage is already locked on-chain, the box stays.
 
 Irreversible actions wait until the other person is online and their latest state has arrived (“Syncing the deal…”). Posting, export, theme and pending text do not.
 
 From the job you can export a text or PDF record.
+
+## Screens
+
+Each screen is split into panels. On a wide window they sit in two columns; on a narrow one they stack. Backups, recovery and advanced tools are folded away under headings you can open.
+
+Plain text with a thin left bar is help. Coloured boxes are live state: orange means something is in progress, red means it stopped and needs you, blue means you are waiting on someone. Transaction ids and addresses are in monospace.
+
+A stage only shows the buttons that make sense right now. After the percent is accepted and the payment is being signed or waits for a block, **Accept and pay** and **Other percent** disappear and the stage shows the payment status instead. The desktop and the phone use the same rule.
+
+The wallet keeps its scan status in one fixed line next to the title, so the page does not jump while it scans.
 
 ## Money
 

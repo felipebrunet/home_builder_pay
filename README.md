@@ -35,6 +35,8 @@ Rendezvous is hardcoded (`konstruado-red-1` plus a baked Tor v3 onion). Each des
 | Custom stagenet daemon | Optional URL (LAN / Tailscale) for scan, balance, funding and payout. **Use default** falls back to the public HTTPS daemon. |
 | Backups | Seed (with block height), per-job share, and job profile (obras/ofertas JSON) are three separate files. Reinstall order: job backup → seed → share. |
 | Leaving a job | Archive hides a joint job on this device only (no funds moved, other side not cut off). Leave stage cancels local funding/proposal only. |
+| Removing an offer | The client can withdraw an offer nobody took. A signed withdrawal is gossiped under its own DHT key, so peers drop the offer and gossip cannot bring it back. |
+| Actions per stage | `caja::acciones_partida` decides which buttons a stage shows. Desktop and Android both use it, so a payment in flight never offers **Accept and pay** again. |
 
 The default daemon is `https://stagenet.xmr.kernal.eu:38089`. Oxide is vendored under `third_party/monero-oxide` with the CLSAG patches this crate needs.
 
@@ -55,6 +57,14 @@ One personal wallet per machine, then one shared box per job, then one transacti
 Both shares have to sign. One share is not a transaction. 1 domain unit = 0.00002 XMR, so a guarantee of 2000 is 0.04 XMR per side.
 
 Atomic spending and the multisig/FROST box path stay separate in the code; do not mix them.
+
+## Withdrawing an offer
+
+Before 0.2.6, **Quitar oferta** only deleted the offer from the local DHT store. The board key merges by union, so the next gossip from the contractor or the room put it back.
+
+Now each offer carries `retiro_hash = SHA-256(secret)`. The secret is derived from the client's X25519 secret and the offer id, so the same device can rebuild it after a restart. Withdrawing publishes a `RetiroOferta` that reveals the secret under the DHT key `clave_retiradas()`. Every peer checks the reveal against the hash and drops the offer from its board, from its store and from what it gossips. A forged withdrawal does not match the hash and is ignored.
+
+Offers published by 0.2.5 have no hash. For those, a withdrawal signed by the same client id is accepted. Withdrawals are capped at 512 and kept newest first. `estado.json` gains a `retiradas` list with a serde default, so older files still load. Older peers store the unknown key unchanged and keep relaying it.
 
 ## Build desktop from source
 

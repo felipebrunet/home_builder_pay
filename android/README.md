@@ -24,6 +24,8 @@ igual que el escritorio. La lógica es la misma en Rust, expuesta por UniFFI:
 | Billetera | crear semilla, saldo total/libre/trabado, entradas, recibir, **enviar**, actualizar, mirar atrás, guardar/recuperar 25 palabras, recuperar share, lista de cajas con view key |
 | Cuenta | nombre/rol, Orbot, **nodo Monero**, pasos Orbot; destinos TCP solo bajo **Avanzado** |
 
+- Los botones de una partida salen de `caja::acciones_partida` (la misma regla del escritorio). Con el pago ya firmándose o esperando bloque no aparecen **Aceptar X% y pagar** ni la contra; se ve un chip con el estado del pago.
+- **Quitar oferta** retira la oferta para todos (lápida firmada en el DHT): no vuelve cuando el contratista se reconecta. Solo el mandante que la publicó, y solo si nadie la tomó.
 - Encerrada / Pagada se marcan **solo cuando el motor ve la transacción en el scan** (`Hecho` con `visto`), igual que el escritorio.
 - Errores del motor (sin saldo, trabadas, sin semilla, el otro no está en línea, sincronizando…) se muestran tal cual, en español.
 - Respaldos (semilla y share) con el selector de Android (SAF): crear documento / abrir documento.
