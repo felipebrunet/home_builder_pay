@@ -26,6 +26,7 @@ import cl.konstruado.app.ui.Ayuda
 import cl.konstruado.app.ui.Banner
 import cl.konstruado.app.ui.Chip
 import cl.konstruado.app.ui.ErrorTexto
+import cl.konstruado.app.ui.EstadoFila
 import cl.konstruado.app.ui.EstadoTarjeta
 import cl.konstruado.app.ui.Nav
 import cl.konstruado.app.ui.Pantalla
@@ -96,6 +97,14 @@ fun TableroScreen(nav: Nav, banner: Banner) {
         // La pista solo suma si no repite el estado de la sala.
         if (!mensajeYaVisible(t.pista, listOf(sala.titulo))) Ayuda(t.pista)
         TextoBoton("Buscar ofertas") { acciones.correr("Pedí lo último a la red.") { app.buscar() } }
+    }
+    // Recordatorio del respaldo completo (obra nueva, caja armada o nunca exportado).
+    val resp = sondear { app.estadoRespaldo() }?.getOrNull()
+    if (resp?.falta == true && (resp.ultimo != null || t.obras.isNotEmpty())) {
+        Tarjeta {
+            EstadoFila(Tono.Espera, resp.linea)
+            TextoBoton("Ir a Respaldos") { nav.raiz(Pantalla.Billetera) }
+        }
     }
     if (t.avisos.isNotEmpty()) {
         Tarjeta("Te toca", resaltada = true) {

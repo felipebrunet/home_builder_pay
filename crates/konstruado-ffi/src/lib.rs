@@ -22,6 +22,10 @@ mod caja;
 #[path = "../../konstruado/src/i18n.rs"]
 mod i18n;
 
+#[allow(dead_code)]
+#[path = "../../konstruado/src/respaldo.rs"]
+mod respaldo;
+
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -158,6 +162,8 @@ pub struct PartidaFila {
     pub por_lado: String,
     pub saldo_corto: Option<String>,
     pub activa: bool,
+    /// «Se libera en ~N bloques»: el fondeo todavía no juntó 10 confirmaciones.
+    pub traba_corta: Option<String>,
 }
 
 #[derive(Clone, Debug, uniffi::Record)]
@@ -259,6 +265,44 @@ pub struct PartidaVista {
     pub en_curso: Option<String>,
     /// El pago 2-de-2 ya se está firmando o espera bloque.
     pub pago_en_curso: bool,
+    /// Fondeo sin 10 confirmaciones: «Podés marcarla terminada en ~N bloques…».
+    /// Mientras esté, «Terminé» y «Aceptar y pagar» van deshabilitados.
+    pub traba: Option<String>,
+    pub traba_corta: Option<String>,
+    /// «Avisar que terminé» va, pero deshabilitado (contratista, fondeo sin confirmar).
+    pub termino_trabado: bool,
+    /// «Aceptar y pagar» va, pero deshabilitado (me toca, fondeo sin confirmar).
+    pub pago_trabado: bool,
+}
+
+/// Estado del respaldo completo (regla compartida `respaldo::estado`).
+#[derive(Clone, Debug, uniffi::Record)]
+pub struct RespaldoEstado {
+    pub linea: String,
+    /// "ok", "espera", "error", "apagado".
+    pub tono: String,
+    /// Hay obras o cajas nuevas que el último respaldo no tiene (recordatorio).
+    pub falta: bool,
+    pub ultimo: Option<String>,
+    pub ayuda: Vec<String>,
+    pub nombre_archivo: String,
+    pub clave_minima: u32,
+}
+
+/// Lo que trae un respaldo completo, ya validado, antes de restaurarlo.
+#[derive(Clone, Debug, uniffi::Record)]
+pub struct RespaldoResumen {
+    pub nombre: String,
+    pub rol: String,
+    pub creado: String,
+    pub app: String,
+    pub n_obras: u32,
+    pub n_ofertas: u32,
+    pub n_shares: u32,
+    pub direccion: Option<String>,
+    pub altura: Option<u64>,
+    /// En este equipo ya hay cuenta, semilla o shares: hace falta la confirmación de peligro.
+    pub hay_datos: bool,
 }
 
 #[derive(Clone, Debug, uniffi::Record)]
@@ -299,8 +343,9 @@ pub struct BilleteraVista {
     pub estado_tono: String,
     /// Saldo total en piconeros, para formatear sin perder precisión.
     pub total_pico: u64,
+    /// Ayuda del envío (regla compartida `caja::ayuda_envio`).
+    pub ayuda_envio: String,
 }
-
 
 #[derive(Clone, Debug, uniffi::Record)]
 pub struct DaemonPrueba {
@@ -345,6 +390,8 @@ pub struct KonstruadoApp {
     ses: Arc<Mutex<Sesion>>,
     datos: PathBuf,
     ultima_prueba: Mutex<Option<DaemonPrueba>>,
+    /// Huella del último respaldo armado, hasta que Android confirma que lo guardó.
+    respaldo_pendiente: Mutex<Option<respaldo::Huella>>,
 }
 
 fn parse_destino(s: &str) -> Option<PeerAddr> {
@@ -807,7 +854,6 @@ impl KonstruadoApp {
     }
 }
 
-
 /// Traduce el diagnóstico medido a un estado para la pantalla.
 /// Solo pide encender Orbot cuando su SOCKS de verdad no contesta.
 fn sala_de(
@@ -912,6 +958,8 @@ impl KonstruadoApp {
         let datos = PathBuf::from(&datos_dir);
         std::fs::create_dir_all(&datos).map_err(|e| fallo(format!("Carpeta de datos: {e}")))?;
         std::env::set_var("KONSTRUADO_DATOS", &datos_dir);
+        // Un respaldo completo restaurado se aplica antes de leer nada (ver respaldo.rs).
+        respaldo::aplicar_pendiente(&datos).map_err(|e| fallo(format!("Restaurar respaldo: {e}")))?;
         persist::cargar_daemon_al_arrancar().map_err(fallo)?;
         let mut g = persist::cargar();
         if let Some(yo) = g.yo.as_mut() {
@@ -990,6 +1038,7 @@ impl KonstruadoApp {
             })),
             datos,
             ultima_prueba: Mutex::new(None),
+            respaldo_pendiente: Mutex::new(None),
         });
         app.lanzar_bucle();
         Ok(app)
@@ -1396,6 +1445,7 @@ impl KonstruadoApp {
                         p.fondeo_txid.is_some(),
                     ),
                     activa: activa == Some(i),
+                    traba_corta: caja::traba_corta(v.traba(&obra, i), ES),
                 })
                 .collect(),
         })
@@ -1504,7 +1554,7 @@ impl KonstruadoApp {
         let soy_prop_enc = p.encerrado_por.as_ref().is_some_and(|q| q.id == mid);
         let fondeo_curso = v.linea(&obra.id, i).cloned();
         // Una sola regla para Dioxus y Compose: qué botones existen en cada estado.
-        let acc = caja::acciones_partida(&obra, i, &mid, &v.lineas_de(&obra.id, i));
+        let acc = caja::acciones_partida_con(&obra, i, &mid, &v.lineas_de(&obra.id, i), v.traba(&obra, i));
         let frenado = acc.frenado;
         let nada_en_curso = acc.en_curso == caja::EnCurso::Nada;
         let pagando = matches!(acc.en_curso, caja::EnCurso::PagoFirmando | caja::EnCurso::PagoEnRed);
@@ -1644,6 +1694,10 @@ impl KonstruadoApp {
             puede_salir_local: acc.salir_local,
             en_curso: caja::en_curso_corto(acc.en_curso, ES).map(str::to_string),
             pago_en_curso: pagando,
+            traba: caja::texto_traba(acc.traba, soy_c, ES),
+            traba_corta: caja::traba_corta(acc.traba, ES),
+            termino_trabado: !cortada && soy_c && p.estado == PartidaEstado::Encerrada && acc.traba.trabada(),
+            pago_trabado: en_trato && acc.me_toca && !pagando && acc.traba.trabada(),
         })
     }
 
@@ -1765,6 +1819,7 @@ impl KonstruadoApp {
             estado_linea: est.1,
             estado_tono: est.0.codigo().into(),
             total_pico: b.total,
+            ayuda_envio: caja::ayuda_envio(ES).to_string(),
         }
     }
 
@@ -1773,23 +1828,65 @@ impl KonstruadoApp {
         self.caja.crear_semilla().map_err(err_caja)
     }
 
-    /// JSON del perfil de obras/ofertas (sin seed ni share). Puede estar desfasado vs el peer.
-    pub fn exportar_obras(&self) -> Result<String, FfiError> {
+    // ------------------------------------------------ respaldo completo (respaldo.rs)
+
+    pub fn estado_respaldo(&self) -> RespaldoEstado {
         let mid = self.mid();
-        let mut obras: Vec<Obra> = self
-            .nodo
-            .obras_todas()
-            .into_iter()
-            .filter(|o| mid.is_empty() || o.participa(&mid))
-            .collect();
-        obras.sort_by(|a, b| b.actualizado.cmp(&a.actualizado).then(b.id.cmp(&a.id)));
-        let ofertas = self
-            .nodo
-            .tablero()
-            .into_iter()
-            .filter(|o| mid.is_empty() || o.mandante.id == mid)
-            .collect::<Vec<_>>();
-        persist::exportar_perfil_obras(&obras, &ofertas).map_err(fallo)
+        let (sem, cajas) = self.caja.claves_respaldo();
+        let obras = self.nodo.obras_todas();
+        let est = respaldo::estado(&self.datos, &respaldo::huella_de_partes(&mid, &obras, sem, cajas));
+        let (tono, linea) = respaldo::texto_estado(&est, L);
+        RespaldoEstado {
+            linea,
+            tono: tono.codigo().into(),
+            falta: est.falta && est.hay_algo,
+            ultimo: est.ultimo.map(|t| L.fmt_cuando(t)),
+            ayuda: respaldo::ayuda(ES).into_iter().map(str::to_string).collect(),
+            nombre_archivo: respaldo::nombre_archivo(),
+            clave_minima: respaldo::CLAVE_MINIMA as u32,
+        }
+    }
+
+    /// Arma y cifra el respaldo completo. Android lo escribe con el selector (SAF)
+    /// y después llama a [`Self::respaldo_guardado`].
+    pub fn exportar_respaldo(&self, clave: String) -> Result<Vec<u8>, FfiError> {
+        self.persistir();
+        let ahora = chrono::Utc::now().timestamp();
+        let (bytes, h) = respaldo::exportar(&self.datos, persist::cargar(), self.caja.material_respaldo(), &clave, ahora)
+            .map_err(|e| fallo(respaldo::aviso(&e, ES)))?;
+        *self.respaldo_pendiente.lock().unwrap() = Some(h);
+        Ok(bytes)
+    }
+
+    /// El archivo quedó escrito: anota la fecha del último respaldo.
+    pub fn respaldo_guardado(&self) -> Result<(), FfiError> {
+        let h = self.respaldo_pendiente.lock().unwrap().take().ok_or_else(|| fallo("No hay un respaldo armado."))?;
+        respaldo::marcar_hecho(&self.datos, h, chrono::Utc::now().timestamp()).map_err(fallo)
+    }
+
+    /// Descifra y valida sin escribir nada.
+    pub fn revisar_respaldo(&self, datos: Vec<u8>, clave: String) -> Result<RespaldoResumen, FfiError> {
+        let r = respaldo::revisar(&self.datos, &datos, &clave).map_err(|e| fallo(respaldo::aviso(&e, ES)))?;
+        Ok(RespaldoResumen {
+            nombre: r.nombre,
+            rol: L.rol(r.rol).to_string(),
+            creado: L.fmt_cuando(r.creado),
+            app: r.app,
+            n_obras: r.n_obras as u32,
+            n_ofertas: r.n_ofertas as u32,
+            n_shares: r.n_shares as u32,
+            direccion: r.direccion,
+            altura: r.altura,
+            hay_datos: r.hay_datos,
+        })
+    }
+
+    /// Deja todo listo para el reinicio (atómico). Android reinicia el proceso
+    /// enseguida; al arrancar, `nuevo` aplica el cambio antes de leer nada.
+    pub fn restaurar_respaldo(&self, datos: Vec<u8>, clave: String, reemplazar: bool) -> Result<(), FfiError> {
+        respaldo::preparar(&self.datos, &datos, &clave, reemplazar)
+            .map(|_| ())
+            .map_err(|e| fallo(respaldo::aviso(&e, ES)))
     }
 
     /// Importa obras/ofertas de un respaldo. No trae seed ni share; avisa que puede estar viejo.
@@ -1912,15 +2009,6 @@ impl KonstruadoApp {
         Ok(aviso)
     }
 
-    /// Texto del respaldo de las 25 palabras (para guardarlo con el selector de Android).
-    pub fn exportar_semilla(&self) -> Result<String, FfiError> {
-        let path = self.tmp("semilla.txt");
-        let r = self.caja.guardar_palabras(&path).map_err(err_caja);
-        let txt = r.and_then(|_| std::fs::read_to_string(&path).map_err(|e| fallo(e.to_string())));
-        let _ = std::fs::remove_file(&path);
-        txt
-    }
-
     pub fn restaurar_semilla(&self, texto: String) -> Result<String, FfiError> {
         let path = self.tmp("semilla-in.txt");
         std::fs::write(&path, texto).map_err(|e| fallo(e.to_string()))?;
@@ -1928,15 +2016,6 @@ impl KonstruadoApp {
         let r = self.caja.restaurar_semilla(&path);
         let _ = std::fs::remove_file(&path);
         r.map(|c| caja::listo_humano(c, ES)).map_err(err_caja)
-    }
-
-    /// Texto del share FROST de la caja de esta obra. Puede gastar junto al del otro.
-    pub fn exportar_share(&self, obra_id: String) -> Result<String, FfiError> {
-        let path = self.tmp("caja.share");
-        let r = self.caja.guardar_share(&obra_id, &path).map_err(err_caja);
-        let txt = r.and_then(|_| std::fs::read_to_string(&path).map_err(|e| fallo(e.to_string())));
-        let _ = std::fs::remove_file(&path);
-        txt
     }
 
     pub fn restaurar_share(&self, texto: String) -> Result<String, FfiError> {
@@ -1975,7 +2054,6 @@ impl KonstruadoApp {
     pub fn mirar_atras_caja(&self, obra_id: String) -> Result<(), FfiError> {
         self.caja.pedir_atras_caja(&obra_id).map_err(err_caja)
     }
-
 
     // ------------------------------------------------------------ daemon Monero
 
@@ -2096,6 +2174,5 @@ mod ffi_tests {
         assert_eq!(parse_num("2.000"), 2000);
         assert_eq!(recorta_nota("x".repeat(MAX_NOTA + 5)).chars().count(), MAX_NOTA);
     }
-
 
 }

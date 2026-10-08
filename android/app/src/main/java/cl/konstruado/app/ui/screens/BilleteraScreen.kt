@@ -38,29 +38,38 @@ import cl.konstruado.app.ui.Tono
 import cl.konstruado.app.ui.humano
 import cl.konstruado.app.ui.rememberAbrirArchivo
 import cl.konstruado.app.ui.rememberAcciones
-import cl.konstruado.app.ui.rememberGuardarArchivo
 import cl.konstruado.app.ui.sondear
 import cl.konstruado.app.ui.tonoDe
 import uniffi.konstruado_ffi.DaemonPrueba
 
+/** Importación de los respaldos sueltos de 0.2.7 o antes (Avanzado). */
 @Composable
-private fun Restaurar(acciones: Acciones, banner: Banner) {
+private fun RestaurarViejos(acciones: Acciones) {
     val app = AppHolder.a
     val abrirSemilla = rememberAbrirArchivo(acciones) { app.restaurarSemilla(it) }
     val abrirShare = rememberAbrirArchivo(acciones) { app.restaurarShare(it) }
-    val guardarObras = rememberGuardarArchivo(
-        acciones, banner, { app.exportarObras() },
-        "Guardé el respaldo de obras. No incluye seed ni share; puede estar desfasado vs el otro.",
-    )
     val abrirObras = rememberAbrirArchivo(acciones) { app.importarObras(it) }
-    Secundario("Recuperar las 25 palabras") { abrirSemilla() }
-    Secundario("Recuperar un share") { abrirShare() }
-    Secundario("Guardar respaldo de obras") { guardarObras("konstruado-obras.json") }
-    Secundario("Recuperar respaldo de obras") { abrirObras() }
-    ComoFunciona("Qué trae cada respaldo") {
+    Secundario("Importar las 25 palabras (.txt)") { abrirSemilla() }
+    Secundario("Importar un share (.share)") { abrirShare() }
+    Secundario("Importar obras (.json)") { abrirObras() }
+    ComoFunciona("Qué trae cada archivo viejo") {
         Ayuda("Las 25 palabras traen tu dirección personal. No traen la caja de la obra ni tu nombre en el trato.")
         Ayuda("Un share trae la caja de una obra que ya está en este equipo. Tiene que ser el tuyo: el del otro lado no sirve.")
-        Ayuda("El respaldo de obras guarda el perfil (obras/ofertas) para reinstalar. Puede estar desfasado respecto al otro; la cadena y el share mandan para el dinero. No incluye seed ni share.")
+        Ayuda("El JSON de obras trae obras y ofertas. Puede estar desfasado respecto al otro; la cadena y el share mandan para el dinero.")
+    }
+}
+
+/** «Respaldos y recuperación»: respaldo completo, restaurar y lo viejo en Avanzado. */
+@Composable
+private fun Respaldos(acciones: Acciones, banner: Banner, hayCuenta: Boolean) {
+    if (hayCuenta) {
+        RespaldoCompleto(acciones, banner)
+        Divisor()
+    }
+    RestaurarRespaldo(acciones, banner)
+    Divisor()
+    Plegable("Avanzado", "Importar respaldos sueltos (0.2.7 o antes)") {
+        RestaurarViejos(acciones)
     }
 }
 
@@ -83,9 +92,6 @@ fun BilleteraScreen(banner: Banner) {
     val b = r.getOrElse { ErrorTexto(it.humano()); return }
     var destino by remember { mutableStateOf("") }
     var monto by remember { mutableStateOf("") }
-    val guardarPalabras = rememberGuardarArchivo(
-        acciones, banner, { app.exportarSemilla() }, "Guardé las 25 palabras en el archivo que elegiste.",
-    )
     val esDefecto = app.daemonEsDefecto()
     val pruebaNodo = sondear { app.ultimaPruebaDaemon() }?.getOrNull()
     val ocupado = b.buscando || b.enviando || b.retro != null
@@ -97,7 +103,7 @@ fun BilleteraScreen(banner: Banner) {
         if (dir == null) {
             Text("Todavía no hay billetera", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
             Ayuda("Se crean 25 palabras nuevas y quedan en el almacenamiento privado de la app. Tu Monero personal de stagenet; la caja de una obra es otra dirección, de las dos personas.")
-            Primario("Crear billetera de stagenet") { acciones.correr("Billetera creada. Guardá las 25 palabras.") { app.crearSemilla() } }
+            Primario("Crear billetera de stagenet") { acciones.correr("Billetera creada. Exportá el respaldo completo (abajo, en Respaldos y recuperación).") { app.crearSemilla() } }
             Ayuda(b.escala)
         } else {
             Ayuda("Saldo")
@@ -108,8 +114,8 @@ fun BilleteraScreen(banner: Banner) {
     }
     val dir = b.direccion
     if (dir == null) {
-        Plegable("Respaldos y recuperación", "Recuperar 25 palabras, share u obras", abierta = true) {
-            Restaurar(acciones, banner)
+        Plegable("Respaldos y recuperación", "Restaurar desde el respaldo completo", abierta = true) {
+            Respaldos(acciones, banner, hayCuenta = true)
         }
         NodoPlegable(b.daemon, esDefecto, b.tip, b.visto, pruebaNodo, acciones)
         return
@@ -141,12 +147,12 @@ fun BilleteraScreen(banner: Banner) {
     Tarjeta("Enviar") {
         OutlinedTextField(destino, { destino = it }, label = { Text("Dirección de stagenet") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
         OutlinedTextField(monto, { monto = it }, label = { Text("Monto en XMR") }, placeholder = { Text("0.04") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
+        Ayuda(b.ayudaEnvio)
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Ayuda("Se reservan 0,001 XMR para el fee.")
             androidx.compose.foundation.layout.Spacer(Modifier.weight(1f))
             TextoBoton("Usar el máximo") {
                 acciones.pedir({ app.maximoEnvio() }) { m ->
-                    if (m == null) banner.error.value = "No hay saldo libre suficiente para el fee." else monto = m
+                    if (m == null) banner.error.value = "Todavía no hay saldo libre para enviar." else monto = m
                 }
             }
         }
@@ -155,11 +161,9 @@ fun BilleteraScreen(banner: Banner) {
         Ayuda(b.ultimo ?: "Sin envíos desde que abriste la app.", maxLines = 1)
     }
 
-    Plegable("Respaldos y recuperación", "25 palabras, shares y obras") {
-        Secundario("Guardar las 25 palabras") { guardarPalabras("konstruado-semilla.txt") }
-        Ayuda("Junto a las palabras queda la altura de bloque del nodo; al recuperar, el scan parte de ahí (no desde el génesis).")
-        Divisor()
-        Restaurar(acciones, banner)
+    val estResp = sondear { app.estadoRespaldo() }?.getOrNull()
+    Plegable("Respaldos y recuperación", estResp?.linea ?: "Respaldo completo", abierta = estResp?.falta == true) {
+        Respaldos(acciones, banner, hayCuenta = true)
     }
 
     NodoPlegable(b.daemon, esDefecto, b.tip, b.visto, pruebaNodo, acciones)

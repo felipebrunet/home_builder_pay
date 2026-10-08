@@ -40,6 +40,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
@@ -197,6 +198,8 @@ fun Plegable(
     content: @Composable ColumnScope.() -> Unit,
 ) {
     var ver by rememberSaveable(titulo) { mutableStateOfBool(abierta) }
+    // `abierta` puede llegar tarde (sondeo): si pasa a true, se abre; nunca la cierra sola.
+    LaunchedEffect(abierta) { if (abierta) ver = true }
     Card(
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
         modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp),

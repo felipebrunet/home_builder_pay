@@ -135,15 +135,16 @@ fn main() {
                     log(format!("PASO CAJA {addr}"));
                     let vk = app.view_key_caja(id.clone()).unwrap_or_default();
                     log(format!("PASO viewkey {}…", &vk[..vk.len().min(12)]));
-                    match app.exportar_share(id.clone()) {
-                        Ok(txt) => {
-                            log(format!("PASO share-exportado {} bytes", txt.len()));
-                            match app.restaurar_share(txt) {
-                                Ok(m) => log(format!("PASO share-restaurado {m}")),
-                                Err(e) => log(format!("share-restaurar-error {e}")),
+                    // Respaldo completo con la caja recién armada: se abre y valida (sin restaurar).
+                    match app.exportar_respaldo("prueba del par".into()) {
+                        Ok(bytes) => {
+                            log(format!("PASO respaldo-exportado {} bytes", bytes.len()));
+                            match app.revisar_respaldo(bytes, "prueba del par".into()) {
+                                Ok(r) => log(format!("PASO respaldo-revisado shares={} obras={}", r.n_shares, r.n_obras)),
+                                Err(e) => log(format!("respaldo-revisar-error {e}")),
                             }
                         }
-                        Err(e) => log(format!("share-error {e}")),
+                        Err(e) => log(format!("respaldo-error {e}")),
                     }
                 }
                 if caja_vista && soy_m && !encerrar {

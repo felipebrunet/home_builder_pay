@@ -10,7 +10,7 @@ import java.nio.file.Files
 
 /**
  * Bindings Kotlin + JNA + libkonstruado_ffi (host, target/debug). No toca la red
- * de Monero para pasar: crea perfil, publica, crea semilla y exporta respaldo.
+ * de Monero para pasar: crea perfil, publica, crea semilla y exporta el respaldo completo.
  * Si SALA_TCP está definido (p. ej. 127.0.0.1:17432), espera la sesión viva.
  */
 class FfiJvmTest {
@@ -33,11 +33,20 @@ class FfiJvmTest {
         assertFalse(app.billetera().tieneSemilla)
         val addr = app.crearSemilla()
         assertTrue(addr.startsWith("5"))
-        val respaldo = app.exportarSemilla()
-        assertTrue(respaldo.length > 100)
-        // Restaurar las mismas palabras: el motor lo reconoce.
-        val msg = app.restaurarSemilla(respaldo)
-        assertTrue(msg, msg.contains("ya son las de esta billetera"))
+        // Respaldo completo: cifrado, con cabecera, y se revisa con la misma clave.
+        assertTrue(app.estadoRespaldo().falta)
+        val datos = app.exportarRespaldo("clave-de-prueba")
+        assertEquals("KSTRBAK", String(datos.copyOfRange(0, 7)))
+        val r = app.revisarRespaldo(datos, "clave-de-prueba")
+        assertEquals("Kotlin JVM", r.nombre)
+        assertEquals("mandante", r.rol)
+        assertEquals(1u, r.nOfertas)
+        assertEquals(addr, r.direccion)
+        assertTrue(r.hayDatos)
+        val mala = runCatching { app.revisarRespaldo(datos, "otra-clave-mala") }.exceptionOrNull()
+        assertTrue(mala is FfiException.Fallo)
+        app.respaldoGuardado()
+        assertFalse(app.estadoRespaldo().falta)
         // Daemon configurable: público por defecto, propio persistido, volver.
         assertTrue(app.daemonEsDefecto())
         assertEquals(app.daemonPorDefecto(), app.daemonActivo())

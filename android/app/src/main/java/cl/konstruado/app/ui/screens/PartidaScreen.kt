@@ -26,6 +26,7 @@ import cl.konstruado.app.ui.ComoFunciona
 import cl.konstruado.app.ui.Copiable
 import cl.konstruado.app.ui.Divisor
 import cl.konstruado.app.ui.ErrorTexto
+import cl.konstruado.app.ui.EstadoFila
 import cl.konstruado.app.ui.EstadoTarjeta
 import cl.konstruado.app.ui.Lead
 import cl.konstruado.app.ui.Peligro
@@ -91,7 +92,8 @@ fun PartidaScreen(obraId: String, indice: UInt, banner: Banner) {
             // Lo que está en curso va en la tarjeta de estado de abajo (sin repetirlo acá).
             Chip(p.label, tonoPartida(p.estado))
             if (p.lineaFreno) Chip("frenado", Tono.Error)
-            if (p.miTurno && !p.lineaFreno && !p.pagoEnCurso && p.enCurso == null) Chip("te toca", Tono.Ok)
+            p.trabaCorta?.takeIf { p.enCurso == null && !p.lineaFreno }?.let { Chip(it, Tono.Espera) }
+            if (p.miTurno && !p.lineaFreno && !p.pagoEnCurso && p.enCurso == null && p.trabaCorta == null) Chip("te toca", Tono.Ok)
             if (!p.miTurno && !p.pagoEnCurso) p.esperaA?.let { Chip("esperando a $it", Tono.Espera) }
         }
         if (e.detalle != p.lead) Ayuda(p.lead)
@@ -131,6 +133,11 @@ fun PartidaScreen(obraId: String, indice: UInt, banner: Banner) {
         } else if (p.puedeNoEncerrar) {
             Secundario("No encerrar") { acciones.correr(yaEnPantalla = yaVisible) { app.cancelarEncerrar(obraId, indice) } }
         }
+        // Fondeo sin 10 confirmaciones: el botón se ve, deshabilitado, con la cuenta regresiva.
+        p.traba?.let { EstadoTarjeta(Tono.Espera, p.trabaCorta ?: "Fondos trabados", it, enCurso = true, maxLineas = 3) }
+        if (p.terminoTrabado) {
+            Primario("Avisar que terminé", enabled = false) {}
+        }
         if (p.puedeAvisarTermino) {
             Divisor()
             Text("Avisar que terminé", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
@@ -146,6 +153,9 @@ fun PartidaScreen(obraId: String, indice: UInt, banner: Banner) {
         if (p.enTrato) {
             p.propuestoTexto?.let { Lead(it) }
             // Con el pago ya andando no se ofrece aceptar ni contraofertar otra vez.
+            if (p.pagoTrabado) {
+                Primario("Aceptar ${p.propuesto ?: 0u}% y pagar", enabled = false) {}
+            }
             if (p.puedeAceptarPago) {
                 Primario("Aceptar ${p.propuesto ?: 0u}% y pagar") {
                     acciones.correr("Firmando el pago 2-de-2 con el otro…", yaEnPantalla = yaVisible) { app.aceptarYPagar(obraId, indice) }
@@ -199,7 +209,7 @@ fun PartidaScreen(obraId: String, indice: UInt, banner: Banner) {
     }
 
     if (p.cajaDireccion != null) {
-        Plegable("Respaldos", "Share de la caja de esta obra") {
+        Plegable("Importar share suelto", "Avanzado · archivos de 0.2.7 o antes") {
             CajaRespaldo(obraId, true, acciones, banner)
         }
     }

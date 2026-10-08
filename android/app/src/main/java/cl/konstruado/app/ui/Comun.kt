@@ -193,3 +193,42 @@ fun rememberAbrirArchivo(acciones: Acciones, usar: (String) -> String): () -> Un
 }
 
 fun Acciones.avisar(msg: String) = this.correr(okMsg = msg) {}
+
+/**
+ * Guardar bytes (respaldo completo) con el selector de Android (SAF, «crear
+ * documento»). `contenido` se arma recién cuando hay destino; `alGuardar` corre
+ * después de escribir el archivo entero.
+ */
+@Composable
+fun rememberGuardarBytes(
+    acciones: Acciones,
+    banner: Banner,
+    contenido: () -> ByteArray,
+    alGuardar: () -> Unit,
+    okMsg: String,
+): (String) -> Unit {
+    val ctx = LocalContext.current
+    val lanzador = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/octet-stream")) { uri ->
+        if (uri != null) acciones.correr(okMsg) {
+            val b = contenido()
+            ctx.contentResolver.openOutputStream(uri, "wt")?.use { it.write(b); it.flush() }
+                ?: error("No pude abrir el archivo elegido")
+            alGuardar()
+        }
+    }
+    return { nombre -> banner.error.value = null; lanzador.launch(nombre) }
+}
+
+/** Abrir un archivo binario con el selector (SAF) y pasarle los bytes a `usar`. */
+@Composable
+fun rememberAbrirBytes(acciones: Acciones, usar: (nombre: String, bytes: ByteArray) -> Unit): () -> Unit {
+    val ctx = LocalContext.current
+    val lanzador = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) acciones.pedir({
+            val b = ctx.contentResolver.openInputStream(uri)?.use { it.readBytes() }
+                ?: error("No pude leer el archivo elegido")
+            Pair(uri.lastPathSegment?.substringAfterLast('/') ?: "respaldo", b)
+        }) { (n, b) -> usar(n, b) }
+    }
+    return { lanzador.launch(arrayOf("*/*")) }
+}

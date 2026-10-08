@@ -36,7 +36,6 @@ import cl.konstruado.app.ui.Tono
 import cl.konstruado.app.ui.humano
 import cl.konstruado.app.ui.rememberAbrirArchivo
 import cl.konstruado.app.ui.rememberAcciones
-import cl.konstruado.app.ui.rememberGuardarArchivo
 import cl.konstruado.app.ui.sondear
 import uniffi.konstruado_ffi.MiradaVista
 import uniffi.konstruado_ffi.ObraVista
@@ -86,20 +85,15 @@ fun CajaDatos(obraId: String, direccion: String?, mirada: MiradaVista?, acciones
     }
 }
 
-/** Respaldo del share FROST de la caja. */
+/** Importar un share suelto de 0.2.7 o antes. Desde 0.2.8 el share va en el respaldo completo. */
 @Composable
 fun CajaRespaldo(obraId: String, hayCaja: Boolean, acciones: Acciones, banner: Banner) {
     val app = AppHolder.a
-    val guardarShare = rememberGuardarArchivo(
-        acciones, banner, { app.exportarShare(obraId) },
-        "Guardé el share. Esa copia puede gastar, junto con la del otro.",
-    )
     val abrirShare = rememberAbrirArchivo(acciones) { app.restaurarShare(it) }
-    if (hayCaja) Secundario("Guardar el share de la caja") { guardarShare("konstruado-$obraId.share") }
-    Secundario("Recuperar un share") { abrirShare() }
-    ComoFunciona("Qué es el share") {
-        Ayuda("Esta copia puede gastar, junto con el share del otro. Guardala aparte y no la pegues en un chat.")
-        Ayuda("Si perdiste el share de esta obra, recuperalo desde el archivo que guardaste. Tiene que ser el tuyo y la obra tiene que seguir en este equipo.")
+    Secundario("Importar un share suelto (.share)") { abrirShare() }
+    ComoFunciona("Dónde está el share") {
+        Ayuda("Desde 0.2.8 el share de cada caja va en el respaldo completo (Billetera → Respaldos y recuperación).")
+        Ayuda("Esto es para archivos .share de 0.2.7 o antes. Tiene que ser el tuyo y la obra tiene que seguir en este equipo.")
     }
 }
 
@@ -175,6 +169,7 @@ fun ObraScreen(id: String, nav: Nav, banner: Banner) {
                     Chips {
                         Chip(p.label, tonoPartida(p.estado), enCurso = p.estado == "en fondeo")
                         if (p.activa) Chip("en curso", Tono.Espera)
+                        p.trabaCorta?.let { Chip(it, Tono.Espera, enCurso = true) }
                     }
                 },
             ) { nav.ir(Pantalla.Partida(id, p.indice)) }
@@ -209,8 +204,16 @@ fun ObraScreen(id: String, nav: Nav, banner: Banner) {
     }
 
     if (o.abierta && soyParte) {
+        // Recordatorio: caja recién armada u obra nueva que el último respaldo no tiene.
+        val resp = sondear { app.estadoRespaldo() }?.getOrNull()
+        if (resp?.falta == true) {
+            Tarjeta {
+                EstadoFila(Tono.Espera, resp.linea)
+                Ayuda("Billetera → Respaldos y recuperación → Exportar respaldo completo.")
+            }
+        }
         Tarjeta("Caja y pagos") { CajaDatos(o.id, o.cajaDireccion, o.mirada, acciones) }
-        Plegable("Respaldos", "Share de la caja de esta obra") {
+        Plegable("Importar share suelto", "Avanzado · archivos de 0.2.7 o antes") {
             CajaRespaldo(o.id, o.cajaDireccion != null, acciones, banner)
         }
     }

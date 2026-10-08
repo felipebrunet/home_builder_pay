@@ -15,6 +15,8 @@ import androidx.compose.ui.unit.dp
 import cl.konstruado.app.AppHolder
 import cl.konstruado.app.ui.Banner
 import cl.konstruado.app.ui.Nav
+import cl.konstruado.app.ui.screens.BienvenidaScreen
+import cl.konstruado.app.ui.screens.ModoBienvenida
 import cl.konstruado.app.ui.screens.BilleteraScreen
 import cl.konstruado.app.ui.screens.CuentaScreen
 import cl.konstruado.app.ui.screens.ObraScreen
@@ -95,5 +97,11 @@ class PantallasRealesTest {
     @Test fun partida() {
         val id = app().tablero().obras.first().id
         foto("android-partida", "Partida") { PartidaScreen(id, 0u, Banner()) }
+    }
+
+    @Test fun bienvenida() { app(); foto("android-bienvenida", "Bienvenida") { BienvenidaScreen(Banner()) {} } }
+
+    @Test fun bienvenidaRestaurar() {
+        app(); foto("android-bienvenida-restaurar", "Restaurar") { BienvenidaScreen(Banner(), ModoBienvenida.Restaurar) {} }
     }
 }

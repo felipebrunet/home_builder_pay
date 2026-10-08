@@ -844,6 +844,10 @@ internal interface UniffiForeignFutureCompleteVoid : com.sun.jna.Callback {
 
 
 
+
+
+
+
 // For large crates we prevent `MethodTooLargeException` (see #2340)
 // N.B. the name of the extension is very misleading, since it is 
 // rather `InterfaceTooLargeException`, caused by too many methods 
@@ -911,13 +915,11 @@ fun uniffi_konstruado_ffi_checksum_method_konstruadoapp_empezar_fondeo_de_nuevo(
 ): Short
 fun uniffi_konstruado_ffi_checksum_method_konstruadoapp_enviar(
 ): Short
+fun uniffi_konstruado_ffi_checksum_method_konstruadoapp_estado_respaldo(
+): Short
 fun uniffi_konstruado_ffi_checksum_method_konstruadoapp_estado_sala(
 ): Short
-fun uniffi_konstruado_ffi_checksum_method_konstruadoapp_exportar_obras(
-): Short
-fun uniffi_konstruado_ffi_checksum_method_konstruadoapp_exportar_semilla(
-): Short
-fun uniffi_konstruado_ffi_checksum_method_konstruadoapp_exportar_share(
+fun uniffi_konstruado_ffi_checksum_method_konstruadoapp_exportar_respaldo(
 ): Short
 fun uniffi_konstruado_ffi_checksum_method_konstruadoapp_fijar_daemon(
 ): Short
@@ -969,9 +971,15 @@ fun uniffi_konstruado_ffi_checksum_method_konstruadoapp_red(
 ): Short
 fun uniffi_konstruado_ffi_checksum_method_konstruadoapp_reintentar_fondeo(
 ): Short
+fun uniffi_konstruado_ffi_checksum_method_konstruadoapp_respaldo_guardado(
+): Short
+fun uniffi_konstruado_ffi_checksum_method_konstruadoapp_restaurar_respaldo(
+): Short
 fun uniffi_konstruado_ffi_checksum_method_konstruadoapp_restaurar_semilla(
 ): Short
 fun uniffi_konstruado_ffi_checksum_method_konstruadoapp_restaurar_share(
+): Short
+fun uniffi_konstruado_ffi_checksum_method_konstruadoapp_revisar_respaldo(
 ): Short
 fun uniffi_konstruado_ffi_checksum_method_konstruadoapp_salir_obra_local(
 ): Short
@@ -1096,13 +1104,11 @@ fun uniffi_konstruado_ffi_fn_method_konstruadoapp_empezar_fondeo_de_nuevo(`ptr`:
 ): Unit
 fun uniffi_konstruado_ffi_fn_method_konstruadoapp_enviar(`ptr`: Pointer,`destino`: RustBuffer.ByValue,`montoXmr`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): Unit
+fun uniffi_konstruado_ffi_fn_method_konstruadoapp_estado_respaldo(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
+): RustBuffer.ByValue
 fun uniffi_konstruado_ffi_fn_method_konstruadoapp_estado_sala(`ptr`: Pointer,`orbotInstalado`: Byte,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
-fun uniffi_konstruado_ffi_fn_method_konstruadoapp_exportar_obras(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
-): RustBuffer.ByValue
-fun uniffi_konstruado_ffi_fn_method_konstruadoapp_exportar_semilla(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
-): RustBuffer.ByValue
-fun uniffi_konstruado_ffi_fn_method_konstruadoapp_exportar_share(`ptr`: Pointer,`obraId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+fun uniffi_konstruado_ffi_fn_method_konstruadoapp_exportar_respaldo(`ptr`: Pointer,`clave`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
 fun uniffi_konstruado_ffi_fn_method_konstruadoapp_fijar_daemon(`ptr`: Pointer,`url`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
@@ -1154,9 +1160,15 @@ fun uniffi_konstruado_ffi_fn_method_konstruadoapp_red(`ptr`: Pointer,uniffi_out_
 ): RustBuffer.ByValue
 fun uniffi_konstruado_ffi_fn_method_konstruadoapp_reintentar_fondeo(`ptr`: Pointer,`obraId`: RustBuffer.ByValue,`indice`: Int,uniffi_out_err: UniffiRustCallStatus, 
 ): Unit
+fun uniffi_konstruado_ffi_fn_method_konstruadoapp_respaldo_guardado(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
+): Unit
+fun uniffi_konstruado_ffi_fn_method_konstruadoapp_restaurar_respaldo(`ptr`: Pointer,`datos`: RustBuffer.ByValue,`clave`: RustBuffer.ByValue,`reemplazar`: Byte,uniffi_out_err: UniffiRustCallStatus, 
+): Unit
 fun uniffi_konstruado_ffi_fn_method_konstruadoapp_restaurar_semilla(`ptr`: Pointer,`texto`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
 fun uniffi_konstruado_ffi_fn_method_konstruadoapp_restaurar_share(`ptr`: Pointer,`texto`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+): RustBuffer.ByValue
+fun uniffi_konstruado_ffi_fn_method_konstruadoapp_revisar_respaldo(`ptr`: Pointer,`datos`: RustBuffer.ByValue,`clave`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
 fun uniffi_konstruado_ffi_fn_method_konstruadoapp_salir_obra_local(`ptr`: Pointer,`obraId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
@@ -1376,16 +1388,13 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if (lib.uniffi_konstruado_ffi_checksum_method_konstruadoapp_enviar() != 19560.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if (lib.uniffi_konstruado_ffi_checksum_method_konstruadoapp_estado_respaldo() != 41680.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if (lib.uniffi_konstruado_ffi_checksum_method_konstruadoapp_estado_sala() != 30765.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_konstruado_ffi_checksum_method_konstruadoapp_exportar_obras() != 65531.toShort()) {
-        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
-    }
-    if (lib.uniffi_konstruado_ffi_checksum_method_konstruadoapp_exportar_semilla() != 7100.toShort()) {
-        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
-    }
-    if (lib.uniffi_konstruado_ffi_checksum_method_konstruadoapp_exportar_share() != 63940.toShort()) {
+    if (lib.uniffi_konstruado_ffi_checksum_method_konstruadoapp_exportar_respaldo() != 58732.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_konstruado_ffi_checksum_method_konstruadoapp_fijar_daemon() != 21840.toShort()) {
@@ -1463,10 +1472,19 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if (lib.uniffi_konstruado_ffi_checksum_method_konstruadoapp_reintentar_fondeo() != 3882.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if (lib.uniffi_konstruado_ffi_checksum_method_konstruadoapp_respaldo_guardado() != 42709.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_konstruado_ffi_checksum_method_konstruadoapp_restaurar_respaldo() != 42717.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if (lib.uniffi_konstruado_ffi_checksum_method_konstruadoapp_restaurar_semilla() != 50461.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_konstruado_ffi_checksum_method_konstruadoapp_restaurar_share() != 62601.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_konstruado_ffi_checksum_method_konstruadoapp_revisar_respaldo() != 56892.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_konstruado_ffi_checksum_method_konstruadoapp_salir_obra_local() != 50242.toShort()) {
@@ -1785,6 +1803,25 @@ public object FfiConverterString: FfiConverter<String, RustBuffer.ByValue> {
     }
 }
 
+/**
+ * @suppress
+ */
+public object FfiConverterByteArray: FfiConverterRustBuffer<ByteArray> {
+    override fun read(buf: ByteBuffer): ByteArray {
+        val len = buf.getInt()
+        val byteArr = ByteArray(len)
+        buf.get(byteArr)
+        return byteArr
+    }
+    override fun allocationSize(value: ByteArray): ULong {
+        return 4UL + value.size.toULong()
+    }
+    override fun write(value: ByteArray, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        buf.put(value)
+    }
+}
+
 
 // This template implements a class for working with a Rust struct via a Pointer/Arc<T>
 // to the live Rust struct on the other side of the FFI.
@@ -1976,25 +2013,18 @@ public interface KonstruadoAppInterface {
     
     fun `enviar`(`destino`: kotlin.String, `montoXmr`: kotlin.String)
     
+    fun `estadoRespaldo`(): RespaldoEstado
+    
     /**
      * Estado de la sala con lo que sabe Android (si Orbot está instalado).
      */
     fun `estadoSala`(`orbotInstalado`: kotlin.Boolean): SalaEstado
     
     /**
-     * JSON del perfil de obras/ofertas (sin seed ni share). Puede estar desfasado vs el peer.
+     * Arma y cifra el respaldo completo. Android lo escribe con el selector (SAF)
+     * y después llama a [`Self::respaldo_guardado`].
      */
-    fun `exportarObras`(): kotlin.String
-    
-    /**
-     * Texto del respaldo de las 25 palabras (para guardarlo con el selector de Android).
-     */
-    fun `exportarSemilla`(): kotlin.String
-    
-    /**
-     * Texto del share FROST de la caja de esta obra. Puede gastar junto al del otro.
-     */
-    fun `exportarShare`(`obraId`: kotlin.String): kotlin.String
+    fun `exportarRespaldo`(`clave`: kotlin.String): kotlin.ByteArray
     
     /**
      * Guarda y activa un nodo propio. Vacío o solo espacios = error (usá `usar_daemon_por_defecto`).
@@ -2079,9 +2109,25 @@ public interface KonstruadoAppInterface {
     
     fun `reintentarFondeo`(`obraId`: kotlin.String, `indice`: kotlin.UInt)
     
+    /**
+     * El archivo quedó escrito: anota la fecha del último respaldo.
+     */
+    fun `respaldoGuardado`()
+    
+    /**
+     * Deja todo listo para el reinicio (atómico). Android reinicia el proceso
+     * enseguida; al arrancar, `nuevo` aplica el cambio antes de leer nada.
+     */
+    fun `restaurarRespaldo`(`datos`: kotlin.ByteArray, `clave`: kotlin.String, `reemplazar`: kotlin.Boolean)
+    
     fun `restaurarSemilla`(`texto`: kotlin.String): kotlin.String
     
     fun `restaurarShare`(`texto`: kotlin.String): kotlin.String
+    
+    /**
+     * Descifra y valida sin escribir nada.
+     */
+    fun `revisarRespaldo`(`datos`: kotlin.ByteArray, `clave`: kotlin.String): RespaldoResumen
     
     /**
      * Archiva la obra solo en este equipo (oculta del tablero / Mis obras).
@@ -2549,6 +2595,18 @@ open class KonstruadoApp: Disposable, AutoCloseable, KonstruadoAppInterface
     
     
 
+    override fun `estadoRespaldo`(): RespaldoEstado {
+            return FfiConverterTypeRespaldoEstado.lift(
+    callWithPointer {
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_konstruado_ffi_fn_method_konstruadoapp_estado_respaldo(
+        it, _status)
+}
+    }
+    )
+    }
+    
+
     
     /**
      * Estado de la sala con lo que sabe Android (si Orbot está instalado).
@@ -2566,46 +2624,15 @@ open class KonstruadoApp: Disposable, AutoCloseable, KonstruadoAppInterface
 
     
     /**
-     * JSON del perfil de obras/ofertas (sin seed ni share). Puede estar desfasado vs el peer.
+     * Arma y cifra el respaldo completo. Android lo escribe con el selector (SAF)
+     * y después llama a [`Self::respaldo_guardado`].
      */
-    @Throws(FfiException::class)override fun `exportarObras`(): kotlin.String {
-            return FfiConverterString.lift(
+    @Throws(FfiException::class)override fun `exportarRespaldo`(`clave`: kotlin.String): kotlin.ByteArray {
+            return FfiConverterByteArray.lift(
     callWithPointer {
     uniffiRustCallWithError(FfiException) { _status ->
-    UniffiLib.INSTANCE.uniffi_konstruado_ffi_fn_method_konstruadoapp_exportar_obras(
-        it, _status)
-}
-    }
-    )
-    }
-    
-
-    
-    /**
-     * Texto del respaldo de las 25 palabras (para guardarlo con el selector de Android).
-     */
-    @Throws(FfiException::class)override fun `exportarSemilla`(): kotlin.String {
-            return FfiConverterString.lift(
-    callWithPointer {
-    uniffiRustCallWithError(FfiException) { _status ->
-    UniffiLib.INSTANCE.uniffi_konstruado_ffi_fn_method_konstruadoapp_exportar_semilla(
-        it, _status)
-}
-    }
-    )
-    }
-    
-
-    
-    /**
-     * Texto del share FROST de la caja de esta obra. Puede gastar junto al del otro.
-     */
-    @Throws(FfiException::class)override fun `exportarShare`(`obraId`: kotlin.String): kotlin.String {
-            return FfiConverterString.lift(
-    callWithPointer {
-    uniffiRustCallWithError(FfiException) { _status ->
-    UniffiLib.INSTANCE.uniffi_konstruado_ffi_fn_method_konstruadoapp_exportar_share(
-        it, FfiConverterString.lower(`obraId`),_status)
+    UniffiLib.INSTANCE.uniffi_konstruado_ffi_fn_method_konstruadoapp_exportar_respaldo(
+        it, FfiConverterString.lower(`clave`),_status)
 }
     }
     )
@@ -2951,6 +2978,37 @@ open class KonstruadoApp: Disposable, AutoCloseable, KonstruadoAppInterface
     
 
     
+    /**
+     * El archivo quedó escrito: anota la fecha del último respaldo.
+     */
+    @Throws(FfiException::class)override fun `respaldoGuardado`()
+        = 
+    callWithPointer {
+    uniffiRustCallWithError(FfiException) { _status ->
+    UniffiLib.INSTANCE.uniffi_konstruado_ffi_fn_method_konstruadoapp_respaldo_guardado(
+        it, _status)
+}
+    }
+    
+    
+
+    
+    /**
+     * Deja todo listo para el reinicio (atómico). Android reinicia el proceso
+     * enseguida; al arrancar, `nuevo` aplica el cambio antes de leer nada.
+     */
+    @Throws(FfiException::class)override fun `restaurarRespaldo`(`datos`: kotlin.ByteArray, `clave`: kotlin.String, `reemplazar`: kotlin.Boolean)
+        = 
+    callWithPointer {
+    uniffiRustCallWithError(FfiException) { _status ->
+    UniffiLib.INSTANCE.uniffi_konstruado_ffi_fn_method_konstruadoapp_restaurar_respaldo(
+        it, FfiConverterByteArray.lower(`datos`),FfiConverterString.lower(`clave`),FfiConverterBoolean.lower(`reemplazar`),_status)
+}
+    }
+    
+    
+
+    
     @Throws(FfiException::class)override fun `restaurarSemilla`(`texto`: kotlin.String): kotlin.String {
             return FfiConverterString.lift(
     callWithPointer {
@@ -2970,6 +3028,22 @@ open class KonstruadoApp: Disposable, AutoCloseable, KonstruadoAppInterface
     uniffiRustCallWithError(FfiException) { _status ->
     UniffiLib.INSTANCE.uniffi_konstruado_ffi_fn_method_konstruadoapp_restaurar_share(
         it, FfiConverterString.lower(`texto`),_status)
+}
+    }
+    )
+    }
+    
+
+    
+    /**
+     * Descifra y valida sin escribir nada.
+     */
+    @Throws(FfiException::class)override fun `revisarRespaldo`(`datos`: kotlin.ByteArray, `clave`: kotlin.String): RespaldoResumen {
+            return FfiConverterTypeRespaldoResumen.lift(
+    callWithPointer {
+    uniffiRustCallWithError(FfiException) { _status ->
+    UniffiLib.INSTANCE.uniffi_konstruado_ffi_fn_method_konstruadoapp_revisar_respaldo(
+        it, FfiConverterByteArray.lower(`datos`),FfiConverterString.lower(`clave`),_status)
 }
     }
     )
@@ -3201,7 +3275,11 @@ data class BilleteraVista (
     /**
      * Saldo total en piconeros, para formatear sin perder precisión.
      */
-    var `totalPico`: kotlin.ULong
+    var `totalPico`: kotlin.ULong, 
+    /**
+     * Ayuda del envío (regla compartida `caja::ayuda_envio`).
+     */
+    var `ayudaEnvio`: kotlin.String
 ) {
     
     companion object
@@ -3232,6 +3310,7 @@ public object FfiConverterTypeBilleteraVista: FfiConverterRustBuffer<BilleteraVi
             FfiConverterString.read(buf),
             FfiConverterString.read(buf),
             FfiConverterULong.read(buf),
+            FfiConverterString.read(buf),
         )
     }
 
@@ -3254,7 +3333,8 @@ public object FfiConverterTypeBilleteraVista: FfiConverterRustBuffer<BilleteraVi
             FfiConverterSequenceTypeCajaFila.allocationSize(value.`cajas`) +
             FfiConverterString.allocationSize(value.`estadoLinea`) +
             FfiConverterString.allocationSize(value.`estadoTono`) +
-            FfiConverterULong.allocationSize(value.`totalPico`)
+            FfiConverterULong.allocationSize(value.`totalPico`) +
+            FfiConverterString.allocationSize(value.`ayudaEnvio`)
     )
 
     override fun write(value: BilleteraVista, buf: ByteBuffer) {
@@ -3277,6 +3357,7 @@ public object FfiConverterTypeBilleteraVista: FfiConverterRustBuffer<BilleteraVi
             FfiConverterString.write(value.`estadoLinea`, buf)
             FfiConverterString.write(value.`estadoTono`, buf)
             FfiConverterULong.write(value.`totalPico`, buf)
+            FfiConverterString.write(value.`ayudaEnvio`, buf)
     }
 }
 
@@ -3796,7 +3877,11 @@ data class PartidaFila (
     var `estado`: kotlin.String, 
     var `porLado`: kotlin.String, 
     var `saldoCorto`: kotlin.String?, 
-    var `activa`: kotlin.Boolean
+    var `activa`: kotlin.Boolean, 
+    /**
+     * «Se libera en ~N bloques»: el fondeo todavía no juntó 10 confirmaciones.
+     */
+    var `trabaCorta`: kotlin.String?
 ) {
     
     companion object
@@ -3815,6 +3900,7 @@ public object FfiConverterTypePartidaFila: FfiConverterRustBuffer<PartidaFila> {
             FfiConverterString.read(buf),
             FfiConverterOptionalString.read(buf),
             FfiConverterBoolean.read(buf),
+            FfiConverterOptionalString.read(buf),
         )
     }
 
@@ -3825,7 +3911,8 @@ public object FfiConverterTypePartidaFila: FfiConverterRustBuffer<PartidaFila> {
             FfiConverterString.allocationSize(value.`estado`) +
             FfiConverterString.allocationSize(value.`porLado`) +
             FfiConverterOptionalString.allocationSize(value.`saldoCorto`) +
-            FfiConverterBoolean.allocationSize(value.`activa`)
+            FfiConverterBoolean.allocationSize(value.`activa`) +
+            FfiConverterOptionalString.allocationSize(value.`trabaCorta`)
     )
 
     override fun write(value: PartidaFila, buf: ByteBuffer) {
@@ -3836,6 +3923,7 @@ public object FfiConverterTypePartidaFila: FfiConverterRustBuffer<PartidaFila> {
             FfiConverterString.write(value.`porLado`, buf)
             FfiConverterOptionalString.write(value.`saldoCorto`, buf)
             FfiConverterBoolean.write(value.`activa`, buf)
+            FfiConverterOptionalString.write(value.`trabaCorta`, buf)
     }
 }
 
@@ -3902,7 +3990,21 @@ data class PartidaVista (
     /**
      * El pago 2-de-2 ya se está firmando o espera bloque.
      */
-    var `pagoEnCurso`: kotlin.Boolean
+    var `pagoEnCurso`: kotlin.Boolean, 
+    /**
+     * Fondeo sin 10 confirmaciones: «Podés marcarla terminada en ~N bloques…».
+     * Mientras esté, «Terminé» y «Aceptar y pagar» van deshabilitados.
+     */
+    var `traba`: kotlin.String?, 
+    var `trabaCorta`: kotlin.String?, 
+    /**
+     * «Avisar que terminé» va, pero deshabilitado (contratista, fondeo sin confirmar).
+     */
+    var `terminoTrabado`: kotlin.Boolean, 
+    /**
+     * «Aceptar y pagar» va, pero deshabilitado (me toca, fondeo sin confirmar).
+     */
+    var `pagoTrabado`: kotlin.Boolean
 ) {
     
     companion object
@@ -3957,6 +4059,10 @@ public object FfiConverterTypePartidaVista: FfiConverterRustBuffer<PartidaVista>
             FfiConverterBoolean.read(buf),
             FfiConverterOptionalString.read(buf),
             FfiConverterBoolean.read(buf),
+            FfiConverterOptionalString.read(buf),
+            FfiConverterOptionalString.read(buf),
+            FfiConverterBoolean.read(buf),
+            FfiConverterBoolean.read(buf),
         )
     }
 
@@ -4003,7 +4109,11 @@ public object FfiConverterTypePartidaVista: FfiConverterRustBuffer<PartidaVista>
             FfiConverterBoolean.allocationSize(value.`puedeContraofertar`) +
             FfiConverterBoolean.allocationSize(value.`puedeSalirLocal`) +
             FfiConverterOptionalString.allocationSize(value.`enCurso`) +
-            FfiConverterBoolean.allocationSize(value.`pagoEnCurso`)
+            FfiConverterBoolean.allocationSize(value.`pagoEnCurso`) +
+            FfiConverterOptionalString.allocationSize(value.`traba`) +
+            FfiConverterOptionalString.allocationSize(value.`trabaCorta`) +
+            FfiConverterBoolean.allocationSize(value.`terminoTrabado`) +
+            FfiConverterBoolean.allocationSize(value.`pagoTrabado`)
     )
 
     override fun write(value: PartidaVista, buf: ByteBuffer) {
@@ -4050,6 +4160,10 @@ public object FfiConverterTypePartidaVista: FfiConverterRustBuffer<PartidaVista>
             FfiConverterBoolean.write(value.`puedeSalirLocal`, buf)
             FfiConverterOptionalString.write(value.`enCurso`, buf)
             FfiConverterBoolean.write(value.`pagoEnCurso`, buf)
+            FfiConverterOptionalString.write(value.`traba`, buf)
+            FfiConverterOptionalString.write(value.`trabaCorta`, buf)
+            FfiConverterBoolean.write(value.`terminoTrabado`, buf)
+            FfiConverterBoolean.write(value.`pagoTrabado`, buf)
     }
 }
 
@@ -4211,6 +4325,137 @@ public object FfiConverterTypeRedVista: FfiConverterRustBuffer<RedVista> {
             FfiConverterSequenceString.write(value.`otros`, buf)
             FfiConverterString.write(value.`red`, buf)
             FfiConverterString.write(value.`onionSala`, buf)
+    }
+}
+
+
+
+/**
+ * Estado del respaldo completo (regla compartida `respaldo::estado`).
+ */
+data class RespaldoEstado (
+    var `linea`: kotlin.String, 
+    /**
+     * "ok", "espera", "error", "apagado".
+     */
+    var `tono`: kotlin.String, 
+    /**
+     * Hay obras o cajas nuevas que el último respaldo no tiene (recordatorio).
+     */
+    var `falta`: kotlin.Boolean, 
+    var `ultimo`: kotlin.String?, 
+    var `ayuda`: List<kotlin.String>, 
+    var `nombreArchivo`: kotlin.String, 
+    var `claveMinima`: kotlin.UInt
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeRespaldoEstado: FfiConverterRustBuffer<RespaldoEstado> {
+    override fun read(buf: ByteBuffer): RespaldoEstado {
+        return RespaldoEstado(
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterBoolean.read(buf),
+            FfiConverterOptionalString.read(buf),
+            FfiConverterSequenceString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterUInt.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: RespaldoEstado) = (
+            FfiConverterString.allocationSize(value.`linea`) +
+            FfiConverterString.allocationSize(value.`tono`) +
+            FfiConverterBoolean.allocationSize(value.`falta`) +
+            FfiConverterOptionalString.allocationSize(value.`ultimo`) +
+            FfiConverterSequenceString.allocationSize(value.`ayuda`) +
+            FfiConverterString.allocationSize(value.`nombreArchivo`) +
+            FfiConverterUInt.allocationSize(value.`claveMinima`)
+    )
+
+    override fun write(value: RespaldoEstado, buf: ByteBuffer) {
+            FfiConverterString.write(value.`linea`, buf)
+            FfiConverterString.write(value.`tono`, buf)
+            FfiConverterBoolean.write(value.`falta`, buf)
+            FfiConverterOptionalString.write(value.`ultimo`, buf)
+            FfiConverterSequenceString.write(value.`ayuda`, buf)
+            FfiConverterString.write(value.`nombreArchivo`, buf)
+            FfiConverterUInt.write(value.`claveMinima`, buf)
+    }
+}
+
+
+
+/**
+ * Lo que trae un respaldo completo, ya validado, antes de restaurarlo.
+ */
+data class RespaldoResumen (
+    var `nombre`: kotlin.String, 
+    var `rol`: kotlin.String, 
+    var `creado`: kotlin.String, 
+    var `app`: kotlin.String, 
+    var `nObras`: kotlin.UInt, 
+    var `nOfertas`: kotlin.UInt, 
+    var `nShares`: kotlin.UInt, 
+    var `direccion`: kotlin.String?, 
+    var `altura`: kotlin.ULong?, 
+    /**
+     * En este equipo ya hay cuenta, semilla o shares: hace falta la confirmación de peligro.
+     */
+    var `hayDatos`: kotlin.Boolean
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeRespaldoResumen: FfiConverterRustBuffer<RespaldoResumen> {
+    override fun read(buf: ByteBuffer): RespaldoResumen {
+        return RespaldoResumen(
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterUInt.read(buf),
+            FfiConverterUInt.read(buf),
+            FfiConverterUInt.read(buf),
+            FfiConverterOptionalString.read(buf),
+            FfiConverterOptionalULong.read(buf),
+            FfiConverterBoolean.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: RespaldoResumen) = (
+            FfiConverterString.allocationSize(value.`nombre`) +
+            FfiConverterString.allocationSize(value.`rol`) +
+            FfiConverterString.allocationSize(value.`creado`) +
+            FfiConverterString.allocationSize(value.`app`) +
+            FfiConverterUInt.allocationSize(value.`nObras`) +
+            FfiConverterUInt.allocationSize(value.`nOfertas`) +
+            FfiConverterUInt.allocationSize(value.`nShares`) +
+            FfiConverterOptionalString.allocationSize(value.`direccion`) +
+            FfiConverterOptionalULong.allocationSize(value.`altura`) +
+            FfiConverterBoolean.allocationSize(value.`hayDatos`)
+    )
+
+    override fun write(value: RespaldoResumen, buf: ByteBuffer) {
+            FfiConverterString.write(value.`nombre`, buf)
+            FfiConverterString.write(value.`rol`, buf)
+            FfiConverterString.write(value.`creado`, buf)
+            FfiConverterString.write(value.`app`, buf)
+            FfiConverterUInt.write(value.`nObras`, buf)
+            FfiConverterUInt.write(value.`nOfertas`, buf)
+            FfiConverterUInt.write(value.`nShares`, buf)
+            FfiConverterOptionalString.write(value.`direccion`, buf)
+            FfiConverterOptionalULong.write(value.`altura`, buf)
+            FfiConverterBoolean.write(value.`hayDatos`, buf)
     }
 }
 

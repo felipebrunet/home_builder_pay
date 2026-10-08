@@ -21,6 +21,10 @@ import androidx.compose.ui.unit.dp
 import cl.konstruado.app.AppHolder
 import cl.konstruado.app.ui.Banner
 import cl.konstruado.app.ui.BannerVista
+import cl.konstruado.app.ui.Divisor
+import cl.konstruado.app.ui.Secundario
+import cl.konstruado.app.ui.Tarjeta
+import cl.konstruado.app.ui.TextoBoton
 import cl.konstruado.app.ui.Lead
 import cl.konstruado.app.ui.Pista
 import cl.konstruado.app.ui.Primario
@@ -28,9 +32,13 @@ import cl.konstruado.app.ui.Seccion
 import cl.konstruado.app.ui.Titulo
 import cl.konstruado.app.ui.rememberAcciones
 
+/** Qué eligió en la primera pantalla: nada todavía, crear cuenta o restaurar. */
+enum class ModoBienvenida { Elegir, Crear, Restaurar }
+
 @Composable
-fun BienvenidaScreen(banner: Banner, entrar: () -> Unit) {
+fun BienvenidaScreen(banner: Banner, modoInicial: ModoBienvenida = ModoBienvenida.Elegir, entrar: () -> Unit) {
     val acciones = rememberAcciones(banner)
+    var modo by remember { mutableStateOf(modoInicial) }
     var nombre by remember { mutableStateOf("") }
     var rol by remember { mutableStateOf("") }
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(24.dp)) {
@@ -39,6 +47,24 @@ fun BienvenidaScreen(banner: Banner, entrar: () -> Unit) {
         Lead("Garantía de obra entre dos personas, con una caja 2-de-2 de Monero (stagenet).")
         Spacer(Modifier.height(16.dp))
         BannerVista(banner)
+        when (modo) {
+            ModoBienvenida.Elegir -> {
+                Tarjeta {
+                    Primario("Crear cuenta nueva") { banner.error.value = null; modo = ModoBienvenida.Crear }
+                    Pista("Elegís tu nombre y si pagás la obra o la construís.")
+                    Divisor()
+                    Secundario("Restaurar desde respaldo") { banner.error.value = null; modo = ModoBienvenida.Restaurar }
+                    Pista("Traés todo del archivo cifrado: semilla, obras, cajas, nombre y rol.")
+                }
+                return@Column
+            }
+            ModoBienvenida.Restaurar -> {
+                TextoBoton("← Volver") { banner.error.value = null; modo = ModoBienvenida.Elegir }
+                Tarjeta { RestaurarRespaldo(acciones, banner) }
+                return@Column
+            }
+            ModoBienvenida.Crear -> TextoBoton("← Volver") { banner.error.value = null; modo = ModoBienvenida.Elegir }
+        }
         Seccion("1 · Tu nombre")
         OutlinedTextField(nombre, { nombre = it }, label = { Text("Nombre") }, modifier = Modifier.fillMaxWidth())
         Seccion("2 · ¿Qué vas a hacer?")
