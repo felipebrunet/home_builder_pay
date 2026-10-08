@@ -2,7 +2,7 @@
 
 Producto de escritorio (Dioxus) para un **trato de obra entre dos personas**, sin servidor. No es un chat. El mandante publica un aviso; el contratista lo ve y acepta o contraoferta. Las notas del trato van cifradas entre los dos (X25519 + ChaCha20-Poly1305). Monero vive en `xmr-joint` y la ventana lo usa en stagenet contra `https://stagenet.xmr.kernal.eu:38089`. `monero_fn` sigue en 4: el dominio no finge el fondeo. Encerrada y Pagada se marcan cuando un scan local ve la transacción en un bloque. No hay Bitcoin. No se probó un broadcast.
 
-Homologación desktop↔Android: fondeo CLSAG, `fund-abort`, saldos, DKG y gossip viven en `caja.rs` (compartido vía path include en FFI). UI solo Dioxus vs Compose. Tor propio en PC; Orbot en el teléfono. Sala siempre hospedada en PC/`konstruado-sala`.
+Homologación desktop↔Android: fondeo CLSAG, `fund-abort`, saldos, DKG, gossip y precio USD/XMR viven en la lib `konstruado-motor` (`caja`, `cotizacion`, `persist`, `respaldo`, `i18n`), que usan la ventana y la FFI. UI solo Dioxus vs Compose. Tor propio en PC; Orbot en el teléfono. Sala siempre hospedada en PC/`konstruado-sala`.
 
 Hablamos en español. UI rioplatense/chilena (“Poné”, “te toca”) por defecto; el usuario puede pasar a **English** (ES/EN en la barra y en Cuenta). El trato no cambia.
 
@@ -12,8 +12,9 @@ Hablamos en español. UI rioplatense/chilena (“Poné”, “te toca”) por de
 |---|---|
 | `konstruado-core` | Dominio: persona, oferta, obra, partidas, contra, extra, recibo, fusión, notas cifradas. Sin UI ni Tor. |
 | `konstruado-net` | Encuentro: TCP local `17432`, gossip DHT, Tor propio + onion horneado. |
-| `konstruado` | Ventana Dioxus: pantallas, persistir, exportar, temas, idioma. Incluye `caja.rs` (motor Monero). |
-| `konstruado-ffi` | UniFFI: mismo `caja.rs` / `persist.rs` / `i18n.rs` para Android Compose. |
+| `konstruado-motor` | Lib compartida: `caja` (motor Monero), `cotizacion` (precio XMR: CoinGecko → Kraken, por Tor si hay), `persist`, `respaldo`, `i18n`. |
+| `konstruado` | Ventana Dioxus: pantallas, exportar, temas, idioma. Usa `konstruado-motor`. |
+| `konstruado-ffi` | UniFFI sobre `konstruado-motor` para Android Compose. |
 | `xmr-joint` | Semilla de 25 palabras, DKG 2-de-2, fondeo atómico y gasto con dos destinos. La caja lo llama. |
 
 El split está bien. No hace falta un refactor grande. `main.rs` es largo; partir pantallas solo si duele.

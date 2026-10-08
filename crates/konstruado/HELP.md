@@ -72,6 +72,16 @@ In the wallet, **Use the maximum** sends the whole free balance: the fee is take
 
 Notes inside a job are sealed for the two people. Someone else on the network can see that a note exists and cannot read it. A job already taken leaves their board.
 
+## Prices in USD
+
+New jobs are priced in US dollars: the client enters the job amount and the guarantee per stage in USD (e.g. `10000` and `2000`, cents allowed). The posting form shows **USD X ≈ Y XMR at the current price**.
+
+Stagenet XMR has no value, so the app uses the **mainnet** XMR price as a reference: CoinGecko first, Kraken (XMRUSD) if CoinGecko fails. With Tor on (Orbot on the phone, the bundled tor on the desktop) the price is fetched through Tor. The last price is cached with its time; if there is none, the app says so and a stage cannot be locked until it arrives.
+
+Each stage's XMR is **fixed when it is locked**. Whoever proposes the lock fixes the rate (USD amount, price, source and time are saved in the job). The other side sees that price before **Confirm and fund** and accepts it by confirming; if the current price moved, a note shows the difference, and they can cancel and propose again. Both sides fund exactly the same XMR, taken from the job state, so a different local price cannot break funding. A locked stage shows **Y XMR (USD X on dd/mm hh:mm, price Z/XMR, source)**. Percent payments split that fixed XMR.
+
+Jobs posted by older versions keep their old units (1 unit = 0.00002 XMR). Both sides need this version or later to price a job in USD.
+
 ## Node
 
 By default the app uses the public stagenet node. In the account screen, **NODE URL** + **Save node** sets your own (LAN or Tailscale, e.g. `http://100.64.0.2:38081`) for scan, balance, funding and payout. **Use default** goes back to the public node. **Test node RPC** checks it. Node RPC never goes through Tor or the room's SOCKS proxy: a LAN/Tailscale node is reached directly, and the test says which route it used. On a phone, Orbot's VPN mode must not capture Konstruado when the node is on your LAN (Tor cannot reach private IPs); the room keeps using Orbot's SOCKS.

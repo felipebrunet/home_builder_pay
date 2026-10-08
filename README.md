@@ -59,7 +59,17 @@ One personal wallet per machine, then one shared box per job, then one transacti
 
 Peers on 0.2.7 still build the old 1-piconero split and cannot co-sign a 0.2.8 payment proposal (they reject the 0-amount split); 0.2.8 still co-signs the old split. Upgrade both sides.
 
-Both shares have to sign. One share is not a transaction. 1 domain unit = 0.00002 XMR, so a guarantee of 2000 is 0.04 XMR per side.
+Both shares have to sign. One share is not a transaction.
+
+## Prices in USD (0.2.10)
+
+The client posts the job amount and the guarantee per stage in **USD** (`Moneda::Usd`, cents). The XMR of each stage is fixed when it is locked:
+
+- **Price source.** `konstruado-motor::cotizacion`: CoinGecko `simple/price` first, Kraken `XMRUSD` ticker as fallback, over HTTPS (rustls + webpki roots). With Tor on it goes through the SOCKS proxy (Orbot on Android, the bundled tor on desktop); remote DNS. The last quote is cached with its timestamp; without one the UI says so and **Proponer encerrar** refuses with a clear error.
+- **Stagenet.** Stagenet XMR has no value; the mainnet price is used as a reference and the UI says so.
+- **Fixed per stage.** The proposer stores a `PrecioFijado` in the stage (USD cents, USD/XMR rate, source, timestamp and the resulting piconero amount). The other side sees it before **Confirmar y fondear** and accepts by confirming; a warning shows the drift from the current price. Both funding sides read the piconero amount from the shared job state (`Obra::piconero_partida`), never reconvert, so different local prices cannot make `check_dest` reject the funding. Simultaneous proposals converge by the existing tie-break; a copy from an older peer without the price never erases it.
+- **Display.** Before funding: “USD X ≈ Y XMR al precio actual”. After: “Y XMR (USD X al dd/mm hh:mm, precio Z)”. Percent payments split the fixed XMR.
+- **Old jobs** keep the legacy unit (1 unit = 0.00002 XMR, a guarantee of 2000 is 0.04 XMR per side). The new fields are `serde(default)`. Peers on 0.2.9 do not understand USD jobs: upgrade both sides.
 
 Atomic spending and the multisig/FROST box path stay separate in the code; do not mix them.
 
@@ -141,6 +151,10 @@ Each release on [Releases](https://github.com/felipebrunet/konstruado/releases) 
 
 `scripts/release-assets.sh` builds both into `dist/`. `[profile.release]` uses `strip`, `lto = "fat"` and `codegen-units = 1`.
 
+## Icon
+
+`assets/icon/konstruado.svg` is the hand-made source (crossed shovel and pickaxe, app palette: red `#b8321f`, beige `#f4e4cc`, ink `#1c120c`). `python3 assets/icon/generar.py` (needs `rsvg-convert`) regenerates every derived file: `assets/icon/png/konstruado-{16…512}.png`, the desktop window icon `crates/konstruado/assets/konstruado-256.png` (embedded with `include_bytes!`), `assets/linux/konstruado.png`, and the Android adaptive icon (vector foreground, background colour, monochrome layer for themed icons, round icon, PNG fallbacks in `mipmap-*`).
+
 ## Linux binary (not production)
 
 On Debian/Ubuntu:
@@ -150,6 +164,8 @@ sudo apt install tor libgtk-3-0 libwebkit2gtk-4.1-0 libxdo3
 chmod +x konstruado-*-linux-x86_64*
 ./konstruado-*-linux-x86_64*
 ```
+
+Menu entry and icon (per user, no root): `assets/linux/instalar.sh path/to/konstruado-X.Y.Z-linux-x86_64` installs the binary in `~/.local/bin`, `assets/linux/konstruado.desktop` in `~/.local/share/applications` and the icon in `~/.local/share/icons/hicolor/256x256/apps`.
 
 To rebuild it:
 

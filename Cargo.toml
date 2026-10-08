@@ -35,7 +35,7 @@ default-members = ["crates/konstruado"]
 [workspace.package]
 # Single source for the app version: desktop title/About, konstruado-ffi
 # (Android About) and the APK versionName all read this value.
-version = "0.2.9"
+version = "0.2.10"
 edition = "2021"
 license = "MIT"
 repository = "https://github.com/felipebrunet/konstruado"

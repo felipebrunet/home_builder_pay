@@ -249,3 +249,24 @@ El total/libre/trabado suma las salidas del libro local. Al **fondear** o **envi
 salidas se marcan gastadas y no vuelven a contar (ni si mirás más atrás). Tras actualizar
 saldo, si el daemon acepta `is_key_image_spent` (típico en monerod propio sin restricted-rpc),
 se podan fantasmas de fondeos anteriores al arreglo. El nodo público a veces no ofrece ese RPC.
+
+## Precios en dólares (0.2.10)
+
+**Publicar** pide el monto de la obra y la garantía por partida en **USD** y muestra
+«USD X ≈ Y XMR al precio actual». El precio sale de CoinGecko (si falla, Kraken XMRUSD)
+y se pide **por Orbot** cuando el SOCKS de Orbot está configurado; queda en caché con su hora.
+El XMR de stagenet no vale nada: se usa el precio de **mainnet** como referencia y la app lo dice.
+
+El XMR de cada partida queda **fijo al proponer el encierre**: quien propone fija el precio
+(USD, precio, fuente y hora quedan en la obra) y el otro lo ve antes de **Confirmar y fondear**;
+si el precio actual se movió, aparece un aviso con la diferencia. Los dos fondean el mismo
+monto en piconeros leído del estado de la obra, así que un precio local distinto no traba el
+fondeo. Una partida fondeada muestra «Y XMR (USD X al dd/mm hh:mm, precio Z)». Las obras
+anteriores a 0.2.10 siguen en unidades. Para obras en USD, los dos lados necesitan 0.2.10.
+
+## Ícono
+
+Pala y picota cruzadas (`assets/icon/konstruado.svg`, hecho a mano). `python3 assets/icon/generar.py`
+regenera el adaptive icon (`drawable/ic_launcher_foreground.xml`, `ic_launcher_monochrome.xml`
+para íconos temáticos, `values/ic_launcher_background.xml`, `mipmap-anydpi-v26/ic_launcher{,_round}.xml`)
+y los PNG de respaldo `mipmap-*/ic_launcher{,_round}.png`. No editar los derivados a mano.
