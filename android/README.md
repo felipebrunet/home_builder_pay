@@ -158,8 +158,25 @@ Requisitos: JDK 17+, Android SDK 34, NDK 26, Rust 1.89+ (`rustup`) con
 `aarch64-linux-android` y `x86_64-linux-android`, `cargo-ndk`.
 
 ```bash
-android/build-apk.sh      # bindings + .so (arm64-v8a, x86_64) + APK
+android/build-apk.sh          # debug: bindings + .so (arm64-v8a, x86_64) + APK debug
+android/build-apk-release.sh  # release: .so arm64-v8a (release, strip, LTO) + R8 + firma release
 ```
+
+**APK release.** `assembleRelease -Pabis=arm64-v8a` con R8 (`isMinifyEnabled`,
+`isShrinkResources`); `app/proguard-rules.pro` mantiene `uniffi.**` y JNA, que se
+usan por reflexión. La firma sale de variables de entorno o propiedades de Gradle
+`KONSTRUADO_RELEASE_STORE_FILE`, `KONSTRUADO_RELEASE_STORE_PASSWORD`,
+`KONSTRUADO_RELEASE_KEY_ALIAS`, `KONSTRUADO_RELEASE_KEY_PASSWORD`; el script las lee
+de `KONSTRUADO_RELEASE_ENV` (por defecto `~/.config/konstruado-release.env`, fuera
+del repo). Sin esos datos el release se firma con la clave debug, así cualquiera
+puede compilarlo. El asset del Release se llama `konstruado-X.Y.Z-android-arm64.apk`
+(hasta 0.2.9: `…-android-arm64-debug.apk`).
+
+**Pasar de la firma debug a la release:** Android no actualiza una app firmada con
+otra clave. Antes, **respaldo completo** (Billetera → Respaldos y recuperación →
+Exportar respaldo completo, `.kbak`); después desinstalar la app debug, instalar el
+APK release y elegir **Restaurar desde respaldo**. Desinstalar borra los datos
+privados de la app (semilla y shares de las obras).
 
 Lo mismo a mano:
 

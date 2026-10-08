@@ -123,8 +123,13 @@ Window 1: José, **Pago la obra**, Publicar. Window 2: Juan, **La construyo** �
 `android/` is a Jetpack Compose app on top of `crates/konstruado-ffi` (UniFFI bindings to the same Rust motor). Tor comes from Orbot. See [`android/README.md`](android/README.md). Short path (needs Android SDK + NDK, JDK 17+, `cargo-ndk`):
 
 ```bash
-cd android && ./build-apk.sh
+android/build-apk.sh          # debug APK (arm64-v8a + x86_64), for development and the emulator
+android/build-apk-release.sh  # release APK: Rust in release (arm64-v8a, stripped, LTO), R8, release signature
 ```
+
+The release APK is signed with the key named by `KONSTRUADO_RELEASE_ENV` (default `~/.config/konstruado-release.env`, outside the repo: `KONSTRUADO_RELEASE_STORE_FILE`, `_STORE_PASSWORD`, `_KEY_ALIAS`, `_KEY_PASSWORD`; the same names also work as Gradle properties). Without it, Gradle signs the release build with the debug key, so anyone can build it.
+
+**Debug → release signature:** Android does not update an app signed with a different key. To move from a debug APK (0.2.9 and earlier) to the release APK, first make a full backup (**Billetera → Respaldos y recuperación → Exportar respaldo completo**, `.kbak`), uninstall the debug app, install the release APK and choose **Restaurar desde respaldo**. Uninstalling deletes the app's private data, including the seed and the job shares.
 
 APKs are **not** stored in git (`*.apk` is ignored). Published builds go on [Releases](https://github.com/felipebrunet/konstruado/releases).
 
@@ -132,7 +137,9 @@ APKs are **not** stored in git (`*.apk` is ignored). Published builds go on [Rel
 
 The version lives once, in `[workspace.package] version` of the root `Cargo.toml`. The desktop window title and **Help → About**, `konstruado-ffi` (Android About) and the APK `versionName` all read it. Bump it there, then tag `vX.Y.Z`.
 
-Each release on [Releases](https://github.com/felipebrunet/konstruado/releases) carries two assets: `konstruado-X.Y.Z-android-arm64-debug.apk` and `konstruado-X.Y.Z-linux-x86_64`.
+Each release on [Releases](https://github.com/felipebrunet/konstruado/releases) carries two assets: `konstruado-X.Y.Z-android-arm64.apk` (release-signed, R8) and `konstruado-X.Y.Z-linux-x86_64`. Up to 0.2.9 the APK was `konstruado-X.Y.Z-android-arm64-debug.apk` (debug signature).
+
+`scripts/release-assets.sh` builds both into `dist/`. `[profile.release]` uses `strip`, `lto = "fat"` and `codegen-units = 1`.
 
 ## Linux binary (not production)
 
@@ -147,6 +154,8 @@ chmod +x konstruado-*-linux-x86_64*
 To rebuild it:
 
 ```bash
+scripts/release-assets.sh     # dist/konstruado-X.Y.Z-linux-x86_64 + dist/konstruado-X.Y.Z-android-arm64.apk
+# or only the desktop binary:
 cargo build -p konstruado --release
 VERSION=$(cargo pkgid -p konstruado | sed 's/.*[#@]//')
 mkdir -p dist

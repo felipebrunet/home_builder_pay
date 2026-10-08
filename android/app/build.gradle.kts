@@ -15,6 +15,19 @@ val konstruadoVersionCode: Int = konstruadoVersion.substringBefore('-').split('.
     .map { it.toInt() }
     .let { (major, minor, patch) -> major * 10000 + minor * 100 + patch }
 
+// Firma release: de variables de entorno o propiedades de Gradle
+// (KONSTRUADO_RELEASE_STORE_FILE, _STORE_PASSWORD, _KEY_ALIAS, _KEY_PASSWORD).
+// El keystore vive fuera del repo; sin esos datos el release se firma con la
+// clave debug para que cualquiera pueda compilarlo.
+fun firma(nombre: String): String? =
+    (project.findProperty(nombre) as String?) ?: System.getenv(nombre)
+val releaseStore: String? = firma("KONSTRUADO_RELEASE_STORE_FILE")?.takeIf { file(it).exists() }
+
+// ABIs: por defecto arm64 + x86_64 (emulador). El script de release pasa -Pabis=arm64-v8a.
+val abis: List<String> = (project.findProperty("abis") as String?)
+    ?.split(',')?.map { it.trim() }?.filter { it.isNotEmpty() }
+    ?: listOf("arm64-v8a", "x86_64")
+
 android {
     namespace = "cl.konstruado.app"
     compileSdk = 34
@@ -26,13 +39,33 @@ android {
         versionCode = konstruadoVersionCode
         versionName = konstruadoVersion
         ndk {
-            abiFilters += listOf("arm64-v8a", "x86_64")
+            abiFilters += abis
+        }
+    }
+
+    signingConfigs {
+        if (releaseStore != null) {
+            create("release") {
+                storeFile = file(releaseStore)
+                storePassword = firma("KONSTRUADO_RELEASE_STORE_PASSWORD")
+                keyAlias = firma("KONSTRUADO_RELEASE_KEY_ALIAS")
+                keyPassword = firma("KONSTRUADO_RELEASE_KEY_PASSWORD")
+            }
         }
     }
 
     buildTypes {
         release {
-            isMinifyEnabled = false
+            // R8: reduce y ofusca Kotlin/Compose; las clases de UniFFI y JNA se
+            // mantienen (proguard-rules.pro) porque JNA las busca por reflexión.
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro",
+            )
+            signingConfig = signingConfigs.findByName("release")
+                ?: signingConfigs.getByName("debug")
         }
         debug {
             isMinifyEnabled = false
@@ -72,6 +105,8 @@ android {
             (project.findProperty("oscuro") as String?)?.let { o -> it.systemProperty("konstruado.oscuro", o) }
             it.systemProperty("jna.library.path", rootProject.file("../target/debug").absolutePath)
             it.testLogging { showStandardStreams = true; events("passed", "failed") }
+            // Las capturas usan ui-test-manifest (solo debug); en release corren los tests del motor.
+            if (it.name.contains("Release")) it.filter.excludeTestsMatching("cl.konstruado.app.capturas.*")
         }
     }
     sourceSets {

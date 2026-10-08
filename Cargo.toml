@@ -41,7 +41,12 @@ license = "MIT"
 repository = "https://github.com/felipebrunet/konstruado"
 
 [profile.release]
+# Assets de release: sin símbolos, LTO completo y un solo codegen unit
+# (más lento de compilar, binario y .so de Android más chicos y rápidos).
+# panic queda en unwind: UniFFI convierte los panics en errores de Kotlin.
 strip = true
+lto = "fat"
+codegen-units = 1
 
 # Igual que el workspace de monero-oxide: en debug estas crates van optimizadas.
 # Si no, armar una transacción de stagenet tarda minutos.
