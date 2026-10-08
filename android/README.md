@@ -19,10 +19,46 @@ igual que el escritorio. La lógica es la misma en Rust, expuesta por UniFFI:
 | Bienvenida | nombre + rol (mandante / contratista) |
 | Tablero | estado de red, **Te toca**, mis obras, ofertas propias/ajenas, Buscar ofertas, Publicar |
 | Oferta | aceptar condiciones o **contra** (otra garantía, ajustar partidas) |
-| Obra | contra (confirmar / no aceptar), cierre / abandono, extra, **caja 2-de-2** (dirección, view key, guardar/recuperar share, mirar 200 bloques atrás), partidas |
-| Partida | editar texto, **Encerrar** → **Confirmar y fondear** (CLSAG cooperativo) / reintentar / no encerrar, **Avisar que terminé** (%, nota), **Aceptar X% y pagar** (gasto FROST) / contra %, hilo de notas, recibo, txids |
-| Billetera | crear semilla, saldo total/libre/trabado, entradas, recibir, **enviar**, actualizar, mirar atrás, guardar/recuperar 25 palabras, recuperar share, lista de cajas con view key |
-| Cuenta | nombre/rol, Orbot, **nodo Monero**, pasos Orbot; destinos TCP solo bajo **Avanzado** |
+| Obra | tarjetas **Ahora** (estado + contra / cierre), **Partidas** (chips de estado), extra, **Caja y pagos** (dirección, view key, historia, mirar 200 bloques atrás), **Respaldos** (share, plegable), **Avanzado** (abandonar / archivar, plegable) |
+| Partida | **Ahora** (chips, estado de alto fijo, solo las acciones válidas: Encerrar → Confirmar y fondear / reintentar / no encerrar, Avisar que terminé, Aceptar X% y pagar / contra %), **Caja y pagos** (txids monoespaciados con copiar, recibo), Hilo, **Respaldos**, **Avanzado** (texto, salir en este equipo) |
+| Billetera | **Saldo** (fila de estado fija + saldo que entra), **Entradas**, **Recibir**, **Enviar**; plegables **Respaldos y recuperación** y **Nodo / Avanzado**; cajas de obras |
+| Cuenta | nombre/rol, **Red** (estado real de Orbot/sala, Aplicar, Probar Orbot), **nodo Monero** (prueba RPC en fila fija), «Cómo funciona» plegados; destinos TCP solo bajo **Avanzado** |
+
+### Estado de Orbot y la sala
+
+La app ya no dice «Encendé Orbot» por tener cero pares. El motor mide el SOCKS en
+cada intento (`DiagSocks` en `konstruado-net`): TCP al SOCKS y después el CONNECT
+al onion, separando el error del SOCKS del error del destino. **Probar Orbot** hace
+solo el saludo SOCKS5 (`05 01 00` → `05 00`) y la app mira si el paquete
+`org.torproject.android` está instalado.
+
+| Estado | Qué se ve |
+|---|---|
+| sin SOCKS en la app | «Orbot apagado en Konstruado» |
+| Orbot no instalado y SOCKS cerrado | «Orbot no está instalado» |
+| SOCKS cerrado | «Orbot no responde en 127.0.0.1:9050 · Abrí Orbot y tocá Iniciar…» |
+| SOCKS OK, buscando | «Orbot responde · llamando a la sala…» |
+| SOCKS OK, onion sin respuesta | «La sala no responde · Orbot funciona. ¿Está abierto Konstruado en el PC?» |
+| sesión viva | «Conectado a la sala» |
+
+Orbot en modo VPN por app con Konstruado **sin** marcar sirve: el SOCKS sigue en
+127.0.0.1:9050 y es lo que usa la sala.
+
+### Diseño
+
+- Componentes compartidos en `ui/Componentes.kt`: `Tarjeta`, `Plegable`,
+  `ComoFunciona` (ayuda larga plegada), `Ayuda` (chica y apagada), `EstadoFila` /
+  `EstadoTarjeta` (alto fijo: un punto o un spinner chico + texto), `Chip` por tono
+  (ok / espera / error / apagado, los mismos que `caja::Tono` del escritorio),
+  `Copiable` (monoespaciada + copiar), `SaldoGrande` (entero + 4 decimales grandes,
+  el resto chico; precisión completa a la vista), botones `Primario` / `Secundario` /
+  `Peligro` / `TextoBoton`.
+- La línea de estado de la billetera sale de `caja::estado_billetera` (la misma que
+  la barra del escritorio): «Mirando la cadena… quedan N bloques», «Al día · bloque N»…
+- Paleta completa en claro y oscuro (`ui/theme/Theme.kt`); todos los pares
+  texto/fondo de tonos y botones dan ≥ 4,5:1 (WCAG AA).
+- La app Android está solo en español (como antes); los textos compartidos del
+  motor tienen su versión en inglés para el escritorio.
 
 - Los botones de una partida salen de `caja::acciones_partida` (la misma regla del escritorio). Con el pago ya firmándose o esperando bloque no aparecen **Aceptar X% y pagar** ni la contra; se ve un chip con el estado del pago.
 - **Quitar oferta** retira la oferta para todos (lápida firmada en el DHT): no vuelve cuando el contratista se reconecta. Solo el mandante que la publicó, y solo si nadie la tomó.
@@ -94,6 +130,7 @@ directo, aunque «Usar Orbot» esté encendido (ese SOCKS es solo para la sala).
 3. En la app: Bienvenida → nombre y rol (uno mandante, otro contratista).
    Cuenta → Red: «Usar Orbot» encendido (127.0.0.1:9050) → Aplicar.
 4. Esperar «Conectado a la sala» en el Tablero (publicar el onion puede tardar ~30 s).
+   Si dice «La sala no responde», Orbot anda bien: falta abrir Konstruado en la PC.
 5. Mandante: Publicar obra. Contratista: la ve, Aceptar. En ~5 s aparece la **misma
    caja 2-de-2** en los dos (Obra → Caja). Guardar el share (SAF).
 6. Billetera → Crear billetera, cargar stagenet desde un faucet, esperar 10 bloques.
@@ -156,6 +193,23 @@ $P --datos /tmp/c2 --nombre C --rol contratista --destino 127.0.0.1:17432
 ```
 
 Cada par imprime `PASO CAJA <dirección>`: tiene que ser la misma en los dos.
+
+### Capturas de pantalla (sin emulador)
+
+Robolectric + Roborazzi dibujan las pantallas Compose en la JVM, con el motor Rust
+real por JNA (`target/debug/libkonstruado_ffi.so`):
+
+```bash
+cargo build -p konstruado-ffi --lib
+cd android
+# pantallas reales sobre un perfil de demo (carpeta de datos de la app)
+./gradlew :app:testDebugUnitTest --tests 'cl.konstruado.app.capturas.*' \
+  -Pcapturas=/tmp/capturas -Pdemo=/ruta/a/datos-demo   # -Poscuro=1 para tema oscuro
+```
+
+`GaleriaEstadosTest` dibuja además los estados de Orbot/sala, la fila de escaneo,
+saldos largos, chips y botones (claro y oscuro) con datos falsos. Sin `-Pcapturas`
+estos tests se saltan.
 
 ## Limitaciones conocidas
 

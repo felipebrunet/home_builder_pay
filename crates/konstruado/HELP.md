@@ -11,6 +11,8 @@ The guarantee must divide the job amount exactly: 10 000 / 2 000 → 5 stages. I
 
 The client opens the Tor room. The contractor only looks. You do not exchange addresses. A phone (Android app) joins the same room through Orbot.
 
+On the phone, the network card says what is actually wrong. **Orbot no responde** means Orbot's SOCKS proxy (127.0.0.1:9050) is closed: start Orbot. **La sala no responde** means Orbot works but the room does not answer: open Konstruado on the PC that hosts it. Orbot's per-app VPN mode is fine as long as the SOCKS proxy is on.
+
 ## Language
 
 Spanish by default. Switch to English with **ES / EN** in the top bar, or in the account screen. The deal itself does not change.
