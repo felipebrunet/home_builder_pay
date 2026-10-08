@@ -43,8 +43,8 @@ rustdoc-args = [
 [lib]
 name = "dkg_pedpop"
 path = "src/lib.rs"
-# Cargo adopta este path-dep como miembro del workspace. Sus tests piden
-# ciphersuite/ristretto, que esta copia no usa.
+# Cargo adopta este path-dep como miembro del workspace. Sus tests usan
+# ciphersuite/ristretto (solo dev-dependency, ver abajo).
 test = false
 
 [dependencies.chacha20]
@@ -109,6 +109,11 @@ features = [
     "std",
     "zeroize_derive",
 ]
+default-features = false
+
+[dev-dependencies.ciphersuite]
+version = "^0.4.1"
+features = ["std", "ristretto"]
 default-features = false
 
 [dev-dependencies.rand_core]
@@ -177,5 +182,5 @@ zero_sized_map_values = "deny"
 
 [lints.rust]
 mismatched_lifetime_syntaxes = "allow"
-unused-parens = "allow"
+unused_parens = "allow"
 unused_attributes = "allow"
