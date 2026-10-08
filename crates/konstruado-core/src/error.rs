@@ -16,6 +16,8 @@ pub enum Error {
     NoEsTuya,
     /// La oferta ya la tomó un contratista: hay obra conjunta.
     OfertaTomada,
+    /// Obra en dólares sin un precio XMR válido para fijar la partida.
+    Precio,
 }
 
 impl std::fmt::Display for Error {
@@ -46,6 +48,10 @@ impl std::fmt::Display for Error {
             Error::OfertaTomada => write!(
                 f,
                 "Esa oferta ya la tomó un contratista. Abrí la obra para seguir o abandonarla."
+            ),
+            Error::Precio => write!(
+                f,
+                "No hay precio de XMR para fijar la partida. Esperá a que se actualice e intentá de nuevo."
             ),
         }
     }

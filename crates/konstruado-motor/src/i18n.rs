@@ -140,6 +140,9 @@ impl Idioma {
             (Self::En, Error::OfertaTomada) => {
                 "A contractor already took that offer. Open the job to continue or abandon it.".into()
             }
+            (Self::En, Error::Precio) => {
+                "There is no XMR price to fix this stage. Wait for it to update and try again.".into()
+            }
         }
     }
 

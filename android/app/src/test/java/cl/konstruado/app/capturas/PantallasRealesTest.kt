@@ -22,6 +22,7 @@ import cl.konstruado.app.ui.screens.CuentaScreen
 import cl.konstruado.app.ui.screens.ObraScreen
 import cl.konstruado.app.ui.screens.PartidaScreen
 import cl.konstruado.app.ui.screens.TableroScreen
+import cl.konstruado.app.ui.screens.PublicarScreen
 import cl.konstruado.app.ui.rememberAcciones
 import cl.konstruado.app.ui.screens.VerSemilla
 import cl.konstruado.app.ui.theme.KonstruadoTheme
@@ -99,6 +100,13 @@ class PantallasRealesTest {
     @Test fun partida() {
         val id = app().tablero().obras.first().id
         foto("android-partida", "Partida") { PartidaScreen(id, 0u, Banner()) }
+    }
+
+    @Test fun publicarUsd() {
+        // Precio real (CoinGecko / Kraken) antes de dibujar; sin red queda el aviso.
+        val a = app()
+        runCatching { a.actualizarPrecio() }
+        foto("android-publicar-usd", "Publicar") { PublicarScreen(Nav(), Banner()) }
     }
 
     @Test fun bienvenida() { app(); foto("android-bienvenida", "Bienvenida") { BienvenidaScreen(Banner()) {} } }

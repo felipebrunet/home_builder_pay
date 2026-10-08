@@ -176,7 +176,7 @@ fun BilleteraScreen(banner: Banner) {
                 if (i > 0) Divisor()
                 Text(c.obraNombre, fontWeight = FontWeight.SemiBold)
                 CajaDatos(c.obraId, c.direccion, c.mirada, acciones)
-                CajaRespaldo(c.obraId, c.direccion != null, acciones, banner)
+                CajaRespaldo(acciones)
             }
         }
     }

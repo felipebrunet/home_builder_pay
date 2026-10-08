@@ -18,7 +18,7 @@ use std::time::Duration;
 
 use i18n::Idioma;
 use konstruado_core::{
-    asegurar_clave, generar_clave, monto, monto_pct, n_partidas, oferta_en_tablero, retirar_oferta,
+    asegurar_clave, fmt_monto, generar_clave, leer_usd, monto_pct, usd_editable, Moneda, n_partidas, oferta_en_tablero, retirar_oferta,
     Aceptacion,
     EstadoObra, Obra, Oferta, PartidaEstado, Persona, Rol, TextoLeido, MAX_NOTA,
 };
@@ -101,6 +101,17 @@ pub struct OfertaVista {
     pub mia: bool,
     pub detalles: Vec<String>,
     pub resumen: String,
+    /// Oferta en dólares (las viejas van en unidades).
+    pub usd: bool,
+    /// La garantía sugerida para el campo editable (`200` / `200.50`).
+    pub garantia_editable: String,
+}
+
+#[derive(Clone, Debug, uniffi::Record)]
+pub struct PreviaPublicar {
+    pub ok: bool,
+    pub n_partidas: u32,
+    pub texto: String,
 }
 
 #[derive(Clone, Debug, uniffi::Record)]
@@ -190,6 +201,8 @@ pub struct ObraVista {
     pub armando_caja: bool,
     pub mirada: Option<MiradaVista>,
     pub partidas: Vec<PartidaFila>,
+    /// Obra en dólares (montos USD, XMR fijo por partida al fondear).
+    pub usd: bool,
 }
 
 #[derive(Clone, Debug, uniffi::Record)]
@@ -212,6 +225,14 @@ pub struct PartidaVista {
     pub saldo_detalle: Option<String>,
     pub candado: Option<String>,
     pub xmr_por_lado: Option<String>,
+    /// Obras en USD: el XMR de la partida (fijo si ya tiene precio, aproximado si no).
+    pub xmr_partida: Option<String>,
+    /// Precio que propuso el otro, para quien confirma y fondea.
+    pub precio_propuesto: Option<String>,
+    /// El precio fijado se aleja del actual.
+    pub aviso_precio: Option<String>,
+    /// Obras en USD sin precio fijado: estado del precio de referencia.
+    pub estado_precio: Option<String>,
     pub caja_direccion: Option<String>,
     pub fondeo_txid: Option<String>,
     pub pago_txid: Option<String>,
@@ -518,7 +539,7 @@ fn avisos_para(mid: &str, obras: &[Obra], sec: &str) -> Vec<AvisoVista> {
                     "{}: {} propone garantía {}",
                     obra.nombre,
                     obra.contratista.nombre,
-                    monto(obra.garantia)
+                    mm(obra.moneda, obra.garantia)
                 ),
                 obra_id: obra.id.clone(),
                 partida: None,
@@ -536,7 +557,7 @@ fn avisos_para(mid: &str, obras: &[Obra], sec: &str) -> Vec<AvisoVista> {
                         obra.nombre,
                         ex.por.nombre,
                         detalle,
-                        monto(ex.monto)
+                        mm(obra.moneda, ex.monto)
                     ),
                     obra_id: obra.id.clone(),
                     partida: None,
@@ -601,16 +622,16 @@ fn oferta_vista(o: &Oferta, mid: &str) -> OfertaVista {
     let resumen = if mia {
         format!(
             "Trabajo {} · garantía sugerida {} · {} partidas",
-            monto(o.trabajo),
-            monto(o.garantia_sugerida),
+            mm(o.moneda, o.trabajo),
+            mm(o.moneda, o.garantia_sugerida),
             o.n_partidas_sugeridas
         )
     } else {
         format!(
             "{} ofrece trabajo por {}. Garantía sugerida {} ({} partidas).",
             o.mandante.nombre,
-            monto(o.trabajo),
-            monto(o.garantia_sugerida),
+            mm(o.moneda, o.trabajo),
+            mm(o.moneda, o.garantia_sugerida),
             o.n_partidas_sugeridas
         )
     };
@@ -624,6 +645,11 @@ fn oferta_vista(o: &Oferta, mid: &str) -> OfertaVista {
         mia,
         detalles: o.detalles.clone(),
         resumen,
+        usd: o.moneda.es_usd(),
+        garantia_editable: match o.moneda {
+            Moneda::Usd => usd_editable(o.garantia_sugerida),
+            Moneda::Unidades => o.garantia_sugerida.to_string(),
+        },
     }
 }
 
@@ -633,6 +659,18 @@ fn parse_num(s: &str) -> u64 {
         .collect::<String>()
         .parse()
         .unwrap_or(0)
+}
+
+/// Un monto escrito a mano según la moneda de la obra u oferta.
+fn leer(moneda: Moneda, s: &str) -> u64 {
+    match moneda {
+        Moneda::Usd => leer_usd(s).unwrap_or(0),
+        Moneda::Unidades => parse_num(s),
+    }
+}
+
+fn mm(moneda: Moneda, n: u64) -> String {
+    fmt_monto(moneda, n, ES)
 }
 
 fn recorta_nota(s: String) -> String {
@@ -1288,9 +1326,10 @@ impl KonstruadoApp {
         detalles: Vec<String>,
     ) -> Result<OfertaVista, FfiError> {
         let m = self.yo()?;
-        let t = parse_num(&trabajo);
-        let g = parse_num(&garantia);
-        let mut o = Oferta::publicar(m, nombre, t, g, detalles).map_err(err_core)?;
+        // Obras nuevas en dólares (centavos).
+        let t = leer_usd(&trabajo).map_err(err_core)?;
+        let g = leer_usd(&garantia).map_err(|_| err_core(konstruado_core::Error::Garantia))?;
+        let mut o = Oferta::publicar_usd(m, nombre, t, g, detalles).map_err(err_core)?;
         o.sellar_retiro(&self.sec());
         let v = oferta_vista(&o, &self.mid());
         let _e = self.rt.enter();
@@ -1309,8 +1348,9 @@ impl KonstruadoApp {
                 detalles: vec![],
             };
         };
-        let g = parse_num(&garantia);
+        let g = leer(o.moneda, &garantia);
         let contra = g != o.garantia_sugerida;
+        let gtxt = if o.moneda.es_usd() { caja::texto_usd_aprox(ES, g) } else { mm(o.moneda, g) };
         match n_partidas(o.trabajo, g) {
             Ok(n) => {
                 let mut d = o.detalles.clone();
@@ -1320,9 +1360,9 @@ impl KonstruadoApp {
                     contra,
                     n_partidas: n,
                     texto: if contra {
-                        format!("Contra: {n} partidas de {g}. El mandante tiene que confirmar.")
+                        format!("Contra: {n} partidas de {gtxt}. El mandante tiene que confirmar.")
                     } else {
-                        format!("Aceptás {n} partidas. Los dos encierran {g} en cada una.")
+                        format!("Aceptás {n} partidas. Los dos encierran {gtxt} en cada una.")
                     },
                     detalles: d,
                 }
@@ -1351,7 +1391,7 @@ impl KonstruadoApp {
             .into_iter()
             .find(|o| o.id == oferta_id)
             .ok_or_else(|| fallo("Esa oferta ya no está en el tablero."))?;
-        let g = parse_num(&garantia);
+        let g = leer(oferta.moneda, &garantia);
         let contra = g != oferta.garantia_sugerida;
         let dets = if contra { detalles } else { oferta.detalles.clone() };
         let acc = Aceptacion::de_con(&oferta, c.clone(), g, dets).map_err(err_core)?;
@@ -1389,7 +1429,7 @@ impl KonstruadoApp {
             ExtraVista {
                 texto,
                 mia: ex.por.id == mid,
-                monto: monto(ex.monto),
+                monto: mm(obra.moneda, ex.monto),
                 por: ex.por.nombre.clone(),
             }
         });
@@ -1405,7 +1445,7 @@ impl KonstruadoApp {
                 obra.mandante.nombre,
                 obra.contratista.nombre,
                 obra.n_partidas,
-                monto(obra.trabajo)
+                mm(obra.moneda, obra.trabajo)
             ),
             soy_mandante: soy_m,
             soy_contratista: soy_c,
@@ -1415,7 +1455,7 @@ impl KonstruadoApp {
             contra_texto: contra.then(|| {
                 format!(
                     "El contratista propone garantía {} ({} partidas).",
-                    monto(obra.garantia),
+                    mm(obra.moneda, obra.garantia),
                     obra.n_partidas
                 )
             }),
@@ -1432,6 +1472,7 @@ impl KonstruadoApp {
             armando_caja: caja_dir.is_none()
                 && matches!(estado, EstadoObra::Acordada | EstadoObra::EnMarcha),
             mirada: mirada_de(&v, &obra.id),
+            usd: obra.moneda.es_usd(),
             caja_direccion: caja_dir,
             partidas: obra
                 .partidas
@@ -1442,11 +1483,11 @@ impl KonstruadoApp {
                     titulo: L.titulo_partida(i, &p.detalle),
                     label: L.label_partida(p),
                     estado: estado_partida_txt(p.estado),
-                    por_lado: format!("{} por lado", monto(p.capital(obra.garantia))),
+                    por_lado: format!("{} por lado", mm(obra.moneda, p.capital(obra.garantia))),
                     saldo_corto: caja::saldo_corto(
                         ES,
                         p.estado,
-                        p.capital(obra.garantia),
+                        obra.piconero_partida(i),
                         p.fondeo_txid.is_some(),
                     ),
                     activa: activa == Some(i),
@@ -1507,7 +1548,8 @@ impl KonstruadoApp {
         if texto.trim().is_empty() {
             return Err(fallo("La extra necesita un texto."));
         }
-        let m = parse_num(&monto_lado);
+        let moneda = self.obra(&obra_id)?.moneda;
+        let m = leer(moneda, &monto_lado);
         if m == 0 {
             return Err(fallo("La extra lleva un monto mayor a cero."));
         }
@@ -1566,16 +1608,29 @@ impl KonstruadoApp {
         let saldo = caja::saldo_partida(
             ES,
             p.estado,
-            p.capital(garantia),
+            obra.piconero_partida(i),
             p.fondeo_txid.is_some(),
             &obra.mandante.nombre,
             &obra.contratista.nombre,
         );
-        let xmr_por_lado = if saldo.is_none() {
-            caja::a_piconero(p.capital(garantia)).map(|pico| format!("{} XMR por lado en stagenet.", caja::fmt_xmr(pico)))
+        let usd = obra.moneda.es_usd();
+        let xmr_por_lado = if saldo.is_none() && !usd {
+            caja::xmr_partida(ES, &obra, i)
         } else {
             None
         };
+        let xmr_partida = if usd { caja::xmr_partida(ES, &obra, i) } else { None };
+        let precio_propuesto = p
+            .precio
+            .as_ref()
+            .filter(|_| p.estado == PartidaEstado::Encerrando && !soy_prop_enc)
+            .map(|pr| format!("Precio que propone: cada lado pone {}. Confirmar acepta ese precio.", caja::texto_precio_fijado(ES, pr)));
+        let aviso_precio = precio_propuesto
+            .as_ref()
+            .and(p.precio.as_ref())
+            .and_then(|pr| caja::aviso_diferencia_precio(ES, pr));
+        let estado_precio = (usd && p.precio.is_none() && p.estado == PartidaEstado::Pendiente)
+            .then(|| caja::estado_cotizacion(ES));
         let notas = p
             .notas
             .iter()
@@ -1630,7 +1685,7 @@ impl KonstruadoApp {
             estado: estado_partida_txt(p.estado),
             lead: format!(
                 "{} por lado. Mandante {} · contratista {}",
-                monto(p.capital(garantia)),
+                mm(obra.moneda, p.capital(garantia)),
                 obra.mandante.nombre,
                 obra.contratista.nombre
             ),
@@ -1653,7 +1708,7 @@ impl KonstruadoApp {
                         "Recibo · {} · pagó {}% · {} · aceptó {} · {}",
                         r.titulo,
                         r.porcentaje,
-                        monto(r.monto),
+                        mm(obra.moneda, r.monto),
                         r.acepto_nombre,
                         L.fmt_cuando(r.cuando)
                     )
@@ -1665,7 +1720,7 @@ impl KonstruadoApp {
                 format!(
                     "Cerró al {}% ({}). El hilo quedó guardado.",
                     p.pago.unwrap_or(0),
-                    monto(monto_pct(garantia, p.pago.unwrap_or(0)))
+                    mm(obra.moneda, monto_pct(garantia, p.pago.unwrap_or(0)))
                 )
             }),
             encerro: p
@@ -1687,7 +1742,7 @@ impl KonstruadoApp {
             propuesto: if en_trato { p.propuesto } else { None },
             propuesto_texto: if en_trato {
                 p.propuesto
-                    .map(|n| format!("Sobre la mesa: {n}% ({}).", monto(monto_pct(garantia, n))))
+                    .map(|n| format!("Sobre la mesa: {n}% ({}).", mm(obra.moneda, monto_pct(garantia, n))))
             } else {
                 None
             },
@@ -1703,6 +1758,10 @@ impl KonstruadoApp {
             traba_corta: caja::traba_corta(acc.traba, ES),
             termino_trabado: !cortada && soy_c && p.estado == PartidaEstado::Encerrada && acc.traba.trabada(),
             pago_trabado: en_trato && acc.me_toca && !pagando && acc.traba.trabada(),
+            xmr_partida,
+            precio_propuesto,
+            aviso_precio,
+            estado_precio,
         })
     }
 
@@ -1711,7 +1770,47 @@ impl KonstruadoApp {
     }
 
     pub fn proponer_encerrar(&self, obra_id: String, indice: u32) -> Result<(), FfiError> {
-        self.accion(&obra_id, true, |o, q| o.encerrar_proponer(indice as usize, q))
+        // Obras en USD: el XMR queda fijo con el precio de ahora (el otro lo acepta al fondear).
+        let obra = self.obra(&obra_id)?;
+        let precio = caja::precio_para_encerrar(&obra, indice as usize).map_err(err_caja)?;
+        self.accion(&obra_id, true, |o, q| o.encerrar_proponer_con(indice as usize, q, precio))
+    }
+
+    // ------------------------------------------------------------ precio USD/XMR
+
+    /// Pide el precio ahora (CoinGecko, si falla Kraken), por Orbot si está configurado.
+    pub fn actualizar_precio(&self) -> Result<String, FfiError> {
+        let socks = self.nodo.socks();
+        self.rt
+            .block_on(konstruado_motor::cotizacion::actualizar(socks))
+            .map(|q| caja::texto_cotizacion(ES, &q))
+            .map_err(|e| fallo(&format!("Sin precio de XMR: {e}")))
+    }
+
+    /// Estado del precio de referencia (último conocido o por qué no hay).
+    pub fn estado_precio(&self) -> String {
+        let _e = self.rt.enter();
+        konstruado_motor::cotizacion::refrescar_en_fondo(self.nodo.socks());
+        caja::estado_cotizacion(ES)
+    }
+
+    /// Nota fija: montos en USD, precio de mainnet como referencia en stagenet.
+    pub fn nota_precio(&self) -> String {
+        caja::nota_precio_stagenet(ES)
+    }
+
+    /// Vista previa del formulario de publicar (en USD).
+    pub fn previa_publicar(&self, trabajo: String, garantia: String) -> PreviaPublicar {
+        let t = leer_usd(&trabajo).unwrap_or(0);
+        let g = leer_usd(&garantia).unwrap_or(0);
+        match n_partidas(t, g) {
+            Ok(n) => PreviaPublicar {
+                ok: true,
+                n_partidas: n,
+                texto: format!("{n} partidas. En cada una los dos encierran {}.", caja::texto_usd_aprox(ES, g)),
+            },
+            Err(e) => PreviaPublicar { ok: false, n_partidas: 0, texto: L.error(&e) },
+        }
     }
 
     /// "Cancelar propuesta" / "No encerrar".
@@ -1819,7 +1918,7 @@ impl KonstruadoApp {
                     ),
                 })
                 .collect(),
-            escala: caja::escala(ES),
+            escala: caja::estado_cotizacion(ES),
             cajas,
             estado_linea: est.1,
             estado_tono: est.0.codigo().into(),

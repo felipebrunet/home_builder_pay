@@ -5,6 +5,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -12,28 +13,47 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.input.KeyboardType
 import cl.konstruado.app.AppHolder
+import cl.konstruado.app.ui.Ayuda
 import cl.konstruado.app.ui.Banner
+import cl.konstruado.app.ui.ErrorTexto
 import cl.konstruado.app.ui.Nav
 import cl.konstruado.app.ui.Pantalla
 import cl.konstruado.app.ui.Pista
 import cl.konstruado.app.ui.Primario
 import cl.konstruado.app.ui.Titulo
 import cl.konstruado.app.ui.rememberAcciones
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
 
 @Composable
 fun PublicarScreen(nav: Nav, banner: Banner) {
     val acciones = rememberAcciones(banner)
     var nombre by remember { mutableStateOf("Casa El Quisco") }
-    var trabajo by remember { mutableStateOf("10000") }
-    var garantia by remember { mutableStateOf("2000") }
+    // Obras nuevas en dólares: USD 1000 de trabajo, USD 200 por partida.
+    var trabajo by remember { mutableStateOf("1000") }
+    var garantia by remember { mutableStateOf("200") }
     var detalles by remember { mutableStateOf("") }
+    var previa by remember { mutableStateOf<uniffi.konstruado_ffi.PreviaPublicar?>(null) }
+    var precio by remember { mutableStateOf("") }
+    val app = AppHolder.a
+    LaunchedEffect(trabajo, garantia) {
+        // El precio se pide solo (Orbot si está); acá se vuelve a leer cada pocos segundos.
+        while (true) {
+            previa = withContext(Dispatchers.IO) { app.previaPublicar(trabajo, garantia) }
+            precio = withContext(Dispatchers.IO) { app.estadoPrecio() }
+            delay(5_000)
+        }
+    }
     Titulo("Publicar obra")
     OutlinedTextField(nombre, { nombre = it }, label = { Text("Nombre de la obra") }, modifier = Modifier.fillMaxWidth())
-    OutlinedTextField(trabajo, { trabajo = it }, label = { Text("Trabajo (unidades)") },
-        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number), modifier = Modifier.fillMaxWidth())
-    OutlinedTextField(garantia, { garantia = it }, label = { Text("Garantía sugerida por partida") },
-        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number), modifier = Modifier.fillMaxWidth())
-    Pista("En stagenet, 1 unidad son 0,00002 XMR. La garantía de 2000 son 0,04 XMR por lado.")
+    OutlinedTextField(trabajo, { trabajo = it }, label = { Text("Trabajo (USD)") },
+        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal), modifier = Modifier.fillMaxWidth())
+    OutlinedTextField(garantia, { garantia = it }, label = { Text("Garantía sugerida por partida (USD)") },
+        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal), modifier = Modifier.fillMaxWidth())
+    previa?.let { p -> if (p.ok) Pista(p.texto) else ErrorTexto(p.texto) }
+    if (precio.isNotEmpty()) Ayuda(precio)
+    Ayuda(app.notaPrecio())
     OutlinedTextField(detalles, { detalles = it }, label = { Text("Partidas (una por línea, opcional)") },
         minLines = 3, modifier = Modifier.fillMaxWidth())
     Primario("Publicar en la red") {

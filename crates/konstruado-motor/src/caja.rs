@@ -33,8 +33,8 @@ use xmr_joint::{daemon_url, url_es_local, OutputWithDecoys, Net, FEE_CUSHION, PI
 use konstruado_core::{EstadoObra, Obra, PartidaEstado, Persona, Rol};
 use konstruado_net::{CajaMsg, Nodo};
 
-/// 1 unidad del trato, en piconero. 2000 unidades = 0,04 XMR.
-pub const PICONERO_POR_UNIDAD: u64 = 20_000_000;
+/// 1 unidad del trato (obras viejas), en piconero. 2000 unidades = 0,04 XMR.
+pub use konstruado_core::PICONERO_POR_UNIDAD;
 
 const LOOKBACK: usize = 40;
 
@@ -52,8 +52,9 @@ const PASO_ATRAS_CAJA: usize = 200;
 const PASO_SCAN: usize = 8;
 const PAUSA: Duration = Duration::from_secs(20);
 
+/// Unidades viejas → piconero (obras en `Moneda::Unidades`).
 pub fn a_piconero(unidades: u64) -> Option<u64> {
-    unidades.checked_mul(PICONERO_POR_UNIDAD)
+    konstruado_core::unidades_a_piconero(unidades)
 }
 
 pub fn fmt_xmr(pico: u64) -> String {
@@ -72,8 +73,8 @@ pub struct AporteFondeo {
 }
 
 /// Lo que entra a la caja si los dos fondean: dos salidas iguales, una por lado.
-pub fn aporte_fondeo(capital_unidades: u64) -> Option<AporteFondeo> {
-    let por_lado = a_piconero(capital_unidades)?;
+/// `por_lado` en piconero ([`Obra::piconero_partida`]).
+pub fn aporte_fondeo(por_lado: u64) -> Option<AporteFondeo> {
     let total = por_lado.checked_mul(2)?;
     Some(AporteFondeo { por_lado, total })
 }
@@ -88,12 +89,12 @@ pub struct SaldoPartida {
 pub fn saldo_partida(
     es: bool,
     estado: PartidaEstado,
-    capital_unidades: u64,
+    por_lado_pico: Option<u64>,
     tiene_fondeo: bool,
     mandante: &str,
     contratista: &str,
 ) -> Option<SaldoPartida> {
-    let aporte = aporte_fondeo(capital_unidades)?;
+    let aporte = aporte_fondeo(por_lado_pico?)?;
     let lado = fmt_xmr(aporte.por_lado);
     let total = fmt_xmr(aporte.total);
     if estado == PartidaEstado::Pagada {
@@ -163,7 +164,7 @@ pub fn saldo_partida(
 }
 
 /// Una línea corta para la lista de partidas.
-pub fn saldo_corto(es: bool, estado: PartidaEstado, capital_unidades: u64, tiene_fondeo: bool) -> Option<String> {
+pub fn saldo_corto(es: bool, estado: PartidaEstado, por_lado_pico: Option<u64>, tiene_fondeo: bool) -> Option<String> {
     if estado == PartidaEstado::Pagada {
         return Some(if es {
             "Pagada · la caja de esta partida quedó en cero".into()
@@ -177,7 +178,7 @@ pub fn saldo_corto(es: bool, estado: PartidaEstado, capital_unidades: u64, tiene
             PartidaEstado::Encerrando | PartidaEstado::Encerrada | PartidaEstado::EnTrato
         )
     {
-        let total = fmt_xmr(aporte_fondeo(capital_unidades)?.total);
+        let total = fmt_xmr(aporte_fondeo(por_lado_pico?)?.total);
         return Some(if es {
             format!("{total} XMR en la caja")
         } else {
@@ -194,12 +195,156 @@ pub fn saldo_corto(es: bool, estado: PartidaEstado, capital_unidades: u64, tiene
     None
 }
 
-pub fn escala(es: bool) -> String {
+// ── Obras en USD ──
+
+/// El XMR de stagenet no vale nada: se usa el precio de mainnet como referencia.
+pub fn nota_precio_stagenet(es: bool) -> String {
     if es {
-        "En stagenet, 1 unidad son 0,00002 XMR. La garantía de 2000 son 0,04 XMR por lado.".into()
+        "Los montos van en dólares. El XMR de stagenet no vale nada: para convertir se usa el precio de mainnet como referencia (CoinGecko, o Kraken si falla). El XMR de cada partida queda fijo al fondearla.".into()
     } else {
-        "On stagenet, 1 unit is 0.00002 XMR. A guarantee of 2000 is 0.04 XMR per side.".into()
+        "Amounts are in US dollars. Stagenet XMR has no value: conversion uses the mainnet price as a reference (CoinGecko, or Kraken as fallback). Each stage's XMR is fixed when it is funded.".into()
     }
+}
+
+fn hora_local(ts: i64, es: bool) -> String {
+    use chrono::TimeZone;
+    let fmt = if es { "%d/%m %H:%M" } else { "%m/%d %H:%M" };
+    chrono::Local
+        .timestamp_opt(ts, 0)
+        .single()
+        .map(|d| d.format(fmt).to_string())
+        .unwrap_or_default()
+}
+
+fn nombre_fuente(f: &str) -> &str {
+    match f {
+        "coingecko" => "CoinGecko",
+        "kraken" => "Kraken",
+        otro => otro,
+    }
+}
+
+/// `USD 536,44/XMR (CoinGecko, 08/10 19:20)`.
+pub fn texto_cotizacion(es: bool, q: &crate::cotizacion::Cotizacion) -> String {
+    format!(
+        "{}/XMR ({}, {})",
+        konstruado_core::fmt_usd(q.centavos_por_xmr, es),
+        nombre_fuente(&q.fuente),
+        hora_local(q.cuando, es)
+    )
+}
+
+/// Estado del precio para la pantalla: el último conocido o por qué no hay.
+pub fn estado_cotizacion(es: bool) -> String {
+    match crate::cotizacion::ultima() {
+        Some(q) => {
+            let viejo = q.edad_seg(konstruado_core::ahora()) > crate::cotizacion::MAX_EDAD_FIJAR_SEG;
+            let base = if es { "Precio de referencia: " } else { "Reference price: " };
+            let extra = match (viejo, es) {
+                (true, true) => " · desactualizado, actualizando…",
+                (true, false) => " · out of date, updating…",
+                _ => "",
+            };
+            format!("{base}{}{extra}", texto_cotizacion(es, &q))
+        }
+        None => match (crate::cotizacion::ultimo_error(), es) {
+            (Some(e), true) => format!("Sin precio de XMR ({e}). Se reintenta solo; sin precio no se puede encerrar una partida."),
+            (Some(e), false) => format!("No XMR price ({e}). It retries on its own; without a price a stage cannot be locked."),
+            (None, true) => "Buscando el precio de XMR…".into(),
+            (None, false) => "Fetching the XMR price…".into(),
+        },
+    }
+}
+
+/// Antes de fondear: `USD 50 ≈ 0,0932 XMR al precio actual`.
+pub fn texto_usd_aprox(es: bool, usd_centavos: u64) -> String {
+    let usd = konstruado_core::fmt_usd(usd_centavos, es);
+    match crate::cotizacion::ultima()
+        .and_then(|q| konstruado_core::usd_a_piconero(usd_centavos, q.centavos_por_xmr))
+    {
+        Some(pico) if es => format!("{usd} ≈ {} XMR al precio actual", fmt_xmr(pico)),
+        Some(pico) => format!("{usd} ≈ {} XMR at the current price", fmt_xmr(pico)),
+        None if es => format!("{usd} (sin precio de XMR todavía)"),
+        None => format!("{usd} (no XMR price yet)"),
+    }
+}
+
+/// Después de fijar: `0,0932 XMR (USD 50 al 08/10 19:20, precio USD 536,44/XMR, CoinGecko)`.
+pub fn texto_precio_fijado(es: bool, p: &konstruado_core::PrecioFijado) -> String {
+    let xmr = fmt_xmr(p.piconero);
+    let usd = konstruado_core::fmt_usd(p.usd_centavos, es);
+    let precio = konstruado_core::fmt_usd(p.centavos_por_xmr, es);
+    let cuando = hora_local(p.cuando, es);
+    let fuente = nombre_fuente(&p.fuente);
+    if es {
+        format!("{xmr} XMR ({usd} al {cuando}, precio {precio}/XMR, {fuente})")
+    } else {
+        format!("{xmr} XMR ({usd} on {cuando}, price {precio}/XMR, {fuente})")
+    }
+}
+
+/// Al confirmar: avisa si el precio fijado por el otro se aleja del actual.
+pub fn aviso_diferencia_precio(es: bool, p: &konstruado_core::PrecioFijado) -> Option<String> {
+    let q = crate::cotizacion::ultima()?;
+    let (a, b) = (p.centavos_por_xmr, q.centavos_por_xmr);
+    let dif = a.abs_diff(b).saturating_mul(100) / a.max(1);
+    if dif < crate::cotizacion::AVISO_DIFERENCIA_PCT {
+        return None;
+    }
+    let actual = konstruado_core::fmt_usd(b, es);
+    Some(if es {
+        format!("Ojo: el precio fijado difiere {dif}% del actual ({actual}/XMR). Si no te sirve, cancelá el encierre y que se proponga de nuevo.")
+    } else {
+        format!("Note: the fixed price differs {dif}% from the current one ({actual}/XMR). If it does not work for you, cancel the lock and propose it again.")
+    })
+}
+
+/// El precio con el que se propone encerrar la partida `i`. Obras viejas: `None`.
+/// Obras en USD: el último precio si no es muy viejo; si no, `Err("sin-precio")`.
+pub fn precio_para_encerrar(obra: &Obra, i: usize) -> Result<Option<konstruado_core::PrecioFijado>, String> {
+    if !obra.moneda.es_usd() {
+        return Ok(None);
+    }
+    let p = obra.partidas.get(i).ok_or("no está esa partida")?;
+    crate::cotizacion::para_fijar(konstruado_core::ahora())
+        .and_then(|q| q.fijar(p.capital(obra.garantia)))
+        .map(Some)
+        .ok_or_else(|| "sin-precio".to_string())
+}
+
+/// Monto de la obra para mostrar (`USD 1.500` o las unidades de antes).
+pub fn monto_obra(obra: &Obra, n: u64, es: bool) -> String {
+    konstruado_core::fmt_monto(obra.moneda, n, es)
+}
+
+/// Línea de XMR de una partida: fijado si ya tiene precio, aproximado si no.
+pub fn xmr_partida(es: bool, obra: &Obra, i: usize) -> Option<String> {
+    let p = obra.partidas.get(i)?;
+    if !obra.moneda.es_usd() {
+        return a_piconero(p.capital(obra.garantia)).map(|pico| {
+            if es {
+                format!("{} XMR por lado en stagenet.", fmt_xmr(pico))
+            } else {
+                format!("{} XMR per side on stagenet.", fmt_xmr(pico))
+            }
+        });
+    }
+    Some(match &p.precio {
+        Some(pr) => {
+            if es {
+                format!("Por lado: {}", texto_precio_fijado(es, pr))
+            } else {
+                format!("Per side: {}", texto_precio_fijado(es, pr))
+            }
+        }
+        None => {
+            if es {
+                format!("Por lado: {}", texto_usd_aprox(es, p.capital(obra.garantia)))
+            } else {
+                format!("Per side: {}", texto_usd_aprox(es, p.capital(obra.garantia)))
+            }
+        }
+    })
 }
 
 /// «Usar el máximo»: todo el saldo libre. Pedir justo ese monto manda todo menos
@@ -693,6 +838,15 @@ pub fn humanizar_error_cadena(raw: &str, es: bool) -> String {
 
 /// Textos de la billetera y códigos del motor, en el idioma de la ventana.
 pub fn aviso_humano(aviso: &str, es: bool) -> String {
+    if aviso.contains("el monto no es el capital de la partida") {
+        // Los dos no leen el mismo XMR (copia vieja de la obra o propuestas cruzadas).
+        // Nada se publicó; cuando la obra se sincroniza, «Empezar de nuevo» usa el monto común.
+        return if es {
+            "Los montos de los dos no coinciden (uno tiene una copia vieja de la partida). No se publicó nada. Esperá unos segundos y tocá «Empezar el fondeo de nuevo».".into()
+        } else {
+            "The two amounts do not match (one side has an old copy of the stage). Nothing was published. Wait a few seconds and tap \"Start funding again\".".into()
+        };
+    }
     let (esp, ing) = match aviso {
         "codigo:sin-saldo" | "sin-saldo" | "sin-saldo-caja" => (
             "No alcanza el saldo libre para este paso. No armé la transacción.",
@@ -705,6 +859,10 @@ pub fn aviso_humano(aviso: &str, es: bool) -> String {
         "codigo:sin-punta" => (
             "Todavía no llega la punta del nodo. No armé el envío.",
             "The node tip has not arrived yet. The send was not built.",
+        ),
+        "codigo:sin-precio" | "sin-precio" => (
+            "No hay precio de XMR reciente para fijar la partida. Esperá a que se actualice (arriba dice el estado del precio).",
+            "There is no recent XMR price to fix the stage. Wait for it to update (the price status is shown above).",
         ),
         "codigo:sin-semilla" | "sin-semilla" => (
             "Primero creá la billetera de stagenet.",
@@ -1912,7 +2070,9 @@ impl Motor {
         if rol_en(obra, &yo.id).is_none() {
             return Err("no estás en esta obra".into());
         }
-        let capital = a_piconero(p.capital(obra.garantia)).ok_or("el monto no entra en piconero")?;
+        // Lo mismo en las dos máquinas: sale del estado de la obra (precio fijado
+        // al proponer en USD; escala fija en obras viejas).
+        let capital = obra.piconero_partida(partida).ok_or("sin-precio")?;
         let key = (obra.id.clone(), partida);
         if self.fondeos.contains_key(&key) {
             return Ok(());
@@ -2050,7 +2210,7 @@ impl Motor {
             return Err("no estás en esta obra".into());
         }
         let pct = p.propuesto.ok_or("falta el porcentaje")?;
-        let capital = a_piconero(p.capital(obra.garantia)).ok_or("el monto no entra en piconero")?;
+        let capital = obra.piconero_partida(partida).ok_or("sin-precio")?;
         let key = (obra.id.clone(), partida);
         if let Some(g) = self.gastos.get(&key) {
             if g.error.is_none() {
@@ -6309,29 +6469,29 @@ mod tests {
 
     #[test]
     fn la_partida_muestra_el_total_y_lo_de_cada_lado() {
-        let s = saldo_partida(true, PartidaEstado::Encerrada, 50, true, "felipe", "Don").unwrap();
+        let s = saldo_partida(true, PartidaEstado::Encerrada, a_piconero(50), true, "felipe", "Don").unwrap();
         assert!(s.estado.contains("Fondeada"));
         assert!(s.detalle.contains("Total en la caja: 0.0020 XMR"));
         assert!(s.detalle.contains("felipe aportó 0.0010 XMR"));
         assert!(s.detalle.contains("Don aportó 0.0010 XMR"));
         assert!(s.candado.is_some());
 
-        let trato = saldo_partida(false, PartidaEstado::EnTrato, 50, true, "felipe", "Don").unwrap();
+        let trato = saldo_partida(false, PartidaEstado::EnTrato, a_piconero(50), true, "felipe", "Don").unwrap();
         assert!(trato.estado.contains("In deal"));
         assert!(trato.detalle.contains("Total in the box: 0.0020 XMR"));
 
-        let pagada = saldo_partida(true, PartidaEstado::Pagada, 50, true, "felipe", "Don").unwrap();
+        let pagada = saldo_partida(true, PartidaEstado::Pagada, a_piconero(50), true, "felipe", "Don").unwrap();
         assert!(pagada.estado.contains("ya no tiene saldo"));
         assert!(pagada.detalle.contains("0.0020 XMR"));
         assert!(pagada.candado.is_none());
 
-        let espera = saldo_partida(true, PartidaEstado::Encerrando, 50, false, "felipe", "Don").unwrap();
+        let espera = saldo_partida(true, PartidaEstado::Encerrando, a_piconero(50), false, "felipe", "Don").unwrap();
         assert!(espera.estado.contains("Todavía no hay saldo"));
         assert_eq!(
-            saldo_corto(true, PartidaEstado::Encerrada, 50, true).as_deref(),
+            saldo_corto(true, PartidaEstado::Encerrada, a_piconero(50), true).as_deref(),
             Some("0.0020 XMR en la caja")
         );
-        assert!(saldo_partida(true, PartidaEstado::Pendiente, 50, false, "a", "b").is_none());
+        assert!(saldo_partida(true, PartidaEstado::Pendiente, a_piconero(50), false, "a", "b").is_none());
     }
 
     #[test]

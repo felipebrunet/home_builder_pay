@@ -7,12 +7,38 @@ use std::time::Duration;
 
 use dioxus::prelude::*;
 use konstruado_core::{
-    asegurar_clave, monto, monto_pct, n_partidas, oferta_en_tablero, retirar_oferta, Aceptacion,
-    EstadoObra, Oferta, Obra, PartidaEstado, Persona, Rol, TextoLeido, MAX_NOTA,
+    asegurar_clave, fmt_monto, leer_usd, monto_pct, n_partidas, oferta_en_tablero, retirar_oferta,
+    usd_editable, Aceptacion, EstadoObra, Moneda, Oferta, Obra, PartidaEstado, Persona, Rol,
+    TextoLeido, MAX_NOTA,
 };
+use konstruado_motor::cotizacion;
 use konstruado_net::{EstadoTor, Nodo, RED};
 use i18n::Idioma;
 const CSS: &str = include_str!("ui.css");
+
+/// Precio USD/XMR (hora del último y error). Leerlo en un componente lo redibuja al cambiar.
+static PRECIO: GlobalSignal<(i64, Option<String>)> = Signal::global(|| (0, None));
+
+/// Un monto escrito en un campo, según la moneda de la obra u oferta.
+fn leer_monto(moneda: Moneda, s: &str) -> u64 {
+    match moneda {
+        Moneda::Usd => leer_usd(s).unwrap_or(0),
+        Moneda::Unidades => s.chars().filter(|c| c.is_ascii_digit()).collect::<String>().parse().unwrap_or(0),
+    }
+}
+
+/// Un monto para un campo editable.
+fn monto_editable(moneda: Moneda, n: u64) -> String {
+    match moneda {
+        Moneda::Usd => usd_editable(n),
+        Moneda::Unidades => n.to_string(),
+    }
+}
+
+/// Un monto para mostrar: `USD 1.500` o las unidades de las obras viejas.
+fn mm(moneda: Moneda, n: u64, lang: Idioma) -> String {
+    fmt_monto(moneda, n, lang == Idioma::Es)
+}
 
 fn main() {
     preparar_grafica();
@@ -178,8 +204,9 @@ fn App() -> Element {
     let mut sel_obra = use_signal(|| None::<String>);
     let sel_partida = use_signal(|| None::<usize>);
     let mut err = use_signal(|| None::<String>);
-    let trabajo = use_signal(|| "10000".to_string());
-    let garantia = use_signal(|| "2000".to_string());
+    // Obras nuevas en dólares: USD 1000 de trabajo, USD 200 por partida.
+    let trabajo = use_signal(|| "1000".to_string());
+    let garantia = use_signal(|| "200".to_string());
     let obra_nom = use_signal(|| "Casa El Quisco".to_string());
     let garantia_acc = use_signal(|| "2000".to_string());
     let tema = use_signal(|| {
@@ -239,6 +266,19 @@ fn App() -> Element {
                 red.set(Some(n.clone()));
                 loop {
                     tor.set(n.estado_tor());
+                    // Precio USD/XMR por el tor propio. Si tor no está (o falló), directo.
+                    match (n.socks(), n.estado_tor()) {
+                        (Some(s), _) => cotizacion::refrescar_en_fondo(Some(s)),
+                        (None, EstadoTor::Ausente | EstadoTor::Fallo(_)) => cotizacion::refrescar_en_fondo(None),
+                        _ => {}
+                    }
+                    let pq = (
+                        cotizacion::ultima().map(|q| q.cuando).unwrap_or(0),
+                        cotizacion::ultimo_error(),
+                    );
+                    if *PRECIO.peek() != pq {
+                        *PRECIO.write() = pq;
+                    }
                     if let Some(p) = yo() {
                         n.fijar_persona(&p.id);
                         n.anunciar(p.clone());
@@ -598,13 +638,13 @@ fn avisos_para(
                         "{}: {} propone garantía {}",
                         obra.nombre,
                         obra.contratista.nombre,
-                        monto(obra.garantia)
+                        mm(obra.moneda, obra.garantia, lang)
                     ),
                     Idioma::En => format!(
                         "{}: {} proposes guarantee {}",
                         obra.nombre,
                         obra.contratista.nombre,
-                        monto(obra.garantia)
+                        mm(obra.moneda, obra.garantia, lang)
                     ),
                 },
                 obra_id: obra.id.clone(),
@@ -622,11 +662,11 @@ fn avisos_para(
                     texto: match lang {
                         Idioma::Es => format!(
                             "{}: {} propone extra {} ({})",
-                            obra.nombre, ex.por.nombre, detalle, monto(ex.monto)
+                            obra.nombre, ex.por.nombre, detalle, mm(obra.moneda, ex.monto, lang)
                         ),
                         Idioma::En => format!(
                             "{}: {} proposes extra {} ({})",
-                            obra.nombre, ex.por.nombre, detalle, monto(ex.monto)
+                            obra.nombre, ex.por.nombre, detalle, mm(obra.moneda, ex.monto, lang)
                         ),
                     },
                     obra_id: obra.id.clone(),
@@ -1119,7 +1159,7 @@ fn Cuenta(
             }
             section { class: "panel",
             h2 { {lang.t("Billetera", "Wallet")} }
-            p { class: "help", "{caja::escala(matches!(lang, Idioma::Es))}" }
+            p { class: "help", "{caja::estado_cotizacion(matches!(lang, Idioma::Es))}" }
             if let Some(addr) = vista().personal.clone() {
                 span { class: "mono caja", "{addr}" }
                 button {
@@ -1369,7 +1409,7 @@ fn Billetera(
                     div { class: "col",
                         section { class: "panel",
                             h2 { {lang.t("Crear billetera", "Create wallet")} }
-                            p { class: "help", "{caja::escala(es)}" }
+                            p { class: "help", "{caja::nota_precio_stagenet(es)}" }
                             p { class: "help",
                                 {lang.t(
                                     "Todavía no hay semilla en este equipo. Se crean 25 palabras nuevas y quedan en la carpeta de datos.",
@@ -1530,7 +1570,7 @@ fn Tablero(
                                         onclick: move |_| {
                                             if a.es_oferta {
                                                 if let Some(o) = ofertas().into_iter().find(|o| o.id == a.obra_id) {
-                                                    garantia_acc.set(o.garantia_sugerida.to_string());
+                                                    garantia_acc.set(monto_editable(o.moneda, o.garantia_sugerida));
                                                     sel_oferta.set(Some(o));
                                                     screen.set(Screen::Oferta);
                                                 }
@@ -1573,7 +1613,7 @@ fn Tablero(
                                                     span { class: "chip chip-off", {lang.t("Esperando contratista", "Waiting for contractor")} }
                                                 }
                                                 p { class: "meta",
-                                                    {match lang { Idioma::Es => format!("Trabajo {} · garantía {} · {} partidas", monto(o.trabajo), monto(o.garantia_sugerida), o.n_partidas_sugeridas), Idioma::En => format!("Job {} · guarantee {} · {} stages", monto(o.trabajo), monto(o.garantia_sugerida), o.n_partidas_sugeridas) }}
+                                                    {match lang { Idioma::Es => format!("Trabajo {} · garantía {} · {} partidas", mm(o.moneda, o.trabajo, lang), mm(o.moneda, o.garantia_sugerida, lang), o.n_partidas_sugeridas), Idioma::En => format!("Job {} · guarantee {} · {} stages", mm(o.moneda, o.trabajo, lang), mm(o.moneda, o.garantia_sugerida, lang), o.n_partidas_sugeridas) }}
                                                 }
                                                 if let Some(r) = resumen_detalles(&o.detalles) {
                                                     p { class: "meta", "{r}" }
@@ -1650,7 +1690,7 @@ fn Tablero(
                                     button {
                                         class: "card",
                                         onclick: move |_| {
-                                            garantia_acc.set(o.garantia_sugerida.to_string());
+                                            garantia_acc.set(monto_editable(o.moneda, o.garantia_sugerida));
                                             sel_oferta.set(Some(o.clone()));
                                             screen.set(Screen::Oferta);
                                         },
@@ -1660,7 +1700,7 @@ fn Tablero(
                                         }
                                         p { class: "meta", "{lang.t(\"Mandante\", \"Client\")}: {o.mandante.nombre}" }
                                         p { class: "meta",
-                                            {match lang { Idioma::Es => format!("Trabajo {} · garantía sugerida {}", monto(o.trabajo), monto(o.garantia_sugerida)), Idioma::En => format!("Job {} · suggested guarantee {}", monto(o.trabajo), monto(o.garantia_sugerida)) }}
+                                            {match lang { Idioma::Es => format!("Trabajo {} · garantía sugerida {}", mm(o.moneda, o.trabajo, lang), mm(o.moneda, o.garantia_sugerida, lang)), Idioma::En => format!("Job {} · suggested guarantee {}", mm(o.moneda, o.trabajo, lang), mm(o.moneda, o.garantia_sugerida, lang)) }}
                                         }
                                         if let Some(r) = resumen_detalles(&o.detalles) {
                                             p { class: "meta", "{r}" }
@@ -1707,9 +1747,9 @@ fn Tablero(
                                     }
                                     p { class: "meta",
                                         if soy_m {
-                                            {match lang { Idioma::Es => format!("Contratista {} · {} partidas · {} por lado", o.contratista.nombre, o.n_partidas, monto(o.garantia)), Idioma::En => format!("Contractor {} · {} stages · {} per side", o.contratista.nombre, o.n_partidas, monto(o.garantia)) }}
+                                            {match lang { Idioma::Es => format!("Contratista {} · {} partidas · {} por lado", o.contratista.nombre, o.n_partidas, mm(o.moneda, o.garantia, lang)), Idioma::En => format!("Contractor {} · {} stages · {} per side", o.contratista.nombre, o.n_partidas, mm(o.moneda, o.garantia, lang)) }}
                                         } else {
-                                            {match lang { Idioma::Es => format!("Mandante {} · {} partidas · {} por lado", o.mandante.nombre, o.n_partidas, monto(o.garantia)), Idioma::En => format!("Client {} · {} stages · {} per side", o.mandante.nombre, o.n_partidas, monto(o.garantia)) }}
+                                            {match lang { Idioma::Es => format!("Mandante {} · {} partidas · {} por lado", o.mandante.nombre, o.n_partidas, mm(o.moneda, o.garantia, lang)), Idioma::En => format!("Client {} · {} stages · {} per side", o.mandante.nombre, o.n_partidas, mm(o.moneda, o.garantia, lang)) }}
                                         }
                                     }
                                     if o.estado == EstadoObra::Contra && soy_m {
@@ -1735,9 +1775,11 @@ fn Nueva(
     garantia: Signal<String>,
     obra_nom: Signal<String>,
 ) -> Element {
-    let t: u64 = trabajo().chars().filter(|c| c.is_ascii_digit()).collect::<String>().parse().unwrap_or(0);
-    let g: u64 = garantia().chars().filter(|c| c.is_ascii_digit()).collect::<String>().parse().unwrap_or(0);
+    // Montos en dólares (centavos).
+    let t: u64 = leer_monto(Moneda::Usd, &trabajo());
+    let g: u64 = leer_monto(Moneda::Usd, &garantia());
     let preview = n_partidas(t, g);
+    let _ = PRECIO();
     let mut detalles = use_signal(|| vec![String::new(); 5]);
     use_effect(move || {
         if let Ok(n) = n_partidas(t, g) {
@@ -1767,13 +1809,13 @@ fn Nueva(
                 value: "{obra_nom}",
                 oninput: move |e| obra_nom.set(e.value()),
             }
-            label { class: "et", {lang.t("TRABAJO", "JOB AMOUNT")} }
+            label { class: "et", {lang.t("TRABAJO (USD)", "JOB AMOUNT (USD)")} }
             input {
                 r#type: "text",
                 value: "{trabajo}",
                 oninput: move |e| trabajo.set(e.value()),
             }
-            label { class: "et", {lang.t("GARANTÍA SUGERIDA", "SUGGESTED GUARANTEE")} }
+            label { class: "et", {lang.t("GARANTÍA SUGERIDA POR PARTIDA (USD)", "SUGGESTED GUARANTEE PER STAGE (USD)")} }
             input {
                 r#type: "text",
                 value: "{garantia}",
@@ -1781,10 +1823,12 @@ fn Nueva(
             }
             p { class: if preview.is_ok() { "estado info" } else { "estado err" },
                 match preview.clone() {
-                    Ok(n) => match lang { Idioma::Es => format!("{n} partidas. En cada una los dos encierran {g}."), Idioma::En => format!("{n} stages. In each one both lock {g}.") },
+                    Ok(n) => match lang { Idioma::Es => format!("{n} partidas. En cada una los dos encierran {}.", caja::texto_usd_aprox(true, g)), Idioma::En => format!("{n} stages. In each one both lock {}.", caja::texto_usd_aprox(false, g)) },
                     Err(e) => lang.error(&e),
                 }
             }
+            p { class: "help", "{caja::estado_cotizacion(lang == Idioma::Es)}" }
+            p { class: "help", "{caja::nota_precio_stagenet(lang == Idioma::Es)}" }
             p { class: "help", {lang.t("Mientras nadie la tome, la podés quitar del tablero. Se retira también para el contratista.", "While nobody takes it, you can remove it from the board. It is withdrawn for the contractor too.")} }
             button {
                 class: "btn btn-primary",
@@ -1794,7 +1838,7 @@ fn Nueva(
                         err.set(Some(lang_now().t("La red todavía no arrancó.", "The network has not started yet.").into()));
                         return;
                     };
-                    match Oferta::publicar(m, obra_nom(), t, g, detalles()) {
+                    match Oferta::publicar_usd(m, obra_nom(), t, g, detalles()) {
                         Ok(mut o) => {
                             o.sellar_retiro(&consume_context::<Signal<ClaveSec>>()().0);
                             err.set(None);
@@ -1855,12 +1899,7 @@ fn VerOferta(
     });
     use_effect(move || {
         let Some(of) = sel_oferta() else { return };
-        let g: u64 = garantia_acc()
-            .chars()
-            .filter(|c| c.is_ascii_digit())
-            .collect::<String>()
-            .parse()
-            .unwrap_or(0);
+        let g: u64 = leer_monto(of.moneda, &garantia_acc());
         if let Ok(n) = n_partidas(of.trabajo, g) {
             let n = n as usize;
             let mut d = detalles();
@@ -1873,9 +1912,11 @@ fn VerOferta(
     let Some(o) = sel_oferta() else {
         return rsx! { p { {lang.t("No hay oferta.", "There is no offer.")} } };
     };
-    let g: u64 = garantia_acc().chars().filter(|c| c.is_ascii_digit()).collect::<String>().parse().unwrap_or(0);
+    let g: u64 = leer_monto(o.moneda, &garantia_acc());
     let preview = n_partidas(o.trabajo, g);
     let contra = g != o.garantia_sugerida;
+    let gtxt = mm(o.moneda, g, lang);
+    let _ = PRECIO();
     rsx! {
         div { class: "pane",
             div { class: "migas",
@@ -1883,13 +1924,13 @@ fn VerOferta(
             }
             h1 { "{o.nombre}" }
             p { class: "sub",
-                {match lang { Idioma::Es => format!("{} ofrece trabajo por {}. Garantía sugerida {} ({} partidas).", o.mandante.nombre, monto(o.trabajo), monto(o.garantia_sugerida), o.n_partidas_sugeridas), Idioma::En => format!("{} offers a job for {}. Suggested guarantee {} ({} stages).", o.mandante.nombre, monto(o.trabajo), monto(o.garantia_sugerida), o.n_partidas_sugeridas) }}
+                {match lang { Idioma::Es => format!("{} ofrece trabajo por {}. Garantía sugerida {} ({} partidas).", o.mandante.nombre, mm(o.moneda, o.trabajo, lang), mm(o.moneda, o.garantia_sugerida, lang), o.n_partidas_sugeridas), Idioma::En => format!("{} offers a job for {}. Suggested guarantee {} ({} stages).", o.mandante.nombre, mm(o.moneda, o.trabajo, lang), mm(o.moneda, o.garantia_sugerida, lang), o.n_partidas_sugeridas) }}
             }
             div { class: "cols parejas",
             div { class: "col",
             section { class: "panel",
             h2 { {lang.t("Tu respuesta", "Your answer")} }
-            label { class: "et", {lang.t("TU GARANTÍA", "YOUR GUARANTEE")} }
+            label { class: "et", {if o.moneda == Moneda::Usd { lang.t("TU GARANTÍA POR PARTIDA (USD)", "YOUR GUARANTEE PER STAGE (USD)") } else { lang.t("TU GARANTÍA", "YOUR GUARANTEE") }} }
             input {
                 r#type: "text",
                 value: "{garantia_acc}",
@@ -1897,12 +1938,16 @@ fn VerOferta(
             }
             p { class: if preview.is_err() { "estado err" } else if contra { "estado wait" } else { "estado info" },
                 match preview.clone() {
-                    Ok(n) if contra => match lang { Idioma::Es => format!("Contra: {n} partidas de {g}. El mandante tiene que confirmar."), Idioma::En => format!("Counter: {n} stages of {g}. The client has to confirm.") },
-                    Ok(n) => match lang { Idioma::Es => format!("Aceptás {n} partidas. Los dos encierran {g} en cada una."), Idioma::En => format!("You accept {n} stages. Both lock {g} in each one.") },
+                    Ok(n) if contra => match lang { Idioma::Es => format!("Contra: {n} partidas de {gtxt}. El mandante tiene que confirmar."), Idioma::En => format!("Counter: {n} stages of {gtxt}. The client has to confirm.") },
+                    Ok(n) => match lang { Idioma::Es => format!("Aceptás {n} partidas. Los dos encierran {gtxt} en cada una."), Idioma::En => format!("You accept {n} stages. Both lock {gtxt} in each one.") },
                     Err(e) => lang.error(&e),
                 }
             }
             p { class: "help", {lang.t("Si cambiás la garantía, mandás una contra: el mandante la confirma o la rechaza.", "If you change the guarantee, you send a counter: the client confirms or rejects it.")} }
+            if o.moneda == Moneda::Usd {
+                p { class: "help", {match lang { Idioma::Es => format!("Por partida: {}. El XMR queda fijo cuando se encierra cada partida.", caja::texto_usd_aprox(true, g)), Idioma::En => format!("Per stage: {}. The XMR is fixed when each stage is locked.", caja::texto_usd_aprox(false, g)) }} }
+                p { class: "help", "{caja::estado_cotizacion(lang == Idioma::Es)}" }
+            }
             button {
                 class: "btn btn-primary",
                 onclick: move |_| {
@@ -2770,7 +2815,7 @@ fn Detalle(
                 }
             }
             p { class: "lead",
-                {match lang { Idioma::Es => format!("Mandante {mnom} · contratista {cnom} · trabajo {}", monto(obra.trabajo)), Idioma::En => format!("Client {mnom} · contractor {cnom} · job {}", monto(obra.trabajo)) }}
+                {match lang { Idioma::Es => format!("Mandante {mnom} · contratista {cnom} · trabajo {}", mm(obra.moneda, obra.trabajo, lang)), Idioma::En => format!("Client {mnom} · contractor {cnom} · job {}", mm(obra.moneda, obra.trabajo, lang)) }}
             }
             div { class: "cols",
                 div { class: "col",
@@ -2779,7 +2824,7 @@ fn Detalle(
                             h2 { {lang.t("Para resolver", "To resolve")} }
                             if contra {
                                 p { class: "estado info",
-                                    {match lang { Idioma::Es => format!("El contratista propone garantía {} ({} partidas).", monto(garantia), n_part), Idioma::En => format!("The contractor proposes guarantee {} ({} stages).", monto(garantia), n_part) }}
+                                    {match lang { Idioma::Es => format!("El contratista propone garantía {} ({} partidas).", mm(obra.moneda, garantia, lang), n_part), Idioma::En => format!("The contractor proposes guarantee {} ({} stages).", mm(obra.moneda, garantia, lang), n_part) }}
                                 }
                                 if soy_m {
                                     div { class: "acciones",
@@ -2913,9 +2958,9 @@ fn Detalle(
                             if abierta {
                                 if let Some(ex) = obra.extra.clone() {
                                     if ex.por.id == mid {
-                                        p { class: "estado wait", {match lang { Idioma::Es => format!("Esperando respuesta a la extra: {} ({} por lado)", extra_label, monto(ex.monto)), Idioma::En => format!("Waiting for an answer on the extra: {} ({} per side)", extra_label, monto(ex.monto)) }} }
+                                        p { class: "estado wait", {match lang { Idioma::Es => format!("Esperando respuesta a la extra: {} ({} por lado)", extra_label, mm(obra.moneda, ex.monto, lang)), Idioma::En => format!("Waiting for an answer on the extra: {} ({} per side)", extra_label, mm(obra.moneda, ex.monto, lang)) }} }
                                     } else {
-                                        p { class: "estado info", {match lang { Idioma::Es => format!("{} propone extra: {} (+{} por lado)", ex.por.nombre, extra_label, monto(ex.monto)), Idioma::En => format!("{} proposes extra: {} (+{} per side)", ex.por.nombre, extra_label, monto(ex.monto)) }} }
+                                        p { class: "estado info", {match lang { Idioma::Es => format!("{} propone extra: {} (+{} por lado)", ex.por.nombre, extra_label, mm(obra.moneda, ex.monto, lang)), Idioma::En => format!("{} proposes extra: {} (+{} per side)", ex.por.nombre, extra_label, mm(obra.moneda, ex.monto, lang)) }} }
                                         div { class: "acciones",
                                             button {
                                                 class: "btn btn-primary",
@@ -2988,7 +3033,7 @@ fn Detalle(
                                     let label = lang.label_partida(p);
                                     let kind = chip_partida(p.estado);
                                     let (curso, frenado, toca, traba) = en_curso.get(i).cloned().unwrap_or((None, false, false, None));
-                                    let corto = caja::saldo_corto(es, p.estado, p.capital(garantia), p.fondeo_txid.is_some());
+                                    let corto = caja::saldo_corto(es, p.estado, obra.piconero_partida(i), p.fondeo_txid.is_some());
                                     rsx! {
                                         button {
                                             class: if on { "partida on" } else { "partida" },
@@ -2999,7 +3044,7 @@ fn Detalle(
                                             span { class: "num", "{i + 1}" }
                                             div { class: "txt",
                                                 strong { "{titulo}" }
-                                                span { "{monto(p.capital(garantia))} {lang.t(\"por lado\", \"per side\")}" }
+                                                span { "{mm(obra.moneda, p.capital(garantia), lang)} {lang.t(\"por lado\", \"per side\")}" }
                                                 if let Some(corto) = corto {
                                                     span { "{corto}" }
                                                 }
@@ -3034,10 +3079,10 @@ fn Detalle(
                                     value: "{extra_nom}",
                                     oninput: move |e| extra_nom.set(e.value()),
                                 }
-                                label { class: "et", {lang.t("MONTO POR LADO", "AMOUNT PER SIDE")} }
+                                label { class: "et", {if obra.moneda == Moneda::Usd { lang.t("MONTO POR LADO (USD)", "AMOUNT PER SIDE (USD)") } else { lang.t("MONTO POR LADO", "AMOUNT PER SIDE") }} }
                                 input {
                                     r#type: "text",
-                                    placeholder: lang.t("P. ej. 3000", "E.g. 3000"),
+                                    placeholder: if obra.moneda == Moneda::Usd { lang.t("P. ej. 150", "E.g. 150") } else { lang.t("P. ej. 3000", "E.g. 3000") },
                                     value: "{extra_monto}",
                                     oninput: move |e| extra_monto.set(e.value()),
                                 }
@@ -3050,12 +3095,7 @@ fn Detalle(
                                             if extra_nom().trim().is_empty() {
                                                 return;
                                             }
-                                            let m = extra_monto()
-                                                .chars()
-                                                .filter(|c| c.is_ascii_digit())
-                                                .collect::<String>()
-                                                .parse()
-                                                .unwrap_or(0);
+                                            let m = leer_monto(obra.moneda, &extra_monto());
                                             if m == 0 {
                                                 err.set(Some(lang_now().t("La extra lleva un monto mayor a cero.", "The extra needs an amount greater than zero.").into()));
                                                 return;
@@ -3096,9 +3136,9 @@ fn Detalle(
                             dt { {lang.t("Partidas", "Stages")} }
                             dd { "{n_part}" }
                             dt { {lang.t("Garantía", "Guarantee")} }
-                            dd { "{monto(garantia)}" }
+                            dd { "{mm(obra.moneda, garantia, lang)}" }
                             dt { {lang.t("Trabajo", "Job")} }
-                            dd { "{monto(obra.trabajo)}" }
+                            dd { "{mm(obra.moneda, obra.trabajo, lang)}" }
                         }
                     }
                     section { class: "panel",
@@ -3342,6 +3382,11 @@ fn VerPartida(
     let garantia = obra.garantia;
     let propuesto = p.propuesto;
     let cerrado = p.estado == PartidaEstado::Pagada;
+    let _ = PRECIO();
+    let usd = obra.moneda == Moneda::Usd;
+    let xmr_linea = if usd { caja::xmr_partida(es, &obra, i) } else { None };
+    let aviso_precio = p.precio.as_ref().and_then(|pr| caja::aviso_diferencia_precio(es, pr));
+    let xmr_pagado = p.precio.as_ref().zip(p.pago).map(|(pr, n)| caja::fmt_xmr(pr.piconero_pct(n)));
     let cortada = matches!(
         obra.estado,
         EstadoObra::Abandonada | EstadoObra::Cerrada | EstadoObra::Rechazada
@@ -3382,7 +3427,7 @@ fn VerPartida(
         })
         .collect();
     let nom_obra = obra.nombre.clone();
-    let saldo = caja::saldo_partida(es, p.estado, p.capital(garantia), p.fondeo_txid.is_some(), &obra.mandante.nombre, &obra.contratista.nombre);
+    let saldo = caja::saldo_partida(es, p.estado, obra.piconero_partida(i), p.fondeo_txid.is_some(), &obra.mandante.nombre, &obra.contratista.nombre);
     // Botón "solo este equipo": a la vista si el motor se frenó, si no en Avanzado.
     let salir_btn = {
         let obra = obra.clone();
@@ -3466,7 +3511,10 @@ fn VerPartida(
                 }
             }
             p { class: "lead",
-                {match lang { Idioma::Es => format!("{} por lado · mandante {} · contratista {}", monto(p.capital(garantia)), obra.mandante.nombre, obra.contratista.nombre), Idioma::En => format!("{} per side · client {} · contractor {}", monto(p.capital(garantia)), obra.mandante.nombre, obra.contratista.nombre) }}
+                {match lang { Idioma::Es => format!("{} por lado · mandante {} · contratista {}", mm(obra.moneda, p.capital(garantia), lang), obra.mandante.nombre, obra.contratista.nombre), Idioma::En => format!("{} per side · client {} · contractor {}", mm(obra.moneda, p.capital(garantia), lang), obra.mandante.nombre, obra.contratista.nombre) }}
+            }
+            if let Some(x) = xmr_linea.clone() {
+                p { class: if p.precio.is_some() { "lead xmr fijo" } else { "lead xmr" }, "{x}" }
             }
             div { class: "cols",
                 div { class: "col",
@@ -3493,11 +3541,14 @@ fn VerPartida(
                             if let Some(r) = p.recibo.as_ref() {
                                 div { class: "recibo",
                                     strong { "{lang.t(\"Recibo\", \"Receipt\")} · {r.titulo}" }
-                                    p { {match lang { Idioma::Es => format!("Pagó {}% · {} · aceptó {} · {}", r.porcentaje, monto(r.monto), r.acepto_nombre, lang.fmt_cuando(r.cuando)), Idioma::En => format!("Paid {}% · {} · accepted by {} · {}", r.porcentaje, monto(r.monto), r.acepto_nombre, lang.fmt_cuando(r.cuando)) }} }
+                                    p { {match lang { Idioma::Es => format!("Pagó {}% · {} · aceptó {} · {}", r.porcentaje, mm(obra.moneda, r.monto, lang), r.acepto_nombre, lang.fmt_cuando(r.cuando)), Idioma::En => format!("Paid {}% · {} · accepted by {} · {}", r.porcentaje, mm(obra.moneda, r.monto, lang), r.acepto_nombre, lang.fmt_cuando(r.cuando)) }} }
+                                    if let Some(x) = xmr_pagado.clone() {
+                                        p { class: "help", {match lang { Idioma::Es => format!("Al contratista: {x} XMR del monto fijo de la partida."), Idioma::En => format!("To the contractor: {x} XMR of the stage's fixed amount.") }} }
+                                    }
                                 }
                             } else {
                                 p { class: "estado ok",
-                                    {match lang { Idioma::Es => format!("Cerró al {}% ({}). El hilo quedó guardado.", p.pago.unwrap_or(0), monto(monto_pct(garantia, p.pago.unwrap_or(0)))), Idioma::En => format!("Closed at {}% ({}). The thread was saved.", p.pago.unwrap_or(0), monto(monto_pct(garantia, p.pago.unwrap_or(0)))) }}
+                                    {match lang { Idioma::Es => format!("Cerró al {}% ({}). El hilo quedó guardado.", p.pago.unwrap_or(0), mm(obra.moneda, monto_pct(garantia, p.pago.unwrap_or(0)), lang)), Idioma::En => format!("Closed at {}% ({}). The thread was saved.", p.pago.unwrap_or(0), mm(obra.moneda, monto_pct(garantia, p.pago.unwrap_or(0)), lang)) }}
                                 }
                             }
                         }
@@ -3509,6 +3560,10 @@ fn VerPartida(
                                 p { class: "estado info", {lang.t("Todavía no toca. Cerrá la partida que está en curso.", "Not this one yet. Close the stage that is underway.")} }
                             } else if acc.proponer_encierre {
                                 p { class: "help", {lang.t("Encerrar pone la garantía de los dos en la caja 2-de-2. Los dos tienen que confirmar y estar en línea.", "Locking puts both guarantees in the 2-of-2 box. Both have to confirm and be online.")} }
+                                if usd {
+                                    p { class: "help", {lang.t("Al proponer, el XMR de esta partida queda fijo con el precio de ahora. El otro lo ve antes de confirmar.", "When you propose, this stage's XMR is fixed at the current price. The other person sees it before confirming.")} }
+                                    p { class: "help", "{caja::estado_cotizacion(es)}" }
+                                }
                                 if confirma_encerrar() {
                                     div { class: "acciones",
                                         button {
@@ -3522,7 +3577,15 @@ fn VerPartida(
                                                     }
                                                     let Some(quien) = yo() else { return };
                                                     let Some(nodo) = red() else { return };
-                                                    match obra.encerrar_proponer(i, &quien) {
+                                                    // Obras en USD: el XMR queda fijo con el precio de ahora.
+                                                    let precio = match caja::precio_para_encerrar(&obra, i) {
+                                                        Ok(pr) => pr,
+                                                        Err(e) => {
+                                                            err.set(Some(caja::aviso_humano(&e, lang_now() == Idioma::Es)));
+                                                            return;
+                                                        }
+                                                    };
+                                                    match obra.encerrar_proponer_con(i, &quien, precio) {
                                                         Ok(()) => {
                                                             err.set(None);
                                                             confirma_encerrar.set(false);
@@ -3556,6 +3619,12 @@ fn VerPartida(
                             }
                             if acc.confirmar_fondeo {
                                 p { class: "estado info", {lang.t("El otro quiere encerrar esta partida. Confirmar arma una sola transacción con los dos.", "The other person wants to lock this stage. Confirm builds one transaction from both wallets.")} }
+                                if let Some(pr) = p.precio.as_ref() {
+                                    p { class: "estado info", {match lang { Idioma::Es => format!("Precio que propone: cada lado pone {}. Confirmar acepta ese precio.", caja::texto_precio_fijado(true, pr)), Idioma::En => format!("Proposed price: each side puts in {}. Confirming accepts that price.", caja::texto_precio_fijado(false, pr)) }} }
+                                }
+                                if let Some(a) = aviso_precio.clone() {
+                                    p { class: "estado wait", "{a}" }
+                                }
                             }
                             div { class: "acciones",
                                 if acc.confirmar_fondeo {
@@ -3679,7 +3748,7 @@ fn VerPartida(
                             if let Some(n) = propuesto {
                                 dl { class: "datos",
                                     dt { {lang.t("Sobre la mesa", "On the table")} }
-                                    dd { strong { "{n}%" } " · {monto(monto_pct(garantia, n))}" }
+                                    dd { strong { "{n}%" } " · {mm(obra.moneda, monto_pct(garantia, n), lang)}" }
                                     if !espera_nom.is_empty() {
                                         dt { {lang.t("Responde", "Answers")} }
                                         dd { if acc.me_toca { {lang.t("vos", "you")} } else { "{espera_nom}" } }
@@ -3837,8 +3906,8 @@ fn VerPartida(
                             if let Some(c) = s.candado {
                                 p { class: "help", "{c}" }
                             }
-                        } else if let Some(pico) = caja::a_piconero(p.capital(garantia)) {
-                            p { {match lang { Idioma::Es => format!("{} XMR por lado en stagenet.", caja::fmt_xmr(pico)), Idioma::En => format!("{} XMR per side on stagenet.", caja::fmt_xmr(pico)) }} }
+                        } else if let Some(x) = caja::xmr_partida(es, &obra, i) {
+                            p { "{x}" }
                         }
                         CajaLlave { obra_id: obra.id.clone(), caja: caja.clone(), vista }
                         if p.fondeo_txid.is_some() || p.pago_txid.is_some() || p.encerrado_por.is_some() {

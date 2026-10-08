@@ -87,7 +87,7 @@ fun CajaDatos(obraId: String, direccion: String?, mirada: MiradaVista?, acciones
 
 /** Importar un share suelto de 0.2.7 o antes. Desde 0.2.8 el share va en el respaldo completo. */
 @Composable
-fun CajaRespaldo(obraId: String, hayCaja: Boolean, acciones: Acciones, banner: Banner) {
+fun CajaRespaldo(acciones: Acciones) {
     val app = AppHolder.a
     val abrirShare = rememberAbrirArchivo(acciones) { app.restaurarShare(it) }
     Secundario("Importar un share suelto (.share)") { abrirShare() }
@@ -95,13 +95,6 @@ fun CajaRespaldo(obraId: String, hayCaja: Boolean, acciones: Acciones, banner: B
         Ayuda("Desde 0.2.8 el share de cada caja va en el respaldo completo (Billetera → Respaldos y recuperación).")
         Ayuda("Esto es para archivos .share de 0.2.7 o antes. Tiene que ser el tuyo y la obra tiene que seguir en este equipo.")
     }
-}
-
-/** Compatibilidad: caja completa (datos + respaldo). */
-@Composable
-fun CajaPanel(obraId: String, direccion: String?, mirada: MiradaVista?, acciones: Acciones, banner: Banner) {
-    CajaDatos(obraId, direccion, mirada, acciones)
-    CajaRespaldo(obraId, direccion != null, acciones, banner)
 }
 
 /** Una sola línea con lo que pasa ahora en la obra. */
@@ -192,8 +185,8 @@ fun ObraScreen(id: String, nav: Nav, banner: Banner) {
         } else if (o.puedeExtra) {
             Plegable("Partida extra (opcional)", "Proponer trabajo adicional") {
                 OutlinedTextField(extraTexto, { extraTexto = it }, label = { Text("P. ej. Techumbre extra") }, modifier = Modifier.fillMaxWidth())
-                OutlinedTextField(extraMonto, { extraMonto = it }, label = { Text("Monto por lado") },
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number), modifier = Modifier.fillMaxWidth())
+                OutlinedTextField(extraMonto, { extraMonto = it }, label = { Text(if (o.usd) "Monto por lado (USD)" else "Monto por lado") },
+                    keyboardOptions = KeyboardOptions(keyboardType = if (o.usd) KeyboardType.Decimal else KeyboardType.Number), modifier = Modifier.fillMaxWidth())
                 Secundario("Proponer extra") {
                     acciones.correr("Extra propuesta.", alTerminar = { extraTexto = ""; extraMonto = "" }) {
                         app.proponerExtra(id, extraTexto, extraMonto)
@@ -214,7 +207,7 @@ fun ObraScreen(id: String, nav: Nav, banner: Banner) {
         }
         Tarjeta("Caja y pagos") { CajaDatos(o.id, o.cajaDireccion, o.mirada, acciones) }
         Plegable("Importar share suelto", "Avanzado · archivos de 0.2.7 o antes") {
-            CajaRespaldo(o.id, o.cajaDireccion != null, acciones, banner)
+            CajaRespaldo(acciones)
         }
     }
 

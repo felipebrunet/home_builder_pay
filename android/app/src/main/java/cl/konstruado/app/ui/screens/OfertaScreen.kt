@@ -35,7 +35,7 @@ fun OfertaScreen(id: String, nav: Nav, banner: Banner) {
     val app = AppHolder.a
     val r = sondear(id) { app.oferta(id) } ?: run { Pista("Cargando…"); return }
     val o = r.getOrElse { ErrorTexto(it.humano()); return }
-    var garantia by remember(id) { mutableStateOf(o.garantiaSugerida.toString()) }
+    var garantia by remember(id) { mutableStateOf(o.garantiaEditable) }
     val detalles = remember(id) { mutableStateListOf<String>() }
     var previa by remember { mutableStateOf<uniffi.konstruado_ffi.PreviaAceptar?>(null) }
     LaunchedEffect(garantia) {
@@ -49,8 +49,8 @@ fun OfertaScreen(id: String, nav: Nav, banner: Banner) {
     }
     Titulo(o.nombre)
     Lead(o.resumen)
-    OutlinedTextField(garantia, { garantia = it }, label = { Text("Tu garantía") },
-        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number), modifier = Modifier.fillMaxWidth())
+    OutlinedTextField(garantia, { garantia = it }, label = { Text(if (o.usd) "Tu garantía por partida (USD)" else "Tu garantía") },
+        keyboardOptions = KeyboardOptions(keyboardType = if (o.usd) KeyboardType.Decimal else KeyboardType.Number), modifier = Modifier.fillMaxWidth())
     previa?.let { p -> if (p.ok) Pista(p.texto) else ErrorTexto(p.texto) }
     val contra = previa?.contra == true
     Seccion("Partidas")

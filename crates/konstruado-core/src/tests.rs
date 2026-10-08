@@ -476,3 +476,134 @@ fn extra_no_entra_si_esta_abandonada() {
     assert!(obra.extra.is_none());
     assert_eq!(obra.aceptar_extra(&c), Err(Error::NoToca));
 }
+
+// ── Obras en USD: precio fijado al proponer el encierre ──
+
+fn obra_usd() -> (Obra, Persona, Persona) {
+    let m = Persona::nueva("Felipe").unwrap();
+    let c = Persona::nueva("Juan").unwrap();
+    // USD 100 de trabajo, USD 50 de garantía por partida: 2 partidas.
+    let o = Oferta::publicar_usd(m.clone(), "Casa", 10_000, 5_000, vec![]).unwrap();
+    assert_eq!(o.moneda, Moneda::Usd);
+    let a = Aceptacion::de(&o, c.clone(), 5_000).unwrap();
+    let obra = Obra::desde_oferta(o, a).unwrap();
+    assert_eq!(obra.moneda, Moneda::Usd);
+    (obra, m, c)
+}
+
+#[test]
+fn usd_pide_precio_para_encerrar_y_fija_el_xmr() {
+    let (mut obra, m, c) = obra_usd();
+    assert_eq!(obra.piconero_partida(0), None);
+    assert_eq!(obra.encerrar_proponer(0, &m), Err(Error::Precio));
+    // Precio con dólares que no son los de la partida: no.
+    let malo = PrecioFijado::nuevo(4_000, 16_000, "coingecko", 1).unwrap();
+    assert_eq!(obra.encerrar_proponer_con(0, &m, Some(malo)), Err(Error::Precio));
+    // Precio inconsistente (piconero tocado): no.
+    let mut tocado = PrecioFijado::nuevo(5_000, 16_000, "coingecko", 1).unwrap();
+    tocado.piconero += 7;
+    assert_eq!(obra.encerrar_proponer_con(0, &m, Some(tocado)), Err(Error::Precio));
+    let pr = PrecioFijado::nuevo(5_000, 16_000, "coingecko", 1).unwrap();
+    obra.encerrar_proponer_con(0, &m, Some(pr.clone())).unwrap();
+    // USD 50 a USD 160/XMR = 0,3125 XMR por lado.
+    assert_eq!(obra.piconero_partida(0), Some(312_500_000_000));
+    obra.encerrar_confirmar(0, &c).unwrap();
+    assert_eq!(obra.partidas[0].precio.as_ref(), Some(&pr));
+}
+
+#[test]
+fn usd_los_dos_terminan_con_el_mismo_xmr() {
+    let (mut a, m, c) = obra_usd();
+    let mut b = a.clone();
+    let pr = PrecioFijado::nuevo(5_000, 15_437, "kraken", 7).unwrap();
+    a.encerrar_proponer_con(0, &m, Some(pr)).unwrap();
+    b.fusionar(a.clone());
+    assert_eq!(b.piconero_partida(0), a.piconero_partida(0));
+    b.encerrar_confirmar(0, &c).unwrap();
+    a.fusionar(b.clone());
+    assert_eq!(a.partidas[0].estado, PartidaEstado::Encerrada);
+    assert_eq!(a.piconero_partida(0), b.piconero_partida(0));
+}
+
+#[test]
+fn usd_copia_sin_precio_no_borra_el_fijado() {
+    // Un par viejo reenvía la obra sin el campo `precio` (y sin `moneda`).
+    let (mut a, m, c) = obra_usd();
+    let pr = PrecioFijado::nuevo(5_000, 16_000, "coingecko", 1).unwrap();
+    a.encerrar_proponer_con(0, &m, Some(pr.clone())).unwrap();
+    let mut vieja = a.clone();
+    vieja.encerrar_confirmar(0, &c).unwrap();
+    vieja.moneda = Moneda::Unidades;
+    for p in &mut vieja.partidas {
+        p.precio = None;
+    }
+    a.fusionar(vieja);
+    assert_eq!(a.moneda, Moneda::Usd);
+    assert_eq!(a.partidas[0].estado, PartidaEstado::Encerrada);
+    assert_eq!(a.partidas[0].precio, Some(pr));
+}
+
+#[test]
+fn usd_cancelar_borra_el_precio_en_los_dos() {
+    let (mut a, m, c) = obra_usd();
+    let pr = PrecioFijado::nuevo(5_000, 16_000, "coingecko", 1).unwrap();
+    a.encerrar_proponer_con(0, &m, Some(pr)).unwrap();
+    let mut b = a.clone();
+    b.encerrar_cancelar(0, &c).unwrap();
+    assert!(b.partidas[0].precio.is_none());
+    a.fusionar(b);
+    assert_eq!(a.partidas[0].estado, PartidaEstado::Pendiente);
+    assert!(a.partidas[0].precio.is_none());
+    // Se puede volver a proponer con otro precio.
+    let otro = PrecioFijado::nuevo(5_000, 20_000, "kraken", 2).unwrap();
+    a.encerrar_proponer_con(0, &c, Some(otro)).unwrap();
+    assert_eq!(a.piconero_partida(0), Some(250_000_000_000));
+}
+
+#[test]
+fn usd_propuestas_cruzadas_con_precios_distintos_convergen() {
+    // Los dos proponen a la vez con su propio precio: después de fusionar en
+    // las dos direcciones quedan con el mismo proponente y el mismo XMR.
+    let (base, m, c) = obra_usd();
+    let mut a = base.clone();
+    let mut b = base;
+    a.encerrar_proponer_con(0, &m, Some(PrecioFijado::nuevo(5_000, 16_000, "coingecko", 1).unwrap()))
+        .unwrap();
+    b.encerrar_proponer_con(0, &c, Some(PrecioFijado::nuevo(5_000, 17_000, "kraken", 2).unwrap()))
+        .unwrap();
+    let (a0, b0) = (a.clone(), b.clone());
+    a.fusionar(b0);
+    b.fusionar(a0);
+    assert_eq!(a.partidas[0].encerrado_por, b.partidas[0].encerrado_por);
+    assert_eq!(a.partidas[0].precio, b.partidas[0].precio);
+    assert_eq!(a.piconero_partida(0), b.piconero_partida(0));
+}
+
+#[test]
+fn obra_vieja_sigue_en_unidades() {
+    let m = Persona::nueva("Felipe").unwrap();
+    let c = Persona::nueva("Juan").unwrap();
+    let o = Oferta::publicar(m.clone(), "Casa", 10_000, 2_000, vec![]).unwrap();
+    let a = Aceptacion::de(&o, c, 2_000).unwrap();
+    let mut obra = Obra::desde_oferta(o, a).unwrap();
+    assert_eq!(obra.moneda, Moneda::Unidades);
+    // Sin campo moneda en el JSON (0.2.9): unidades.
+    let json = serde_json::to_string(&obra).unwrap();
+    assert!(!json.contains("moneda"));
+    let leida: Obra = serde_json::from_str(&json).unwrap();
+    assert_eq!(leida.moneda, Moneda::Unidades);
+    obra.encerrar_proponer(0, &m).unwrap();
+    assert!(obra.partidas[0].precio.is_none());
+    // 2000 unidades = 0,04 XMR.
+    assert_eq!(obra.piconero_partida(0), Some(40_000_000_000));
+}
+
+#[test]
+fn oferta_usd_viaja_con_su_moneda() {
+    let m = Persona::nueva("Felipe").unwrap();
+    let o = Oferta::publicar_usd(m, "Casa", 10_000, 5_000, vec![]).unwrap();
+    let json = serde_json::to_string(&o).unwrap();
+    assert!(json.contains("\"moneda\":\"usd\""));
+    let leida: Oferta = serde_json::from_str(&json).unwrap();
+    assert_eq!(leida.moneda, Moneda::Usd);
+}

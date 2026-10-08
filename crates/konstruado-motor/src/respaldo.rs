@@ -848,7 +848,8 @@ mod tests {
         std::fs::write(dir.join(format!("xmr/{}.share", obra.id)), cm.backup().unwrap().to_text()).unwrap();
         let libro = serde_json::json!({
             "direccion": cm.address().to_string(), "desde": h - 5, "hasta": h + 2, "listo": true, "retro": 0,
-            "entradas": [{"altura": h, "monto": 20_000_000_000u64, "tx": txid, "indice": 0, "raw": "00"}],
+            // El pozo es 2 × lo que pone cada lado (fijo en USD o por unidades).
+            "entradas": [{"altura": h, "monto": obra.piconero_partida(0).map_or(20_000_000_000u64, |p| 2 * p), "tx": txid, "indice": 0, "raw": "00"}],
         });
         std::fs::write(dir.join(format!("xmr/caja-{}.json", obra.id)), libro.to_string()).unwrap();
     }

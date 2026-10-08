@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::error::Error;
+use crate::precio::{unidades_a_piconero, Moneda, PrecioFijado};
 use crate::partida::{ahora, ajusta_detalles, limpia_nota, monto_pct, n_partidas, porcentaje, titulo_partida};
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -133,6 +134,10 @@ pub struct Partida {
     /// Transacción de pago vista en un bloque.
     #[serde(default)]
     pub pago_txid: Option<String>,
+    /// Obras en USD: XMR por lado fijado al proponer el encierre (precio,
+    /// fuente y hora). Lo ven los dos; la caja usa este `piconero`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub precio: Option<PrecioFijado>,
 }
 
 impl PartidaEstado {
@@ -163,6 +168,7 @@ impl Partida {
             encerrar_seq: 0,
             fondeo_txid: None,
             pago_txid: None,
+            precio: None,
         }
     }
 
@@ -192,8 +198,33 @@ impl Partida {
             self.encerrado_por = otra.encerrado_por.clone();
             self.encerrado_cuando = otra.encerrado_cuando;
             self.encerrar_seq = otra.encerrar_seq;
+            // Volver a Pendiente borra el precio. Una copia sin precio (de un par
+            // viejo que no conoce el campo) no borra el que ya está fijado.
+            if otra.estado == PartidaEstado::Pendiente {
+                self.precio = None;
+            } else if otra.precio.is_some() {
+                self.precio = otra.precio.clone();
+            }
         } else if otra.encerrar_seq > self.encerrar_seq {
             self.encerrar_seq = otra.encerrar_seq;
+        } else if otra.encerrar_seq == self.encerrar_seq
+            && self.estado == PartidaEstado::Encerrando
+            && otra.estado == PartidaEstado::Encerrando
+        {
+            // Los dos propusieron a la vez: gana siempre el mismo (id menor), así
+            // las dos máquinas quedan con el mismo proponente y el mismo precio.
+            let gana_otra = match (&self.encerrado_por, &otra.encerrado_por) {
+                (Some(a), Some(b)) => b.id < a.id,
+                (None, Some(_)) => true,
+                _ => false,
+            };
+            if gana_otra {
+                self.encerrado_por = otra.encerrado_por.clone();
+                self.encerrado_cuando = otra.encerrado_cuando;
+                self.precio = otra.precio.clone();
+            } else if self.precio.is_none() && otra.encerrado_por == self.encerrado_por {
+                self.precio = otra.precio.clone();
+            }
         }
         if otra.estado.rango() > self.estado.rango() {
             self.estado = otra.estado;
@@ -211,6 +242,9 @@ impl Partida {
             }
             if otra.recibo.is_some() {
                 self.recibo = otra.recibo;
+            }
+            if self.precio.is_none() {
+                self.precio = otra.precio.clone();
             }
             llenar_txid(&mut self.fondeo_txid, &otra.fondeo_txid);
             llenar_txid(&mut self.pago_txid, &otra.pago_txid);
@@ -237,6 +271,9 @@ impl Partida {
             }
             if self.monto == 0 {
                 self.monto = otra.monto;
+            }
+            if self.precio.is_none() && self.estado != PartidaEstado::Pendiente {
+                self.precio = otra.precio.clone();
             }
         }
         if self.monto == 0 && otra.monto > 0 {
@@ -320,6 +357,13 @@ pub struct Oferta {
     /// publicadas antes de 0.2.6. Ver `retiro.rs`.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub retiro_hash: String,
+    /// `usd`: trabajo y garantía en centavos de dólar. Sin el campo: unidades viejas.
+    #[serde(default, skip_serializing_if = "es_unidades")]
+    pub moneda: Moneda,
+}
+
+fn es_unidades(m: &Moneda) -> bool {
+    *m == Moneda::Unidades
 }
 
 impl Oferta {
@@ -342,7 +386,21 @@ impl Oferta {
             detalles: ajusta_detalles(n, detalles),
             actualizado: ahora(),
             retiro_hash: String::new(),
+            moneda: Moneda::Unidades,
         })
+    }
+
+    /// Oferta en dólares: `trabajo` y `garantia_sugerida` en centavos.
+    pub fn publicar_usd(
+        mandante: Persona,
+        nombre: impl Into<String>,
+        trabajo_centavos: u64,
+        garantia_centavos: u64,
+        detalles: Vec<String>,
+    ) -> Result<Self, Error> {
+        let mut o = Self::publicar(mandante, nombre, trabajo_centavos, garantia_centavos, detalles)?;
+        o.moneda = Moneda::Usd;
+        Ok(o)
     }
 }
 
@@ -409,6 +467,9 @@ pub struct Obra {
     pub cierre: Option<Persona>,
     #[serde(default)]
     pub cierre_seq: u32,
+    /// `usd`: montos en centavos de dólar y XMR fijado por partida al fondear.
+    #[serde(default, skip_serializing_if = "es_unidades")]
+    pub moneda: Moneda,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -459,11 +520,23 @@ impl Obra {
             actualizado: ahora(),
             cierre: None,
             cierre_seq: 0,
+            moneda: oferta.moneda,
         })
     }
 
     fn tocar(&mut self) {
         self.actualizado = ahora();
+    }
+
+    /// XMR por lado de la partida `i`, el número que usan la caja y el pago.
+    /// Obras viejas: escala fija de unidades. Obras en USD: el precio fijado al
+    /// proponer el encierre (`None` mientras no hay precio).
+    pub fn piconero_partida(&self, i: usize) -> Option<u64> {
+        let p = self.partidas.get(i)?;
+        match self.moneda {
+            Moneda::Unidades => unidades_a_piconero(p.capital(self.garantia)),
+            Moneda::Usd => p.precio.as_ref().filter(|pr| pr.coherente()).map(|pr| pr.piconero),
+        }
     }
 
     pub fn confirmar_contra(&mut self, mandante_id: &str) -> Result<(), Error> {
@@ -521,12 +594,36 @@ impl Obra {
         })
     }
 
-    /// First of two confirmations to lock installment `i`. Stub until XMR.
+    /// First of two confirmations to lock installment `i` (obras en unidades).
     pub fn encerrar_proponer(&mut self, i: usize, quien: &Persona) -> Result<(), Error> {
+        self.encerrar_proponer_con(i, quien, None)
+    }
+
+    /// Propone el encierre. En obras en USD hace falta el precio del momento:
+    /// fija el XMR por lado de la partida y el otro lo acepta al fondear.
+    pub fn encerrar_proponer_con(
+        &mut self,
+        i: usize,
+        quien: &Persona,
+        precio: Option<PrecioFijado>,
+    ) -> Result<(), Error> {
         let _ = self.rol_de(&quien.id)?;
+        let usd = self.moneda.es_usd();
+        let garantia = self.garantia;
         let p = self.partidas.get_mut(i).ok_or(Error::NoEsta)?;
         if p.estado != PartidaEstado::Pendiente {
             return Err(Error::YaExiste);
+        }
+        if usd {
+            let ok = precio
+                .as_ref()
+                .is_some_and(|pr| pr.coherente() && pr.usd_centavos == p.capital(garantia));
+            if !ok {
+                return Err(Error::Precio);
+            }
+            p.precio = precio;
+        } else {
+            p.precio = None;
         }
         p.estado = PartidaEstado::Encerrando;
         p.encerrado_por = Some(quien.clone());
@@ -565,6 +662,7 @@ impl Obra {
         }
         p.estado = PartidaEstado::Pendiente;
         p.encerrado_por = None;
+        p.precio = None;
         p.encerrar_seq = p.encerrar_seq.saturating_add(1);
         self.tocar();
         Ok(())
@@ -1007,6 +1105,10 @@ impl Obra {
         llenar_clave(&mut self.contratista, &otra.contratista);
         let extra_otra = otra.extra.take();
         let seq_otra = otra.extra_seq;
+        // La moneda se fija al publicar; una copia de un par viejo llega sin el campo.
+        if otra.moneda.es_usd() {
+            self.moneda = Moneda::Usd;
+        }
         if otra.estado.rango() > self.estado.rango() {
             self.estado = otra.estado;
             self.garantia = otra.garantia;

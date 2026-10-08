@@ -278,6 +278,9 @@ h1 { margin: 0; font-size: 30px; font-weight: 700; line-height: 1.15; }
 
 .lead { margin: 8px 0 0; color: var(--apagado); font-size: 16px; }
 .sub { margin: 6px 0 0; color: var(--apagado); font-size: 15px; }
+/* Monto de la partida en XMR (obras en USD): fijo al fondear. */
+.lead.xmr { color: var(--tinta); font-weight: 600; font-variant-numeric: tabular-nums; }
+.lead.xmr.fijo { color: var(--ok); }
 
 /* ------------------------------------------------------------ paneles */
 

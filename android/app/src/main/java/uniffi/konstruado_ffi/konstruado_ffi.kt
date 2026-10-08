@@ -856,6 +856,14 @@ internal interface UniffiForeignFutureCompleteVoid : com.sun.jna.Callback {
 
 
 
+
+
+
+
+
+
+
+
 // For large crates we prevent `MethodTooLargeException` (see #2340)
 // N.B. the name of the extension is very misleading, since it is 
 // rather `InterfaceTooLargeException`, caused by too many methods 
@@ -880,6 +888,8 @@ fun uniffi_konstruado_ffi_checksum_method_konstruadoapp_aceptar_extra(
 fun uniffi_konstruado_ffi_checksum_method_konstruadoapp_aceptar_oferta(
 ): Short
 fun uniffi_konstruado_ffi_checksum_method_konstruadoapp_aceptar_y_pagar(
+): Short
+fun uniffi_konstruado_ffi_checksum_method_konstruadoapp_actualizar_precio(
 ): Short
 fun uniffi_konstruado_ffi_checksum_method_konstruadoapp_actualizar_saldo(
 ): Short
@@ -925,6 +935,8 @@ fun uniffi_konstruado_ffi_checksum_method_konstruadoapp_empezar_fondeo_de_nuevo(
 ): Short
 fun uniffi_konstruado_ffi_checksum_method_konstruadoapp_enviar(
 ): Short
+fun uniffi_konstruado_ffi_checksum_method_konstruadoapp_estado_precio(
+): Short
 fun uniffi_konstruado_ffi_checksum_method_konstruadoapp_estado_respaldo(
 ): Short
 fun uniffi_konstruado_ffi_checksum_method_konstruadoapp_estado_sala(
@@ -947,6 +959,8 @@ fun uniffi_konstruado_ffi_checksum_method_konstruadoapp_mirar_atras(
 ): Short
 fun uniffi_konstruado_ffi_checksum_method_konstruadoapp_mirar_atras_caja(
 ): Short
+fun uniffi_konstruado_ffi_checksum_method_konstruadoapp_nota_precio(
+): Short
 fun uniffi_konstruado_ffi_checksum_method_konstruadoapp_obra_vista(
 ): Short
 fun uniffi_konstruado_ffi_checksum_method_konstruadoapp_oferta(
@@ -958,6 +972,8 @@ fun uniffi_konstruado_ffi_checksum_method_konstruadoapp_partida_vista(
 fun uniffi_konstruado_ffi_checksum_method_konstruadoapp_perfil(
 ): Short
 fun uniffi_konstruado_ffi_checksum_method_konstruadoapp_previa_aceptar(
+): Short
+fun uniffi_konstruado_ffi_checksum_method_konstruadoapp_previa_publicar(
 ): Short
 fun uniffi_konstruado_ffi_checksum_method_konstruadoapp_probar_daemon(
 ): Short
@@ -1078,6 +1094,8 @@ fun uniffi_konstruado_ffi_fn_method_konstruadoapp_aceptar_oferta(`ptr`: Pointer,
 ): RustBuffer.ByValue
 fun uniffi_konstruado_ffi_fn_method_konstruadoapp_aceptar_y_pagar(`ptr`: Pointer,`obraId`: RustBuffer.ByValue,`indice`: Int,uniffi_out_err: UniffiRustCallStatus, 
 ): Unit
+fun uniffi_konstruado_ffi_fn_method_konstruadoapp_actualizar_precio(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
+): RustBuffer.ByValue
 fun uniffi_konstruado_ffi_fn_method_konstruadoapp_actualizar_saldo(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
 ): Unit
 fun uniffi_konstruado_ffi_fn_method_konstruadoapp_agregar_destino(`ptr`: Pointer,`destino`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
@@ -1122,6 +1140,8 @@ fun uniffi_konstruado_ffi_fn_method_konstruadoapp_empezar_fondeo_de_nuevo(`ptr`:
 ): Unit
 fun uniffi_konstruado_ffi_fn_method_konstruadoapp_enviar(`ptr`: Pointer,`destino`: RustBuffer.ByValue,`montoXmr`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): Unit
+fun uniffi_konstruado_ffi_fn_method_konstruadoapp_estado_precio(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
+): RustBuffer.ByValue
 fun uniffi_konstruado_ffi_fn_method_konstruadoapp_estado_respaldo(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
 fun uniffi_konstruado_ffi_fn_method_konstruadoapp_estado_sala(`ptr`: Pointer,`orbotInstalado`: Byte,uniffi_out_err: UniffiRustCallStatus, 
@@ -1144,6 +1164,8 @@ fun uniffi_konstruado_ffi_fn_method_konstruadoapp_mirar_atras(`ptr`: Pointer,uni
 ): Unit
 fun uniffi_konstruado_ffi_fn_method_konstruadoapp_mirar_atras_caja(`ptr`: Pointer,`obraId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): Unit
+fun uniffi_konstruado_ffi_fn_method_konstruadoapp_nota_precio(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
+): RustBuffer.ByValue
 fun uniffi_konstruado_ffi_fn_method_konstruadoapp_obra_vista(`ptr`: Pointer,`obraId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
 fun uniffi_konstruado_ffi_fn_method_konstruadoapp_oferta(`ptr`: Pointer,`ofertaId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
@@ -1155,6 +1177,8 @@ fun uniffi_konstruado_ffi_fn_method_konstruadoapp_partida_vista(`ptr`: Pointer,`
 fun uniffi_konstruado_ffi_fn_method_konstruadoapp_perfil(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
 fun uniffi_konstruado_ffi_fn_method_konstruadoapp_previa_aceptar(`ptr`: Pointer,`ofertaId`: RustBuffer.ByValue,`garantia`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+): RustBuffer.ByValue
+fun uniffi_konstruado_ffi_fn_method_konstruadoapp_previa_publicar(`ptr`: Pointer,`trabajo`: RustBuffer.ByValue,`garantia`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
 fun uniffi_konstruado_ffi_fn_method_konstruadoapp_probar_daemon(`ptr`: Pointer,`vpnCaptura`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
@@ -1349,6 +1373,9 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if (lib.uniffi_konstruado_ffi_checksum_method_konstruadoapp_aceptar_y_pagar() != 55575.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if (lib.uniffi_konstruado_ffi_checksum_method_konstruadoapp_actualizar_precio() != 682.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if (lib.uniffi_konstruado_ffi_checksum_method_konstruadoapp_actualizar_saldo() != 53422.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
@@ -1415,6 +1442,9 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if (lib.uniffi_konstruado_ffi_checksum_method_konstruadoapp_enviar() != 19560.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if (lib.uniffi_konstruado_ffi_checksum_method_konstruadoapp_estado_precio() != 61056.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if (lib.uniffi_konstruado_ffi_checksum_method_konstruadoapp_estado_respaldo() != 41680.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
@@ -1448,6 +1478,9 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if (lib.uniffi_konstruado_ffi_checksum_method_konstruadoapp_mirar_atras_caja() != 43026.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if (lib.uniffi_konstruado_ffi_checksum_method_konstruadoapp_nota_precio() != 46042.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if (lib.uniffi_konstruado_ffi_checksum_method_konstruadoapp_obra_vista() != 44978.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
@@ -1464,6 +1497,9 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_konstruado_ffi_checksum_method_konstruadoapp_previa_aceptar() != 26330.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_konstruado_ffi_checksum_method_konstruadoapp_previa_publicar() != 20664.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_konstruado_ffi_checksum_method_konstruadoapp_probar_daemon() != 20989.toShort()) {
@@ -1979,6 +2015,11 @@ public interface KonstruadoAppInterface {
      */
     fun `aceptarYPagar`(`obraId`: kotlin.String, `indice`: kotlin.UInt)
     
+    /**
+     * Pide el precio ahora (CoinGecko, si falla Kraken), por Orbot si está configurado.
+     */
+    fun `actualizarPrecio`(): kotlin.String
+    
     fun `actualizarSaldo`()
     
     fun `agregarDestino`(`destino`: kotlin.String)
@@ -2054,6 +2095,11 @@ public interface KonstruadoAppInterface {
     
     fun `enviar`(`destino`: kotlin.String, `montoXmr`: kotlin.String)
     
+    /**
+     * Estado del precio de referencia (último conocido o por qué no hay).
+     */
+    fun `estadoPrecio`(): kotlin.String
+    
     fun `estadoRespaldo`(): RespaldoEstado
     
     /**
@@ -2095,6 +2141,11 @@ public interface KonstruadoAppInterface {
     
     fun `mirarAtrasCaja`(`obraId`: kotlin.String)
     
+    /**
+     * Nota fija: montos en USD, precio de mainnet como referencia en stagenet.
+     */
+    fun `notaPrecio`(): kotlin.String
+    
     fun `obraVista`(`obraId`: kotlin.String): ObraVista
     
     fun `oferta`(`ofertaId`: kotlin.String): OfertaVista
@@ -2109,6 +2160,11 @@ public interface KonstruadoAppInterface {
      * Cuántas partidas salen con esa garantía, y si es contra.
      */
     fun `previaAceptar`(`ofertaId`: kotlin.String, `garantia`: kotlin.String): PreviaAceptar
+    
+    /**
+     * Vista previa del formulario de publicar (en USD).
+     */
+    fun `previaPublicar`(`trabajo`: kotlin.String, `garantia`: kotlin.String): PreviaPublicar
     
     /**
      * Pide la punta (get_info / tip) al nodo activo por RPC HTTP(S).
@@ -2371,6 +2427,22 @@ open class KonstruadoApp: Disposable, AutoCloseable, KonstruadoAppInterface
 }
     }
     
+    
+
+    
+    /**
+     * Pide el precio ahora (CoinGecko, si falla Kraken), por Orbot si está configurado.
+     */
+    @Throws(FfiException::class)override fun `actualizarPrecio`(): kotlin.String {
+            return FfiConverterString.lift(
+    callWithPointer {
+    uniffiRustCallWithError(FfiException) { _status ->
+    UniffiLib.INSTANCE.uniffi_konstruado_ffi_fn_method_konstruadoapp_actualizar_precio(
+        it, _status)
+}
+    }
+    )
+    }
     
 
     override fun `actualizarSaldo`()
@@ -2668,6 +2740,21 @@ open class KonstruadoApp: Disposable, AutoCloseable, KonstruadoAppInterface
     
     
 
+    
+    /**
+     * Estado del precio de referencia (último conocido o por qué no hay).
+     */override fun `estadoPrecio`(): kotlin.String {
+            return FfiConverterString.lift(
+    callWithPointer {
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_konstruado_ffi_fn_method_konstruadoapp_estado_precio(
+        it, _status)
+}
+    }
+    )
+    }
+    
+
     override fun `estadoRespaldo`(): RespaldoEstado {
             return FfiConverterTypeRespaldoEstado.lift(
     callWithPointer {
@@ -2822,6 +2909,21 @@ open class KonstruadoApp: Disposable, AutoCloseable, KonstruadoAppInterface
     
 
     
+    /**
+     * Nota fija: montos en USD, precio de mainnet como referencia en stagenet.
+     */override fun `notaPrecio`(): kotlin.String {
+            return FfiConverterString.lift(
+    callWithPointer {
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_konstruado_ffi_fn_method_konstruadoapp_nota_precio(
+        it, _status)
+}
+    }
+    )
+    }
+    
+
+    
     @Throws(FfiException::class)override fun `obraVista`(`obraId`: kotlin.String): ObraVista {
             return FfiConverterTypeObraVista.lift(
     callWithPointer {
@@ -2893,6 +2995,21 @@ open class KonstruadoApp: Disposable, AutoCloseable, KonstruadoAppInterface
     uniffiRustCall() { _status ->
     UniffiLib.INSTANCE.uniffi_konstruado_ffi_fn_method_konstruadoapp_previa_aceptar(
         it, FfiConverterString.lower(`ofertaId`),FfiConverterString.lower(`garantia`),_status)
+}
+    }
+    )
+    }
+    
+
+    
+    /**
+     * Vista previa del formulario de publicar (en USD).
+     */override fun `previaPublicar`(`trabajo`: kotlin.String, `garantia`: kotlin.String): PreviaPublicar {
+            return FfiConverterTypePreviaPublicar.lift(
+    callWithPointer {
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_konstruado_ffi_fn_method_konstruadoapp_previa_publicar(
+        it, FfiConverterString.lower(`trabajo`),FfiConverterString.lower(`garantia`),_status)
 }
     }
     )
@@ -3840,7 +3957,11 @@ data class ObraVista (
     var `cajaDireccion`: kotlin.String?, 
     var `armandoCaja`: kotlin.Boolean, 
     var `mirada`: MiradaVista?, 
-    var `partidas`: List<PartidaFila>
+    var `partidas`: List<PartidaFila>, 
+    /**
+     * Obra en dólares (montos USD, XMR fijo por partida al fondear).
+     */
+    var `usd`: kotlin.Boolean
 ) {
     
     companion object
@@ -3873,6 +3994,7 @@ public object FfiConverterTypeObraVista: FfiConverterRustBuffer<ObraVista> {
             FfiConverterBoolean.read(buf),
             FfiConverterOptionalTypeMiradaVista.read(buf),
             FfiConverterSequenceTypePartidaFila.read(buf),
+            FfiConverterBoolean.read(buf),
         )
     }
 
@@ -3897,7 +4019,8 @@ public object FfiConverterTypeObraVista: FfiConverterRustBuffer<ObraVista> {
             FfiConverterOptionalString.allocationSize(value.`cajaDireccion`) +
             FfiConverterBoolean.allocationSize(value.`armandoCaja`) +
             FfiConverterOptionalTypeMiradaVista.allocationSize(value.`mirada`) +
-            FfiConverterSequenceTypePartidaFila.allocationSize(value.`partidas`)
+            FfiConverterSequenceTypePartidaFila.allocationSize(value.`partidas`) +
+            FfiConverterBoolean.allocationSize(value.`usd`)
     )
 
     override fun write(value: ObraVista, buf: ByteBuffer) {
@@ -3922,6 +4045,7 @@ public object FfiConverterTypeObraVista: FfiConverterRustBuffer<ObraVista> {
             FfiConverterBoolean.write(value.`armandoCaja`, buf)
             FfiConverterOptionalTypeMiradaVista.write(value.`mirada`, buf)
             FfiConverterSequenceTypePartidaFila.write(value.`partidas`, buf)
+            FfiConverterBoolean.write(value.`usd`, buf)
     }
 }
 
@@ -3936,7 +4060,15 @@ data class OfertaVista (
     var `mandante`: kotlin.String, 
     var `mia`: kotlin.Boolean, 
     var `detalles`: List<kotlin.String>, 
-    var `resumen`: kotlin.String
+    var `resumen`: kotlin.String, 
+    /**
+     * Oferta en dólares (las viejas van en unidades).
+     */
+    var `usd`: kotlin.Boolean, 
+    /**
+     * La garantía sugerida para el campo editable (`200` / `200.50`).
+     */
+    var `garantiaEditable`: kotlin.String
 ) {
     
     companion object
@@ -3957,6 +4089,8 @@ public object FfiConverterTypeOfertaVista: FfiConverterRustBuffer<OfertaVista> {
             FfiConverterBoolean.read(buf),
             FfiConverterSequenceString.read(buf),
             FfiConverterString.read(buf),
+            FfiConverterBoolean.read(buf),
+            FfiConverterString.read(buf),
         )
     }
 
@@ -3969,7 +4103,9 @@ public object FfiConverterTypeOfertaVista: FfiConverterRustBuffer<OfertaVista> {
             FfiConverterString.allocationSize(value.`mandante`) +
             FfiConverterBoolean.allocationSize(value.`mia`) +
             FfiConverterSequenceString.allocationSize(value.`detalles`) +
-            FfiConverterString.allocationSize(value.`resumen`)
+            FfiConverterString.allocationSize(value.`resumen`) +
+            FfiConverterBoolean.allocationSize(value.`usd`) +
+            FfiConverterString.allocationSize(value.`garantiaEditable`)
     )
 
     override fun write(value: OfertaVista, buf: ByteBuffer) {
@@ -3982,6 +4118,8 @@ public object FfiConverterTypeOfertaVista: FfiConverterRustBuffer<OfertaVista> {
             FfiConverterBoolean.write(value.`mia`, buf)
             FfiConverterSequenceString.write(value.`detalles`, buf)
             FfiConverterString.write(value.`resumen`, buf)
+            FfiConverterBoolean.write(value.`usd`, buf)
+            FfiConverterString.write(value.`garantiaEditable`, buf)
     }
 }
 
@@ -4098,6 +4236,22 @@ data class PartidaVista (
     var `saldoDetalle`: kotlin.String?, 
     var `candado`: kotlin.String?, 
     var `xmrPorLado`: kotlin.String?, 
+    /**
+     * Obras en USD: el XMR de la partida (fijo si ya tiene precio, aproximado si no).
+     */
+    var `xmrPartida`: kotlin.String?, 
+    /**
+     * Precio que propuso el otro, para quien confirma y fondea.
+     */
+    var `precioPropuesto`: kotlin.String?, 
+    /**
+     * El precio fijado se aleja del actual.
+     */
+    var `avisoPrecio`: kotlin.String?, 
+    /**
+     * Obras en USD sin precio fijado: estado del precio de referencia.
+     */
+    var `estadoPrecio`: kotlin.String?, 
     var `cajaDireccion`: kotlin.String?, 
     var `fondeoTxid`: kotlin.String?, 
     var `pagoTxid`: kotlin.String?, 
@@ -4188,6 +4342,10 @@ public object FfiConverterTypePartidaVista: FfiConverterRustBuffer<PartidaVista>
             FfiConverterOptionalString.read(buf),
             FfiConverterOptionalString.read(buf),
             FfiConverterOptionalString.read(buf),
+            FfiConverterOptionalString.read(buf),
+            FfiConverterOptionalString.read(buf),
+            FfiConverterOptionalString.read(buf),
+            FfiConverterOptionalString.read(buf),
             FfiConverterBoolean.read(buf),
             FfiConverterBoolean.read(buf),
             FfiConverterBoolean.read(buf),
@@ -4235,6 +4393,10 @@ public object FfiConverterTypePartidaVista: FfiConverterRustBuffer<PartidaVista>
             FfiConverterOptionalString.allocationSize(value.`saldoDetalle`) +
             FfiConverterOptionalString.allocationSize(value.`candado`) +
             FfiConverterOptionalString.allocationSize(value.`xmrPorLado`) +
+            FfiConverterOptionalString.allocationSize(value.`xmrPartida`) +
+            FfiConverterOptionalString.allocationSize(value.`precioPropuesto`) +
+            FfiConverterOptionalString.allocationSize(value.`avisoPrecio`) +
+            FfiConverterOptionalString.allocationSize(value.`estadoPrecio`) +
             FfiConverterOptionalString.allocationSize(value.`cajaDireccion`) +
             FfiConverterOptionalString.allocationSize(value.`fondeoTxid`) +
             FfiConverterOptionalString.allocationSize(value.`pagoTxid`) +
@@ -4285,6 +4447,10 @@ public object FfiConverterTypePartidaVista: FfiConverterRustBuffer<PartidaVista>
             FfiConverterOptionalString.write(value.`saldoDetalle`, buf)
             FfiConverterOptionalString.write(value.`candado`, buf)
             FfiConverterOptionalString.write(value.`xmrPorLado`, buf)
+            FfiConverterOptionalString.write(value.`xmrPartida`, buf)
+            FfiConverterOptionalString.write(value.`precioPropuesto`, buf)
+            FfiConverterOptionalString.write(value.`avisoPrecio`, buf)
+            FfiConverterOptionalString.write(value.`estadoPrecio`, buf)
             FfiConverterOptionalString.write(value.`cajaDireccion`, buf)
             FfiConverterOptionalString.write(value.`fondeoTxid`, buf)
             FfiConverterOptionalString.write(value.`pagoTxid`, buf)
@@ -4412,6 +4578,42 @@ public object FfiConverterTypePreviaAceptar: FfiConverterRustBuffer<PreviaAcepta
             FfiConverterUInt.write(value.`nPartidas`, buf)
             FfiConverterString.write(value.`texto`, buf)
             FfiConverterSequenceString.write(value.`detalles`, buf)
+    }
+}
+
+
+
+data class PreviaPublicar (
+    var `ok`: kotlin.Boolean, 
+    var `nPartidas`: kotlin.UInt, 
+    var `texto`: kotlin.String
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypePreviaPublicar: FfiConverterRustBuffer<PreviaPublicar> {
+    override fun read(buf: ByteBuffer): PreviaPublicar {
+        return PreviaPublicar(
+            FfiConverterBoolean.read(buf),
+            FfiConverterUInt.read(buf),
+            FfiConverterString.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: PreviaPublicar) = (
+            FfiConverterBoolean.allocationSize(value.`ok`) +
+            FfiConverterUInt.allocationSize(value.`nPartidas`) +
+            FfiConverterString.allocationSize(value.`texto`)
+    )
+
+    override fun write(value: PreviaPublicar, buf: ByteBuffer) {
+            FfiConverterBoolean.write(value.`ok`, buf)
+            FfiConverterUInt.write(value.`nPartidas`, buf)
+            FfiConverterString.write(value.`texto`, buf)
     }
 }
 

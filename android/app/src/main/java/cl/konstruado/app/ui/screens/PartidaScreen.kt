@@ -97,11 +97,17 @@ fun PartidaScreen(obraId: String, indice: UInt, banner: Banner) {
             if (!p.miTurno && !p.pagoEnCurso) p.esperaA?.let { Chip("esperando a $it", Tono.Espera) }
         }
         if (e.detalle != p.lead) Ayuda(p.lead)
+        // Obras en USD: XMR fijo (o aproximado antes de encerrar).
+        p.xmrPartida?.let { Ayuda(it) }
         EstadoTarjeta(e.tono, e.titulo, e.detalle, e.enCurso, maxLineas = if (p.lineaFreno) 8 else 3)
         p.pista?.let { Ayuda(it) }
 
         // Solo las acciones válidas ahora (flags de `acciones_partida`, compartidas con el escritorio).
         if (p.puedeProponerEncerrar) {
+            p.estadoPrecio?.let {
+                Ayuda("Al proponer, el XMR de esta partida queda fijo con el precio de ahora. El otro lo ve antes de confirmar.")
+                Ayuda(it)
+            }
             if (confirmaEncerrar) {
                 Primario("Proponer encerrar") {
                     acciones.correr("Propuesta enviada. Falta que el otro confirme y fondee.", alTerminar = { confirmaEncerrar = false }, yaEnPantalla = yaVisible) {
@@ -114,6 +120,8 @@ fun PartidaScreen(obraId: String, indice: UInt, banner: Banner) {
             }
         }
         if (p.puedeConfirmarFondear) {
+            p.precioPropuesto?.let { Lead(it) }
+            p.avisoPrecio?.let { EstadoTarjeta(Tono.Espera, "Precio distinto", it, enCurso = false, maxLineas = 4) }
             Primario("Confirmar y fondear") {
                 acciones.correr("Armando el fondeo con las dos billeteras…", yaEnPantalla = yaVisible) { app.confirmarYFondear(obraId, indice) }
             }
@@ -210,7 +218,7 @@ fun PartidaScreen(obraId: String, indice: UInt, banner: Banner) {
 
     if (p.cajaDireccion != null) {
         Plegable("Importar share suelto", "Avanzado · archivos de 0.2.7 o antes") {
-            CajaRespaldo(obraId, true, acciones, banner)
+            CajaRespaldo(acciones)
         }
     }
 
