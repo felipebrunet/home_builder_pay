@@ -3,6 +3,7 @@ mod export;
 mod help;
 mod i18n;
 mod persist;
+mod respaldo;
 
 use std::time::Duration;
 
@@ -17,6 +18,12 @@ const CSS: &str = include_str!("ui.css");
 
 fn main() {
     preparar_grafica();
+    // Un respaldo completo restaurado se aplica acá, antes de leer nada del disco.
+    match respaldo::aplicar_pendiente(&persist::dir()) {
+        Ok(true) => eprintln!("respaldo: restaurado"),
+        Ok(false) => {}
+        Err(e) => eprintln!("respaldo: {e}"),
+    }
     if let Err(e) = persist::cargar_daemon_al_arrancar() {
         eprintln!("daemon: {e}");
     }
@@ -280,6 +287,14 @@ fn App() -> Element {
         .collect();
     mis_obras.sort_by(|a, b| b.actualizado.cmp(&a.actualizado).then(b.id.cmp(&a.id)));
     let en_billetera = screen() == Screen::Billetera;
+    // Recordatorio de re-exportar tras crear/unirse a una obra o armar una caja.
+    let (respaldo_falta, respaldo_linea) = if adentro {
+        let est = estado_respaldo(&caja_ui, yo(), &obras());
+        let falta = est.falta && est.hay_algo && (est.ultimo.is_some() || !mis_obras.is_empty());
+        (falta, respaldo::texto_estado(&est, lang).1)
+    } else {
+        (false, String::new())
+    };
     let en_obra = if matches!(screen(), Screen::Detalle | Screen::VerPartida) {
         sel_obra()
     } else {
@@ -352,6 +367,16 @@ fn App() -> Element {
                                 title: lang.t("Cerrar", "Close"),
                                 onclick: move |_| err.set(None),
                                 "×"
+                            }
+                        }
+                    }
+                    if adentro && matches!(screen(), Screen::Tablero | Screen::Detalle) && respaldo_falta {
+                        div { class: "recordatorio",
+                            p { class: "estado wait", "{respaldo_linea}" }
+                            button {
+                                class: "btn btn-ghost",
+                                onclick: move |_| screen.set(Screen::Billetera),
+                                {lang.t("Ir a Respaldos", "Go to Backups")}
                             }
                         }
                     }
@@ -747,12 +772,57 @@ fn Bienvenida(
     err: Signal<Option<String>>,
 ) -> Element {
     let lang = use_context::<Signal<Idioma>>()();
+    // Primera vez sin cuenta: elegir entre crear una o traerla de un respaldo.
+    let mut modo = use_signal(|| 0u8);
+    if modo() == 0 {
+        return rsx! {
+            div { class: "pane narrow",
+                h1 { {lang.t("La obra, con el dinero encerrado.", "The job, with the money locked.")} }
+                p { class: "lead",
+                    {lang.t("No te ves con la otra persona como en un chat. El mandante publica una obra. El contratista la ve en el tablero y acepta (o propone otra garantía).", "You do not see the other person like a chat. The client posts a job. The contractor sees it on the board and accepts (or proposes another guarantee).")}
+                }
+                div { class: "roles",
+                    button {
+                        class: "rol",
+                        onclick: move |_| modo.set(1),
+                        strong { {lang.t("Crear cuenta nueva", "Create a new account")} }
+                        span { {lang.t("Elegís tu nombre y si pagás la obra o la construís.", "Choose your name and whether you pay for the job or build it.")} }
+                    }
+                    button {
+                        class: "rol",
+                        onclick: move |_| modo.set(2),
+                        strong { {lang.t("Restaurar desde respaldo", "Restore from backup")} }
+                        span { {lang.t("Traés todo del archivo cifrado: semilla, obras, cajas, nombre y rol.", "Bring everything back from the encrypted file: seed, jobs, escrows, name and role.")} }
+                    }
+                }
+            }
+        };
+    }
+    if modo() == 2 {
+        return rsx! {
+            div { class: "pane narrow",
+                div { class: "migas",
+                    button { onclick: move |_| modo.set(0), {lang.t("← Volver", "← Back")} }
+                }
+                h1 { {lang.t("Restaurar desde respaldo", "Restore from backup")} }
+                p { class: "lead",
+                    {lang.t(
+                        "Después de restaurar, lo más nuevo del trato (notas, porcentajes, pagos) baja del otro por la sala cuando los dos están en línea.",
+                        "After a restore, the newest deal progress (notes, percentages, payments) syncs from the other party through the room when both are online.",
+                    )}
+                }
+                section { class: "panel",
+                    RestaurarRespaldo { err }
+                }
+            }
+        };
+    }
     rsx! {
         div { class: "pane narrow",
-            h1 { {lang.t("La obra, con el dinero encerrado.", "The job, with the money locked.")} }
-            p { class: "lead",
-                {lang.t("No te ves con la otra persona como en un chat. El mandante publica una obra. El contratista la ve en el tablero y acepta (o propone otra garantía).", "You do not see the other person like a chat. The client posts a job. The contractor sees it on the board and accepts (or proposes another guarantee).")}
+            div { class: "migas",
+                button { onclick: move |_| modo.set(0), {lang.t("← Volver", "← Back")} }
             }
+            h1 { {lang.t("Crear cuenta nueva", "Create a new account")} }
             div { class: "paso", b { "1" } {lang.t("Tu nombre", "Your name")} }
             input {
                 r#type: "text",
@@ -822,7 +892,6 @@ fn Cuenta(
     let mut idioma = use_context::<Signal<Idioma>>();
     let mut ilocal = use_signal(|| idioma());
     let lang = idioma();
-    let caja_palabras = caja.clone();
     let caja_crear = caja.clone();
     let caja_daemon = caja.clone();
     let mut daemon_url = use_signal(|| {
@@ -1060,22 +1129,6 @@ fn Cuenta(
                     onclick: move |_| screen.set(Screen::Billetera),
                     {lang.t("Abrir billetera", "Open wallet")}
                 }
-                button {
-                    class: "btn btn-ghost",
-                    onclick: move |_| {
-                        let Some(path) = rfd::FileDialog::new()
-                            .set_file_name("konstruado-semilla.txt")
-                            .save_file()
-                        else {
-                            return;
-                        };
-                        match caja_palabras.guardar_palabras(&path) {
-                            Ok(()) => err.set(None),
-                            Err(e) => err.set(Some(e)),
-                        }
-                    },
-                    {lang.t("Guardar las 25 palabras", "Save the 25 words")}
-                }
             } else {
                 button {
                     class: "btn btn-primary",
@@ -1092,7 +1145,7 @@ fn Cuenta(
             details { class: "plegable",
                 summary { {lang.t("Respaldos y recuperación", "Backups and recovery")} }
                 div { class: "cuerpo",
-                    RestaurarLlaves { caja: caja.clone(), yo, obras, red, vista, err }
+                    SeccionRespaldos { caja: caja.clone(), yo, obras, red, vista, err }
                 }
             }
             }
@@ -1113,13 +1166,11 @@ fn Billetera(
 ) -> Element {
     let mut destino = use_signal(String::new);
     let mut monto = use_signal(String::new);
-    let mut ok_palabras = use_signal(|| None::<String>);
     let lang = use_context::<Signal<Idioma>>()();
     let es = matches!(lang, Idioma::Es);
     let v = vista();
     let b = v.billetera.clone();
     let addr = v.personal.clone();
-    let caja_palabras = caja.clone();
     let caja_envio = caja.clone();
     let caja_act = caja.clone();
     let caja_act2 = caja.clone();
@@ -1275,10 +1326,7 @@ fn Billetera(
                                 oninput: move |e| monto.set(e.value()),
                             }
                             p { class: "help",
-                                {lang.t(
-                                    "El cambio vuelve a esta billetera. Se reserva 0,001 XMR para el fee. Hace falta al menos 1 piconero de cambio.",
-                                    "Change comes back to this wallet. 0.001 XMR is set aside for the fee. At least 1 piconero of change is required.",
-                                )}
+                                {caja::ayuda_envio(lang == Idioma::Es)}
                             }
                             div { class: "acciones",
                                 button {
@@ -1290,8 +1338,8 @@ fn Billetera(
                                                 err.set(None);
                                             }
                                             None => err.set(Some(lang_now().t(
-                                                "No hay saldo libre suficiente para el fee.",
-                                                "There is not enough unlocked balance for the fee.",
+                                                "Todavía no hay saldo libre para enviar.",
+                                                "There is no unlocked balance to send yet.",
                                             ).into())),
                                         }
                                     },
@@ -1310,41 +1358,10 @@ fn Billetera(
                                 }
                             }
                         }
-                        details { class: "plegable",
+                        details { class: "plegable", open: true,
                             summary { {lang.t("Respaldos y recuperación", "Backups and recovery")} }
                             div { class: "cuerpo",
-                                div { class: "grupo",
-                                    h3 { {lang.t("Las 25 palabras", "The 25 words")} }
-                                    p { class: "help",
-                                        {lang.t(
-                                            "Guardan tu billetera personal y la altura desde la que hay que mirar. No traen la caja de una obra.",
-                                            "They keep your personal wallet and the height to scan from. They do not bring a job's box.",
-                                        )}
-                                    }
-                                    button {
-                                        class: "btn btn-ghost",
-                                        onclick: move |_| {
-                                            let Some(path) = rfd::FileDialog::new()
-                                                .set_file_name("konstruado-semilla.txt")
-                                                .save_file()
-                                            else {
-                                                return;
-                                            };
-                                            match caja_palabras.guardar_palabras(&path) {
-                                                Ok(()) => {
-                                                    err.set(None);
-                                                    ok_palabras.set(Some(lang_now().t("Guardé las 25 palabras.", "Saved the 25 words.").into()));
-                                                }
-                                                Err(e) => err.set(Some(e)),
-                                            }
-                                        },
-                                        {lang.t("Guardar las 25 palabras", "Save the 25 words")}
-                                    }
-                                    if let Some(m) = ok_palabras() {
-                                        p { class: "ok-msg", "{m}" }
-                                    }
-                                }
-                                RestaurarLlaves { caja: caja.clone(), yo, obras, red, vista, err }
+                                SeccionRespaldos { caja: caja.clone(), yo, obras, red, vista, err }
                             }
                         }
                     }
@@ -1377,10 +1394,10 @@ fn Billetera(
                         }
                     }
                     div { class: "col",
-                        details { class: "plegable",
-                            summary { {lang.t("Ya tengo un respaldo", "I already have a backup")} }
+                        details { class: "plegable", open: true,
+                            summary { {lang.t("Respaldos y recuperación", "Backups and recovery")} }
                             div { class: "cuerpo",
-                                RestaurarLlaves { caja: caja.clone(), yo, obras, red, vista, err }
+                                SeccionRespaldos { caja: caja.clone(), yo, obras, red, vista, err }
                             }
                         }
                     }
@@ -1975,7 +1992,7 @@ fn RestaurarLlaves(
     let caja_vista = caja.clone();
     rsx! {
         div { class: "grupo",
-        h3 { {lang.t("Recuperar las 25 palabras", "Restore the 25 words")} }
+        h3 { {lang.t("Importar las 25 palabras (.txt)", "Import the 25 words (.txt)")} }
         p { class: "help",
             {lang.t(
                 "Recuperar las 25 palabras trae tu dirección personal. Si el archivo trae altura de bloque, el scan parte de ahí; si es un respaldo viejo sin altura, usa la ventana reciente (podés mirar más atrás). No trae la caja ni tu nombre en el trato.",
@@ -2000,7 +2017,7 @@ fn RestaurarLlaves(
         }
         }
         div { class: "grupo",
-        h3 { {lang.t("Recuperar un share", "Restore a share")} }
+        h3 { {lang.t("Importar un share (.share)", "Import a share (.share)")} }
         p { class: "help",
             {lang.t(
                 "Recuperar un share trae la caja de una obra que ya está en este equipo. Tiene que ser el tuyo: el del otro lado no sirve. Si perdiste el perfil entero, esto no te vuelve a unir.",
@@ -2032,55 +2049,12 @@ fn RestaurarLlaves(
         }
         }
         div { class: "grupo",
-        h3 { {lang.t("Respaldo de obras", "Job backup")} }
+        h3 { {lang.t("Respaldo de obras (JSON)", "Job backup (JSON)")} }
         p { class: "help",
             {lang.t(
-                "Respaldo de obras: guarda el perfil (obras y ofertas) para reinstalar. Puede estar desfasado respecto al otro; la cadena y el share mandan para el dinero. No incluye seed ni share.",
-                "Job backup: saves the profile (jobs and offers) for reinstall. It may be behind the peer; chain and share rule the money. It does not include seed or share.",
+                "Importa obras y ofertas de un konstruado-obras.json viejo. Puede estar desfasado respecto al otro; la cadena y el share mandan para el dinero.",
+                "Imports jobs and offers from an old konstruado-obras.json. It may be behind the peer; chain and share rule the money.",
             )}
-        }
-        button {
-            class: "btn btn-ghost",
-            onclick: move |_| {
-                let Some(nodo) = red() else {
-                    err.set(Some(lang_now().t("La red todavía no arrancó.", "The network is not up yet.").into()));
-                    return;
-                };
-                let mid = yo().map(|p| p.id).unwrap_or_default();
-                let mut mis: Vec<Obra> = nodo
-                    .obras()
-                    .into_iter()
-                    .filter(|o| mid.is_empty() || o.participa(&mid))
-                    .collect();
-                mis.sort_by(|a, b| b.actualizado.cmp(&a.actualizado).then(b.id.cmp(&a.id)));
-                let ofertas: Vec<_> = nodo
-                    .tablero()
-                    .into_iter()
-                    .filter(|o| mid.is_empty() || o.mandante.id == mid)
-                    .collect();
-                match persist::exportar_perfil_obras(&mis, &ofertas) {
-                    Ok(raw) => {
-                        let Some(path) = rfd::FileDialog::new()
-                            .set_file_name("konstruado-obras.json")
-                            .save_file()
-                        else {
-                            return;
-                        };
-                        match std::fs::write(&path, raw) {
-                            Ok(()) => {
-                                err.set(None);
-                                ok.set(Some(lang_now().t(
-                                    "Guardé el respaldo de obras.",
-                                    "Saved the job backup.",
-                                ).into()));
-                            }
-                            Err(e) => err.set(Some(format!("{e}"))),
-                        }
-                    }
-                    Err(e) => err.set(Some(e)),
-                }
-            },
-            {lang.t("Guardar respaldo de obras", "Save job backup")}
         }
         button {
             class: "btn btn-ghost",
@@ -2125,11 +2099,275 @@ fn RestaurarLlaves(
                     Err(e) => err.set(Some(e)),
                 }
             },
-            {lang.t("Recuperar respaldo de obras", "Restore job backup")}
+            {lang.t("Importar obras (.json)", "Import jobs (.json)")}
         }
         }
         if let Some(m) = ok() {
             p { class: "ok-msg", "{m}" }
+        }
+    }
+}
+
+/// Reinicia la app (después de restaurar un respaldo completo: el cambio de
+/// carpetas lo hace `respaldo::aplicar_pendiente` al arrancar).
+fn reiniciar_app() {
+    if let Ok(exe) = std::env::current_exe() {
+        let args: Vec<String> = std::env::args().skip(1).collect();
+        let _ = std::process::Command::new(exe).args(args).spawn();
+    }
+    std::process::exit(0);
+}
+
+fn clase_tono(t: caja::Tono) -> &'static str {
+    match t {
+        caja::Tono::Ok => "estado ok",
+        caja::Tono::Espera => "estado wait",
+        caja::Tono::Error => "estado err",
+        caja::Tono::Apagado => "estado info",
+    }
+}
+
+/// Estado del último respaldo completo (regla compartida en respaldo.rs).
+fn estado_respaldo(caja: &caja::Caja, yo: Option<Persona>, obras: &[Obra]) -> respaldo::EstadoRespaldo {
+    let mid = yo.map(|p| p.id).unwrap_or_default();
+    let (sem, cajas) = caja.claves_respaldo();
+    respaldo::estado(&persist::dir(), &respaldo::huella_de_partes(&mid, obras, sem, cajas))
+}
+
+/// «Respaldos y recuperación»: respaldo completo, restaurar, y lo viejo en Avanzado.
+#[component]
+fn SeccionRespaldos(
+    caja: caja::Caja,
+    yo: Signal<Option<Persona>>,
+    obras: Signal<Vec<Obra>>,
+    red: Signal<Option<Nodo>>,
+    vista: Signal<caja::CajaVista>,
+    err: Signal<Option<String>>,
+) -> Element {
+    let lang = use_context::<Signal<Idioma>>()();
+    rsx! {
+        if yo().is_some() {
+            ExportarRespaldo { caja: caja.clone(), yo, obras, err }
+        }
+        RestaurarRespaldo { err }
+        details { class: "plegable",
+            summary { {lang.t("Avanzado: importar respaldos sueltos (0.2.7 o antes)", "Advanced: import standalone backups (0.2.7 or older)")} }
+            div { class: "cuerpo",
+                RestaurarLlaves { caja: caja.clone(), yo, obras, red, vista, err }
+            }
+        }
+    }
+}
+
+#[component]
+fn ExportarRespaldo(
+    caja: caja::Caja,
+    yo: Signal<Option<Persona>>,
+    obras: Signal<Vec<Obra>>,
+    mut err: Signal<Option<String>>,
+) -> Element {
+    let lang = use_context::<Signal<Idioma>>()();
+    let es = lang == Idioma::Es;
+    let mut clave = use_signal(String::new);
+    let mut clave2 = use_signal(String::new);
+    let mut ok = use_signal(|| None::<String>);
+    let est = estado_respaldo(&caja, yo(), &obras());
+    let (tono, linea) = respaldo::texto_estado(&est, lang);
+    let caja_exp = caja.clone();
+    rsx! {
+        div { class: "grupo",
+            h3 { {lang.t("Respaldo completo", "Full backup")} }
+            p { class: clase_tono(tono), "{linea}" }
+            for t in respaldo::ayuda(es) {
+                p { class: "help", "{t}" }
+            }
+            label { class: "et", {lang.t("CONTRASEÑA DEL RESPALDO", "BACKUP PASSWORD")} }
+            input {
+                r#type: "password",
+                placeholder: lang.t("Al menos 8 caracteres", "At least 8 characters"),
+                value: "{clave}",
+                oninput: move |e| clave.set(e.value()),
+            }
+            input {
+                r#type: "password",
+                placeholder: lang.t("Repetila", "Repeat it"),
+                value: "{clave2}",
+                oninput: move |e| clave2.set(e.value()),
+            }
+            button {
+                class: "btn btn-primary",
+                onclick: move |_| {
+                    let es = lang_now() == Idioma::Es;
+                    ok.set(None);
+                    if clave() != clave2() {
+                        err.set(Some(if es { "Las dos contraseñas no coinciden." } else { "The two passwords do not match." }.into()));
+                        return;
+                    }
+                    if clave().chars().count() < respaldo::CLAVE_MINIMA {
+                        err.set(Some(respaldo::aviso("codigo:respaldo-clave-corta", es)));
+                        return;
+                    }
+                    let Some(path) = rfd::FileDialog::new()
+                        .set_file_name(respaldo::nombre_archivo())
+                        .add_filter("Konstruado", &[respaldo::EXTENSION])
+                        .save_file()
+                    else {
+                        return;
+                    };
+                    let dir = persist::dir();
+                    let ahora = chrono::Utc::now().timestamp();
+                    let hecho = respaldo::exportar(&dir, persist::cargar(), caja_exp.material_respaldo(), &clave(), ahora)
+                        .and_then(|(bytes, h)| {
+                            respaldo::guardar_archivo(&path, &bytes)?;
+                            respaldo::marcar_hecho(&dir, h, ahora)
+                        });
+                    match hecho {
+                        Ok(()) => {
+                            err.set(None);
+                            clave.set(String::new());
+                            clave2.set(String::new());
+                            ok.set(Some(match lang_now() {
+                                Idioma::Es => format!("Respaldo guardado en {}.", path.display()),
+                                Idioma::En => format!("Backup saved to {}.", path.display()),
+                            }));
+                        }
+                        Err(e) => err.set(Some(respaldo::aviso(&e, es))),
+                    }
+                },
+                {lang.t("Exportar respaldo completo", "Export full backup")}
+            }
+            if let Some(m) = ok() {
+                p { class: "ok-msg", "{m}" }
+            }
+        }
+    }
+}
+
+/// Restaurar desde el respaldo completo: revisar, confirmar (peligro si ya hay
+/// datos) y reiniciar. Se usa en la bienvenida y en Billetera.
+#[component]
+fn RestaurarRespaldo(mut err: Signal<Option<String>>) -> Element {
+    let lang = use_context::<Signal<Idioma>>()();
+    let mut archivo = use_signal(|| None::<(String, Vec<u8>)>);
+    let mut clave = use_signal(String::new);
+    let mut resumen = use_signal(|| None::<respaldo::Resumen>);
+    let mut confirma = use_signal(|| false);
+    let mut hecho = use_signal(|| None::<String>);
+    let restaurar = move |_| {
+        let es = lang_now() == Idioma::Es;
+        let Some((_, bytes)) = archivo() else { return };
+        let reemplazar = resumen().is_some_and(|r| r.hay_datos);
+        match respaldo::preparar(&persist::dir(), &bytes, &clave(), reemplazar) {
+            Ok(_) => {
+                err.set(None);
+                clave.set(String::new());
+                hecho.set(Some(if es { "Respaldo restaurado. Konstruado se reinicia…" } else { "Backup restored. Konstruado is restarting…" }.into()));
+                std::thread::spawn(|| {
+                    std::thread::sleep(Duration::from_millis(1500));
+                    reiniciar_app();
+                });
+            }
+            Err(e) => err.set(Some(respaldo::aviso(&e, es))),
+        }
+    };
+    rsx! {
+        div { class: "grupo",
+            h3 { {lang.t("Restaurar desde respaldo", "Restore from backup")} }
+            p { class: "help",
+                {lang.t(
+                    "Elegí el archivo .kbak y escribí su contraseña. Primero se revisa todo (semilla, cada share contra su obra y tu rol); si algo no cuadra no se escribe nada.",
+                    "Pick the .kbak file and type its password. Everything is checked first (seed, each share against its job and your role); if anything is off nothing is written.",
+                )}
+            }
+            button {
+                class: "btn btn-ghost",
+                onclick: move |_| {
+                    let Some(path) = rfd::FileDialog::new()
+                        .add_filter("Konstruado", &[respaldo::EXTENSION])
+                        .add_filter("*", &["*"])
+                        .pick_file()
+                    else {
+                        return;
+                    };
+                    resumen.set(None);
+                    confirma.set(false);
+                    match std::fs::read(&path) {
+                        Ok(b) if xmr_joint::sobre::es_sobre(&b) => {
+                            let n = path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+                            archivo.set(Some((n, b)));
+                            err.set(None);
+                        }
+                        Ok(_) => err.set(Some(respaldo::aviso("codigo:respaldo-no-es", lang_now() == Idioma::Es))),
+                        Err(e) => err.set(Some(e.to_string())),
+                    }
+                },
+                {lang.t("Elegir el archivo del respaldo", "Pick the backup file")}
+            }
+            if let Some((n, _)) = archivo() {
+                span { class: "mono", "{n}" }
+                label { class: "et", {lang.t("CONTRASEÑA", "PASSWORD")} }
+                input {
+                    r#type: "password",
+                    value: "{clave}",
+                    oninput: move |e| {
+                        clave.set(e.value());
+                        resumen.set(None);
+                        confirma.set(false);
+                    },
+                }
+                if resumen().is_none() {
+                    button {
+                        class: "btn btn-primary",
+                        disabled: clave().is_empty(),
+                        onclick: move |_| {
+                            let Some((_, bytes)) = archivo() else { return };
+                            match respaldo::revisar(&persist::dir(), &bytes, &clave()) {
+                                Ok(r) => {
+                                    err.set(None);
+                                    resumen.set(Some(r));
+                                }
+                                Err(e) => err.set(Some(respaldo::aviso(&e, lang_now() == Idioma::Es))),
+                            }
+                        },
+                        {lang.t("Abrir y revisar", "Open and check")}
+                    }
+                }
+            }
+            if let Some(r) = resumen() {
+                dl { class: "datos",
+                    dt { {lang.t("Cuenta", "Account")} }
+                    dd { "{r.nombre} · {lang.rol(r.rol)}" }
+                    dt { {lang.t("Obras · ofertas", "Jobs · offers")} }
+                    dd { "{r.n_obras} · {r.n_ofertas}" }
+                    dt { {lang.t("Cajas (shares)", "Escrows (shares)")} }
+                    dd { "{r.n_shares}" }
+                    dt { {lang.t("Billetera", "Wallet")} }
+                    dd { class: "mono", {r.direccion.clone().map(|d| format!("{}…", &d[..12.min(d.len())])).unwrap_or_else(|| "—".into())} }
+                    dt { {lang.t("Mirar desde el bloque", "Scan from block")} }
+                    dd { {r.altura.map(|h| h.to_string()).unwrap_or_else(|| "—".into())} }
+                    dt { {lang.t("Hecho", "Made")} }
+                    dd { "{lang.fmt_cuando(r.creado)} · v{r.app}" }
+                }
+                if r.hay_datos {
+                    p { class: "estado err",
+                        {lang.t(
+                            "Este equipo ya tiene una cuenta, una billetera o cajas. Restaurar las reemplaza enteras (no se mezclan): lo de ahora queda guardado en la carpeta previo-… de los datos.",
+                            "This device already has an account, a wallet or escrows. Restoring replaces them entirely (nothing is merged): what is here now is kept in the previo-… folder inside the data folder.",
+                        )}
+                    }
+                    if confirma() {
+                        button { class: "btn btn-danger", onclick: restaurar, {lang.t("Sí, reemplazar todo y reiniciar", "Yes, replace everything and restart")} }
+                        button { class: "btn btn-ghost", onclick: move |_| confirma.set(false), {lang.t("No", "No")} }
+                    } else {
+                        button { class: "btn btn-danger", onclick: move |_| confirma.set(true), {lang.t("Reemplazar lo de este equipo", "Replace what is on this device")} }
+                    }
+                } else {
+                    button { class: "btn btn-primary", onclick: restaurar, {lang.t("Restaurar y reiniciar", "Restore and restart")} }
+                }
+            }
+            if let Some(m) = hecho() {
+                p { class: "ok-msg", "{m}" }
+            }
         }
     }
 }
@@ -2146,51 +2384,14 @@ fn CajaRespaldo(
 ) -> Element {
     let mut ok = use_signal(|| None::<String>);
     let lang = use_context::<Signal<Idioma>>()();
-    let hay = vista().caja_de(&obra_id).is_some();
-    let caja_guardar = caja.clone();
     let caja_share = caja.clone();
     let caja_vista = caja.clone();
-    let obra_guardar = obra_id.clone();
     rsx! {
-        if hay {
-            div { class: "grupo",
-                h3 { {lang.t("Guardar el share", "Save the share")} }
-                p { class: "help",
-                    {lang.t(
-                        "Esta copia puede gastar, junto con el share del otro. Guardala aparte y no la pegues en un chat.",
-                        "This copy can spend, together with the other person's share. Keep it aside and do not paste it into a chat.",
-                    )}
-                }
-                button {
-                    class: "btn btn-ghost",
-                    onclick: move |_| {
-                        let Some(path) = rfd::FileDialog::new()
-                            .set_file_name(format!("konstruado-{obra_guardar}.share"))
-                            .save_file()
-                        else {
-                            return;
-                        };
-                        ok.set(None);
-                        match caja_guardar.guardar_share(&obra_guardar, &path) {
-                            Ok(()) => {
-                                err.set(None);
-                                ok.set(Some(lang_now().t(
-                                    "Guardé el share. Esa copia puede gastar, junto con la del otro.",
-                                    "Saved the share. That copy can spend, together with the other person's.",
-                                ).into()));
-                            }
-                            Err(e) => err.set(Some(caja::aviso_humano(&e, lang_now() == Idioma::Es))),
-                        }
-                    },
-                    {lang.t("Guardar el share de la caja", "Save the box share")}
-                }
-            }
-        }
         div { class: "grupo",
-            h3 { {lang.t("Recuperar un share", "Restore a share")} }
+            h3 { {lang.t("Importar un share suelto", "Import a standalone share")} }
             p { class: "help",
                 {lang.t(
-                    "Si perdiste el share de esta obra, recuperalo desde el archivo que guardaste. Tiene que ser el tuyo y la obra tiene que seguir en este equipo.",
+                    "Para archivos .share de 0.2.7 o antes. Desde 0.2.8 el share va en el respaldo completo (Billetera → Respaldos). Si perdiste el share de esta obra, recuperalo desde el archivo que guardaste. Tiene que ser el tuyo y la obra tiene que seguir en este equipo.",
                     "If you lost this job's share, restore it from the file you saved. It has to be yours, and the job has to still be on this machine.",
                 )}
             }
@@ -2215,7 +2416,7 @@ fn CajaRespaldo(
                         Err(e) => err.set(Some(caja::aviso_humano(&e, lang_now() == Idioma::Es))),
                     }
                 },
-                {lang.t("Recuperar un share", "Restore a share")}
+                {lang.t("Importar un share suelto", "Import a standalone share")}
             }
         }
         if let Some(m) = ok() {
@@ -2371,11 +2572,11 @@ fn Detalle(
     let obra_caja = obra.id.clone();
     let v = vista();
     // Estado en curso de cada partida, con la misma regla que la pantalla de partida.
-    let en_curso: Vec<(Option<&'static str>, bool, bool)> = (0..partidas.len())
+    let en_curso: Vec<(Option<&'static str>, bool, bool, Option<String>)> = (0..partidas.len())
         .map(|i| {
-            let a = caja::acciones_partida(&obra, i, &mid, &v.lineas_de(&obra.id, i));
+            let a = caja::acciones_partida_con(&obra, i, &mid, &v.lineas_de(&obra.id, i), v.traba(&obra, i));
             let toca = a.aceptar_pago || a.avisar_termino || a.confirmar_fondeo || a.empezar_fondeo_de_nuevo;
-            (caja::en_curso_corto(a.en_curso, es), a.frenado, toca)
+            (caja::en_curso_corto(a.en_curso, es), a.frenado, toca, caja::traba_corta(a.traba, es))
         })
         .collect();
     let pagadas = partidas.iter().filter(|p| p.estado == PartidaEstado::Pagada).count();
@@ -2607,7 +2808,7 @@ fn Detalle(
                                     let titulo = lang.titulo_partida(i, &p.detalle);
                                     let label = lang.label_partida(p);
                                     let kind = chip_partida(p.estado);
-                                    let (curso, frenado, toca) = en_curso.get(i).cloned().unwrap_or((None, false, false));
+                                    let (curso, frenado, toca, traba) = en_curso.get(i).cloned().unwrap_or((None, false, false, None));
                                     let corto = caja::saldo_corto(es, p.estado, p.capital(garantia), p.fondeo_txid.is_some());
                                     rsx! {
                                         button {
@@ -2630,6 +2831,8 @@ fn Detalle(
                                                     span { class: "chip chip-err", {lang.t("Frenado", "Stopped")} }
                                                 } else if let Some(c) = curso {
                                                     span { class: "chip chip-wait", "{c}" }
+                                                } else if let Some(t) = traba {
+                                                    span { class: "chip chip-wait", "{t}" }
                                                 } else if toca {
                                                     span { class: "chip chip-info", {lang.t("Te toca", "Your turn")} }
                                                 }
@@ -2758,14 +2961,9 @@ fn Detalle(
                     }
                     if abierta && (soy_m || soy_c) {
                         details { class: "plegable",
-                            summary { {lang.t("Respaldos y recuperación", "Backups and recovery")} }
-                            div { class: "cuerpo",
-                                CajaRespaldo { obra_id: obra.id.clone(), caja: caja.clone(), vista, yo, obras, err }
-                            }
-                        }
-                        details { class: "plegable",
                             summary { {lang.t("Avanzado", "Advanced")} }
                             div { class: "cuerpo",
+                                CajaRespaldo { obra_id: obra.id.clone(), caja: caja.clone(), vista, yo, obras, err }
                                 CajaMirar { obra_id: obra.id.clone(), caja: caja.clone(), vista, err }
                             }
                         }
@@ -2977,7 +3175,8 @@ fn VerPartida(
         .unwrap_or(false);
     // Una sola regla (caja.rs) decide qué botones existen; Android usa la misma.
     let lineas = vista().lineas_de(&obra.id, i);
-    let acc = caja::acciones_partida(&obra, i, &mid, &lineas);
+    let acc = caja::acciones_partida_con(&obra, i, &mid, &lineas, vista().traba(&obra, i));
+    let traba_txt = caja::texto_traba(acc.traba, obra.contratista.id == mid, es);
     let pagando = matches!(acc.en_curso, caja::EnCurso::PagoFirmando | caja::EnCurso::PagoEnRed);
     let en_curso_txt = caja::en_curso_corto(acc.en_curso, es);
     let lineas_vis: Vec<(&'static str, String, Option<String>)> =
@@ -3080,6 +3279,8 @@ fn VerPartida(
                 h1 { "{i + 1}  {titulo}" }
                 span { class: chip_partida(p.estado), "{label}" }
                 if let Some(t) = en_curso_txt {
+                    span { class: "chip chip-wait", "{t}" }
+                } else if let Some(t) = caja::traba_corta(acc.traba, es) {
                     span { class: "chip chip-wait", "{t}" }
                 } else if acc.me_toca {
                     span { class: "chip chip-info", {lang.t("Te toca", "Your turn")} }
@@ -3279,6 +3480,17 @@ fn VerPartida(
                                     },
                                     {lang.t("Avisar que terminé", "Report that I finished")}
                                 }
+                            } else if let Some(t) = traba_txt.clone() {
+                                p { class: "estado wait", "{t}" }
+                                if !soy_m {
+                                    button {
+                                        class: "btn btn-primary",
+                                        disabled: true,
+                                        title: "{t}",
+                                        {lang.t("Avisar que terminé", "Report that I finished")}
+                                    }
+                                }
+                                p { class: "help", {lang.t("El fondeo tiene que juntar 10 confirmaciones antes de que la caja pueda pagar. El aviso se suelta solo.", "The funding needs 10 confirmations before the escrow can pay. This clears by itself.")} }
                             } else if soy_m {
                                 p { class: "estado info", {lang.t("Encerrada. El contratista avisa cuando termina y propone cuánto se paga.", "Locked. The contractor reports when they finish and proposes how much is paid.")} }
                             }
@@ -3304,6 +3516,19 @@ fn VerPartida(
                                 }
                             } else if !acc.me_toca {
                                 p { class: "estado wait", {match lang { Idioma::Es => format!("Esperando a {espera_nom}."), Idioma::En => format!("Waiting for {espera_nom}.") }} }
+                            }
+                            if let Some(t) = traba_txt.clone() {
+                                if !pagando {
+                                    p { class: "estado wait", "{t}" }
+                                    if acc.me_toca {
+                                        button {
+                                            class: "btn btn-primary",
+                                            disabled: true,
+                                            title: "{t}",
+                                            {match lang { Idioma::Es => format!("Aceptar {}% y pagar", propuesto.unwrap_or(0)), Idioma::En => format!("Accept {}% and pay", propuesto.unwrap_or(0)) }}
+                                        }
+                                    }
+                                }
                             }
                             if acc.aceptar_pago {
                                 button {
@@ -3456,14 +3681,9 @@ fn VerPartida(
                     }
                     if !cortada && (soy_m || soy_c) {
                         details { class: "plegable",
-                            summary { {lang.t("Respaldos y recuperación", "Backups and recovery")} }
-                            div { class: "cuerpo",
-                                CajaRespaldo { obra_id: obra.id.clone(), caja: caja.clone(), vista, yo, obras, err }
-                            }
-                        }
-                        details { class: "plegable",
                             summary { {lang.t("Avanzado", "Advanced")} }
                             div { class: "cuerpo",
+                                CajaRespaldo { obra_id: obra.id.clone(), caja: caja.clone(), vista, yo, obras, err }
                                 div { class: "grupo",
                                     CajaMirar { obra_id: obra.id.clone(), caja: caja.clone(), vista, err }
                                 }

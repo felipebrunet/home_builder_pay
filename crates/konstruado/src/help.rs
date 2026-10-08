@@ -153,6 +153,8 @@ mod tests {
         assert!(!README.contains("cargo run"));
         assert!(!README.contains("CONTEXTO"));
         assert!(README.contains("job backup → seed → share"));
+        assert!(README.contains("Restore from backup"));
+        assert!(README.contains("KSTRBAK"));
         let _ = menu();
     }
 }

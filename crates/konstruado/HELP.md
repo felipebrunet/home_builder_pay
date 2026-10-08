@@ -64,9 +64,11 @@ The lock, per stage, works like this. Both people send the same guarantee into o
 
 If the node rejects the funding (stale decoys or a spent output), press **Start funding again**. It clears the stuck session on both sides and builds fresh rings. The job is kept. Both have to be online for a moment so the other side also clears.
 
-Paying splits that pot by the percent already agreed. The contractor gets their own guarantee back, plus that percent of the payment. The client gets the rest. The fee comes from the client's remainder first. Both have to sign. One signature is not enough. **Accept and pay** builds the transaction. Paid is set when the scan sees it.
+Paying splits that pot by the percent already agreed. The contractor gets their own guarantee back, plus that percent of the payment. The client gets the rest. The fee comes from the client's remainder first. Both have to sign. One signature is not enough. **Accept and pay** builds the transaction. Paid is set when the scan sees it. When one side gets nothing (100 % to the contractor), its output carries 0 XMR: Monero needs two outputs, but no dust is sent to anyone.
 
-Coins received in the last 10 blocks stay locked. The node can still reject a publish; the error is shown.
+Coins received in the last 10 blocks stay locked. That includes the stage funding: the box can only pay from block *funding block + 10*. Until then the contractor cannot report finish and the client cannot accept and pay; both see **You can mark it finished in ~N blocks (~M min, block X)** instead of the button, and the job list shows **Unlocks in ~N blocks**. The app re-reads the node's tip every minute, so the button comes back on its own. If the funding is not in a block yet, it says so. The node can still reject a publish; the error is shown.
+
+In the wallet, **Use the maximum** sends the whole free balance: the fee is taken from the amount and there is no change output with coins in it. A normal send returns the change to your wallet.
 
 Notes inside a job are sealed for the two people. Someone else on the network can see that a note exists and cannot read it. A job already taken leaves their board.
 
@@ -76,12 +78,16 @@ By default the app uses the public stagenet node. In the account screen, **NODE 
 
 ## Backups
 
-Three separate things. Keep all three.
+One encrypted file holds everything this device needs: the seed and its block height, your jobs and offers (archived ones too), the share of every job box, your name and role, the node URL, theme and language. Export it in **Wallet → Backups and recovery → Export full backup**. Pick a password (at least 8 characters); without it the file cannot be opened and there is no way to recover it. The file ends in `.kbak`. Keep it off this device.
 
-- **Seed** (**Save the 25 words**): your personal wallet. The backup also stores the block height, so **Restore the 25 words** scans from there forward. Old seed files without a height scan the recent window; use **Scan 200 blocks further back** if needed.
-- **Share** (**Save the box share**, one per job): your half of the job's shared box. It does not come from the seed. Without it the box cannot sign.
-- **Job backup** (**Save job backup**): your jobs, offers and roles. A share can only be restored once its job is in the profile.
+The file is versioned (`KSTRBAK` header), the key comes from the password with Argon2id (64 MiB, 3 passes) and the content is sealed with XChaCha20-Poly1305. A wrong password or a damaged file is refused without writing anything.
 
-After reinstalling, restore in this order: **job backup → seed → share** (**Restore job backup**, **Restore the 25 words**, **Restore a share**). Then **Refresh balance**. A job backup can be older than the other side; the deal state catches up when you are both online.
+Export again after you create or join a job and after a job box is built (the new share is only in the new backup). The wallet shows when the last full backup was made, and the board reminds you when something new is missing from it.
+
+**Restore.** On a fresh install the first screen offers **Create a new account** or **Restore from backup**; the same restore is in Backups and recovery. The app opens the file, checks the seed and every share against its job and your role, and shows a summary. Nothing is written until everything checks out. If this device already has an account, a seed or shares, you must confirm **Replace what is on this device**; it never mixes the two. The app then restarts, moves the old data to a `previo-<date>` folder next to the profile, puts the restored data in place in one step, and scans the wallet and each box from the backup's height.
+
+After a restore, newer progress of a deal (notes, percents, payments) comes from the other person through the room once you are both online.
+
+Backups from 0.2.7 or earlier (25-word file, box share, job backup) still import under **Advanced: import standalone backups (0.2.7 or older)**: job backup → seed → share. The app no longer exports them separately.
 
 The version is in **Help → About**.

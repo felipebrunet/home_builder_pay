@@ -458,7 +458,8 @@ label.et {
   color: var(--apagado);
 }
 
-input[type="text"] {
+input[type="text"],
+input[type="password"] {
   width: 100%;
   padding: 11px 14px;
   font-size: 16px;
@@ -468,8 +469,10 @@ input[type="text"] {
   color: var(--tinta);
   font-family: inherit;
 }
-input[type="text"]::placeholder { color: var(--place); }
-input[type="text"]:focus { outline: none; border-color: var(--foco); box-shadow: 0 0 0 3px rgba(29, 78, 216, 0.18); }
+input[type="text"]::placeholder,
+input[type="password"]::placeholder { color: var(--place); }
+input[type="text"]:focus,
+input[type="password"]:focus { outline: none; border-color: var(--foco); box-shadow: 0 0 0 3px rgba(29, 78, 216, 0.18); }
 input[readonly] { background: var(--card-2); }
 input.addr { font-family: ui-monospace, monospace; font-size: 13px; }
 
@@ -836,9 +839,16 @@ button { -webkit-tap-highlight-color: transparent; }
   border-radius: 4px;
   font-weight: 700;
 }
-.pane.narrow > input[type="text"] { margin-bottom: 4px; }
+.pane.narrow > input[type="text"],
+.pane.narrow > input[type="password"] { margin-bottom: 4px; }
+.pane.narrow > .lead + .roles { margin-top: 20px; }
 .pane.narrow > .btn { margin-top: 12px; }
 
 .parejas-in { display: flex; flex-direction: column; gap: 6px; }
 
 .panel p { margin: 0; }
+
+/* Recordatorio del respaldo completo (tablero y obra). */
+.recordatorio { display: flex; align-items: center; gap: 12px; margin: 0 0 14px; max-width: 1280px; }
+.recordatorio .estado { flex: 1 1 auto; min-width: 0; margin: 0; }
+.recordatorio .btn { flex: 0 0 auto; width: auto; padding-left: 18px; padding-right: 18px; }
