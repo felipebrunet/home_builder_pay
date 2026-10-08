@@ -61,7 +61,15 @@ android {
         }
     }
     testOptions {
+        unitTests.isIncludeAndroidResources = true
         unitTests.all {
+            // Capturas Compose (Robolectric + Roborazzi): solo con -Pcapturas=DIR.
+            (project.findProperty("capturas") as String?)?.let { dir ->
+                it.systemProperty("konstruado.capturas", dir)
+                it.systemProperty("roborazzi.test.record", "true")
+            }
+            (project.findProperty("demo") as String?)?.let { d -> it.systemProperty("konstruado.demo", d) }
+            (project.findProperty("oscuro") as String?)?.let { o -> it.systemProperty("konstruado.oscuro", o) }
             it.systemProperty("jna.library.path", rootProject.file("../target/debug").absolutePath)
             it.testLogging { showStandardStreams = true; events("passed", "failed") }
         }
@@ -93,5 +101,11 @@ dependencies {
     // Test JVM: bindings + JNA de escritorio + lib del host (target/debug).
     testImplementation("junit:junit:4.13.2")
     testImplementation("net.java.dev.jna:jna:5.14.0")
+    // Capturas de pantalla en la JVM (sin emulador).
+    testImplementation("org.robolectric:robolectric:4.12.2")
+    testImplementation("io.github.takahirom.roborazzi:roborazzi:1.20.0")
+    testImplementation("io.github.takahirom.roborazzi:roborazzi-compose:1.20.0")
+    testImplementation("androidx.compose.ui:ui-test-junit4")
+    debugImplementation("androidx.compose.ui:ui-test-manifest")
 }
 
