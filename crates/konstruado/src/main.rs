@@ -8,8 +8,8 @@ use std::time::Duration;
 
 use dioxus::prelude::*;
 use konstruado_core::{
-    asegurar_clave, monto, monto_pct, n_partidas, oferta_en_tablero, Aceptacion, EstadoObra, Oferta,
-    Obra, PartidaEstado, Persona, Rol, TextoLeido, MAX_NOTA,
+    asegurar_clave, monto, monto_pct, n_partidas, oferta_en_tablero, retirar_oferta, Aceptacion,
+    EstadoObra, Oferta, Obra, PartidaEstado, Persona, Rol, TextoLeido, MAX_NOTA,
 };
 use konstruado_net::{EstadoTor, Nodo, RED};
 use i18n::Idioma;
@@ -22,7 +22,7 @@ fn main() {
     }
     let window = dioxus::desktop::WindowBuilder::new()
         .with_title(concat!("Konstruado ", env!("CARGO_PKG_VERSION")))
-        .with_inner_size(dioxus::desktop::LogicalSize::new(1100.0, 760.0))
+        .with_inner_size(dioxus::desktop::LogicalSize::new(1240.0, 800.0))
         .with_min_inner_size(dioxus::desktop::LogicalSize::new(420.0, 560.0));
     let cfg = dioxus::desktop::Config::new()
         .with_window(window)
@@ -91,6 +91,7 @@ fn persistir(
         clave_sec,
         spend_sec,
         obras_salidas: n.obras_salidas(),
+        retiradas: n.retiradas(),
     });
 }
 
@@ -205,6 +206,7 @@ fn App() -> Element {
         let ofertas0 = guardado.ofertas.clone();
         let mut obras0 = guardado.obras.clone();
         let salidas0 = guardado.obras_salidas.clone();
+        let retiradas0 = guardado.retiradas.clone();
         let sec0 = guardado.clave_sec.clone();
         if let Some(p) = guardado.yo.clone() {
             for o in &mut obras0 {
@@ -224,6 +226,7 @@ fn App() -> Element {
         match Nodo::arrancar().await {
             Ok(n) => {
                 n.fijar_obras_salidas(salidas0);
+                n.fijar_retiradas(retiradas0);
                 n.hidratar(ofertas0, obras0, presentes0);
                 if let Some(p) = yo() {
                     n.actualizar_yo(p);
@@ -276,6 +279,12 @@ fn App() -> Element {
         .filter(|o| o.participa(&mid))
         .collect();
     mis_obras.sort_by(|a, b| b.actualizado.cmp(&a.actualizado).then(b.id.cmp(&a.id)));
+    let en_billetera = screen() == Screen::Billetera;
+    let en_obra = if matches!(screen(), Screen::Detalle | Screen::VerPartida) {
+        sel_obra()
+    } else {
+        None
+    };
 
     rsx! {
         style { {CSS} }
@@ -293,7 +302,7 @@ fn App() -> Element {
                 LangSwitch {}
                 if adentro {
                     button {
-                        class: "top-billetera",
+                        class: if en_billetera { "top-billetera on" } else { "top-billetera" },
                         onclick: move |_| screen.set(Screen::Billetera),
                         {lang.t("Billetera", "Wallet")}
                     }
@@ -308,7 +317,7 @@ fn App() -> Element {
                 if adentro {
                     aside { class: "side",
                         button {
-                            class: "side-wallet",
+                            class: if en_billetera { "side-wallet on" } else { "side-wallet" },
                             onclick: move |_| screen.set(Screen::Billetera),
                             {lang.t("Billetera", "Wallet")}
                         }
@@ -316,7 +325,7 @@ fn App() -> Element {
                         div { class: "side-list",
                             for o in mis_obras {
                                 button {
-                                    class: "side-item",
+                                    class: if en_obra.as_deref() == Some(o.id.as_str()) { "side-item on" } else { "side-item" },
                                     onclick: move |_| {
                                         sel_obra.set(Some(o.id.clone()));
                                         screen.set(Screen::Detalle);
@@ -337,7 +346,14 @@ fn App() -> Element {
                 }
                 main { class: "main",
                     if let Some(e) = err() {
-                        div { class: "err", "{e}" }
+                        div { class: "toast", role: "alert",
+                            span { "{e}" }
+                            button {
+                                title: lang.t("Cerrar", "Close"),
+                                onclick: move |_| err.set(None),
+                                "×"
+                            }
+                        }
                     }
                     match screen() {
                         Screen::Bienvenida => rsx! {
@@ -346,7 +362,7 @@ fn App() -> Element {
                         Screen::Tablero => rsx! {
                             Tablero {
                                 yo, rol, red, ofertas, obras, presentes, screen, sel_oferta, sel_obra,
-                                sel_partida, tor, peers, garantia_acc
+                                sel_partida, tor, peers, garantia_acc, err
                             }
                         },
                         Screen::Nueva => rsx! {
@@ -819,19 +835,23 @@ fn Cuenta(
     let mut daemon_aviso = use_signal(|| Option::<String>::None);
     let mut daemon_probando = use_signal(|| false);
     rsx! {
-        div { class: "pane narrow",
+        div { class: "pane",
             h1 { {lang.t("Tu cuenta", "Your account")} }
-            p { class: "lead",
+            p { class: "sub",
                 {lang.t("El nombre y el rol se pueden cambiar. Las obras no se borran. El mandante abre la sala; el contratista solo busca.", "Name and role can be changed. Jobs are not deleted. The client opens the room; the contractor only looks.")}
             }
+            div { class: "cols parejas",
+            div { class: "col",
+            section { class: "panel",
+            h2 { {lang.t("Perfil", "Profile")} }
             label { class: "et", {lang.t("NOMBRE", "NAME")} }
             input {
                 r#type: "text",
                 value: "{nom}",
                 oninput: move |e| nom.set(e.value()),
             }
-            div { class: "paso", b { "2" } {lang.t("¿Qué vas a hacer?", "What will you do?")} }
-            div { class: "roles",
+            label { class: "et", {lang.t("¿QUÉ VAS A HACER?", "WHAT WILL YOU DO?")} }
+            div { class: "roles lado",
                 button {
                     class: if rlocal() == Some(Rol::Mandante) { "rol on" } else { "rol" },
                     onclick: move |_| rlocal.set(Some(Rol::Mandante)),
@@ -845,8 +865,11 @@ fn Cuenta(
                     span { {lang.t("Contratista. Buscás lo publicado. No abrís sala.", "Contractor. You look at posted jobs. You do not open a room.")} }
                 }
             }
-            div { class: "paso", b { "3" } {lang.t("Apariencia", "Look")} }
-            div { class: "roles",
+            }
+            section { class: "panel",
+            h2 { {lang.t("Apariencia e idioma", "Look and language")} }
+            label { class: "et", {lang.t("TEMA", "THEME")} }
+            div { class: "roles lado",
                 button {
                     class: if tlocal() == "vivo" { "rol on" } else { "rol" },
                     onclick: move |_| tlocal.set("vivo".into()),
@@ -860,8 +883,8 @@ fn Cuenta(
                     span { {lang.t("Gris claro, menos tinta. El anterior.", "Light gray, less ink. The previous look.")} }
                 }
             }
-            div { class: "paso", b { "4" } {lang.t("Idioma", "Language")} }
-            div { class: "roles",
+            label { class: "et", {lang.t("IDIOMA", "LANGUAGE")} }
+            div { class: "roles lado",
                 button {
                     class: if ilocal() == Idioma::Es { "rol on" } else { "rol" },
                     onclick: move |_| ilocal.set(Idioma::Es),
@@ -875,151 +898,7 @@ fn Cuenta(
                     span { {lang.t("English. The deal does not change.", "English. The deal does not change.")} }
                 }
             }
-            div { class: "paso", b { "5" } "Stagenet" }
-            p { class: "hint",
-                {
-                    let d = vista().daemon.clone();
-                    if xmr_joint::daemon_es_defecto() {
-                        match lang {
-                            Idioma::Es => format!("Activo (público): {d}"),
-                            Idioma::En => format!("Active (public): {d}"),
-                        }
-                    } else {
-                        match lang {
-                            Idioma::Es => format!("Activo (propio): {d}"),
-                            Idioma::En => format!("Active (custom): {d}"),
-                        }
-                    }
-                }
             }
-            p { class: "hint",
-                {lang.t(
-                    "Guardar fija el nodo para scan, saldo, fondeo y pago. «Usar por defecto» vuelve al público.",
-                    "Save sets the node for scan, balance, funding and payout. Use default goes back to the public daemon.",
-                )}
-            }
-            label { class: "et", {lang.t("URL DEL NODO", "NODE URL")} }
-            input {
-                r#type: "text",
-                value: "{daemon_url}",
-                placeholder: "{xmr_joint::STAGENET_DAEMON}",
-                oninput: move |e| daemon_url.set(e.value()),
-            }
-            div { class: "row",
-                button {
-                    class: "btn btn-primary",
-                    onclick: {
-                        let caja_daemon = caja_daemon.clone();
-                        move |_| {
-                            match persist::fijar_daemon_persistido(Some(&daemon_url())) {
-                                Ok(u) => {
-                                    daemon_url.set(if xmr_joint::daemon_es_defecto() {
-                                        String::new()
-                                    } else {
-                                        u.clone()
-                                    });
-                                    daemon_aviso.set(Some(match lang_now() {
-                                        Idioma::Es => format!("Nodo guardado: {u}"),
-                                        Idioma::En => format!("Node saved: {u}"),
-                                    }));
-                                    caja_daemon.pedir_actualizacion();
-                                    err.set(None);
-                                }
-                                Err(e) => {
-                                    daemon_aviso.set(None);
-                                    err.set(Some(e));
-                                }
-                            }
-                        }
-                    },
-                    {lang.t("Guardar nodo", "Save node")}
-                }
-                button {
-                    class: "btn btn-ghost",
-                    onclick: {
-                        let caja_daemon = caja_daemon.clone();
-                        move |_| {
-                            match persist::fijar_daemon_persistido(None) {
-                                Ok(u) => {
-                                    daemon_url.set(String::new());
-                                    daemon_aviso.set(Some(match lang_now() {
-                                        Idioma::Es => format!("Volví al nodo público: {u}"),
-                                        Idioma::En => format!("Back to public node: {u}"),
-                                    }));
-                                    caja_daemon.pedir_actualizacion();
-                                    err.set(None);
-                                }
-                                Err(e) => err.set(Some(e)),
-                            }
-                        }
-                    },
-                    {lang.t("Usar por defecto", "Use default")}
-                }
-                button {
-                    class: "btn btn-ghost",
-                    disabled: daemon_probando(),
-                    onclick: move |_| {
-                        if daemon_probando() {
-                            return;
-                        }
-                        daemon_probando.set(true);
-                        let es = lang_now() == Idioma::Es;
-                        spawn(async move {
-                            let r = caja::probar_daemon(es).await;
-                            daemon_aviso.set(Some(r.mensaje));
-                            daemon_probando.set(false);
-                        });
-                    },
-                    if daemon_probando() {
-                        {lang.t("Probando RPC…", "Testing RPC…")}
-                    } else {
-                        {lang.t("Probar RPC del nodo", "Test node RPC")}
-                    }
-                }
-            }
-            if let Some(a) = daemon_aviso() {
-                p { class: "hint", "{a}" }
-            }
-            button {
-                class: "btn btn-ghost",
-                onclick: move |_| screen.set(Screen::Billetera),
-                {lang.t("Abrir billetera", "Open wallet")}
-            }
-            if let Some(tip) = vista().tip {
-                p { class: "meta", {match lang { Idioma::Es => format!("Punta del nodo: {tip}"), Idioma::En => format!("Node tip: {tip}") }} }
-            }
-            p { class: "hint", "{caja::escala(matches!(lang, Idioma::Es))}" }
-            if let Some(addr) = vista().personal.clone() {
-                p { class: "meta", "{addr}" }
-                button {
-                    class: "btn btn-ghost",
-                    onclick: move |_| {
-                        let Some(path) = rfd::FileDialog::new()
-                            .set_file_name("konstruado-semilla.txt")
-                            .save_file()
-                        else {
-                            return;
-                        };
-                        match caja_palabras.guardar_palabras(&path) {
-                            Ok(()) => err.set(None),
-                            Err(e) => err.set(Some(e)),
-                        }
-                    },
-                    {lang.t("Guardar las 25 palabras", "Save the 25 words")}
-                }
-            } else {
-                button {
-                    class: "btn btn-primary",
-                    onclick: move |_| {
-                        match caja_crear.crear_semilla() {
-                            Ok(_) => err.set(None),
-                            Err(e) => err.set(Some(e)),
-                        }
-                    },
-                    {lang.t("Crear billetera de stagenet", "Create stagenet wallet")}
-                }
-            }
-            RestaurarLlaves { caja: caja.clone(), yo, obras, red, vista, err }
             button {
                 class: "btn btn-primary",
                 onclick: move |_| {
@@ -1054,156 +933,132 @@ fn Cuenta(
                         Err(e) => err.set(Some(lang_now().error(&e))),
                     }
                 },
-                {lang.t("Guardar", "Save")}
+                {lang.t("Guardar perfil y apariencia", "Save profile and look")}
             }
-            button {
-                class: "btn btn-ghost",
-                onclick: move |_| screen.set(Screen::Tablero),
-                {lang.t("Volver", "Back")}
             }
-        }
-    }
-}
-
-#[component]
-fn Billetera(
-    yo: Signal<Option<Persona>>,
-    obras: Signal<Vec<Obra>>,
-    red: Signal<Option<Nodo>>,
-    screen: Signal<Screen>,
-    mut err: Signal<Option<String>>,
-    caja: caja::Caja,
-    vista: Signal<caja::CajaVista>,
-) -> Element {
-    let mut destino = use_signal(String::new);
-    let mut monto = use_signal(String::new);
-    let lang = use_context::<Signal<Idioma>>()();
-    let b = vista().billetera.clone();
-    let addr = vista().personal.clone();
-    let caja_palabras = caja.clone();
-    let caja_envio = caja.clone();
-    let caja_act = caja.clone();
-    let caja_atras = caja.clone();
-    let caja_crear = caja.clone();
-    rsx! {
-        div { class: "pane narrow",
-            h1 { {lang.t("Billetera", "Wallet")} }
-            p { class: "lead",
-                {lang.t(
-                    "Tu Monero personal de stagenet. La caja de una obra es otra dirección, de las dos personas.",
-                    "Your personal stagenet Monero. A job's box is a different address, shared by both people.",
-                )}
-            }
-            p { class: "hint", "{vista().daemon}" }
-            if let Some(addr) = addr {
-                p { class: "saldo",
-                    "{caja::fmt_xmr(b.total)}"
-                    small { "XMR" }
-                }
-                p { class: "meta",
-                    {match lang {
-                        Idioma::Es => format!(
-                            "Libre {} · trabado {} (10 bloques)",
-                            caja::fmt_xmr(b.libre),
-                            caja::fmt_xmr(b.trabado),
-                        ),
-                        Idioma::En => format!(
-                            "Unlocked {} · locked {} (10 blocks)",
-                            caja::fmt_xmr(b.libre),
-                            caja::fmt_xmr(b.trabado),
-                        ),
-                    }}
-                }
-                if let Some(tip) = vista().tip {
-                    p { class: "meta",
-                        {match lang {
-                            Idioma::Es => format!("Punta del nodo: {tip}"),
-                            Idioma::En => format!("Node tip: {tip}"),
-                        }}
-                    }
-                }
-                if let (Some(desde), Some(hasta)) = (b.desde, b.hasta) {
-                    p { class: "hint",
-                        {match lang {
-                            Idioma::Es => format!("Visto desde el bloque {desde} hasta el {hasta}."),
-                            Idioma::En => format!("Scanned from block {desde} through {hasta}."),
-                        }}
-                    }
-                } else {
-                    p { class: "hint",
-                        {lang.t(
-                            "Todavía no miré la cadena. Arranco por los últimos 40 bloques.",
-                            "I have not scanned the chain yet. I start with the last 40 blocks.",
-                        )}
-                    }
-                }
-                if b.buscando {
-                    p { class: "hint", {lang.t("Mirando la cadena…", "Scanning the chain…")} }
-                }
-                if b.enviando {
-                    p { class: "hint", {lang.t("Firmando y publicando…", "Signing and publishing…")} }
-                }
-                if b.retro > 0 {
-                    p { class: "hint",
-                        {match lang {
-                            Idioma::Es => format!("Quedan {} bloques por mirar hacia atrás.", b.retro),
-                            Idioma::En => format!("{} blocks left to scan backward.", b.retro),
-                        }}
-                    }
-                }
-                if let Some(aviso) = b.aviso.clone() {
-                    p { class: "err", "{caja::aviso_humano(&aviso, matches!(lang, Idioma::Es))}" }
-                }
-                if let Some(tx) = b.ultimo.clone() {
-                    p { class: "meta",
-                        {match lang {
-                            Idioma::Es => format!(
-                                "Último envío {tx}. Fee {} XMR. Cambio {} XMR, vuelve en el próximo bloque.",
-                                caja::fmt_xmr(b.ultimo_fee.unwrap_or(0)),
-                                caja::fmt_xmr(b.ultimo_cambio.unwrap_or(0)),
-                            ),
-                            Idioma::En => format!(
-                                "Last send {tx}. Fee {} XMR. Change {} XMR, it returns in the next block.",
-                                caja::fmt_xmr(b.ultimo_fee.unwrap_or(0)),
-                                caja::fmt_xmr(b.ultimo_cambio.unwrap_or(0)),
-                            ),
-                        }}
-                    }
-                }
-                if !b.movs.is_empty() {
-                    div { class: "paso", b { "·" } {lang.t("Entradas", "Outputs")} }
-                    for mov in b.movs.iter() {
-                        div { class: "mov",
-                            span { "{caja::fmt_xmr(mov.monto)} XMR" }
-                            span { class: "hint",
-                                {match lang {
-                                    Idioma::Es => format!(
-                                        "bloque {} · {}",
-                                        mov.altura,
-                                        if mov.libre { "libre" } else { "trabado" }
-                                    ),
-                                    Idioma::En => format!(
-                                        "block {} · {}",
-                                        mov.altura,
-                                        if mov.libre { "unlocked" } else { "locked" }
-                                    ),
-                                }}
-                            }
+            div { class: "col",
+            section { class: "panel",
+            h2 { {lang.t("Nodo de stagenet", "Stagenet node")} }
+            p { class: "estado info",
+                {
+                    let d = vista().daemon.clone();
+                    if xmr_joint::daemon_es_defecto() {
+                        match lang {
+                            Idioma::Es => format!("Activo (público): {d}"),
+                            Idioma::En => format!("Active (public): {d}"),
+                        }
+                    } else {
+                        match lang {
+                            Idioma::Es => format!("Activo (propio): {d}"),
+                            Idioma::En => format!("Active (custom): {d}"),
                         }
                     }
                 }
-                div { class: "paso", b { "1" } {lang.t("Recibir", "Receive")} }
-                input {
-                    class: "addr",
-                    r#type: "text",
-                    readonly: true,
-                    value: "{addr}",
+            }
+            p { class: "help",
+                {lang.t(
+                    "Guardar fija el nodo para scan, saldo, fondeo y pago. «Usar por defecto» vuelve al público.",
+                    "Save sets the node for scan, balance, funding and payout. Use default goes back to the public daemon.",
+                )}
+            }
+            label { class: "et", {lang.t("URL DEL NODO", "NODE URL")} }
+            input {
+                r#type: "text",
+                value: "{daemon_url}",
+                placeholder: "{xmr_joint::STAGENET_DAEMON}",
+                oninput: move |e| daemon_url.set(e.value()),
+            }
+            div { class: "acciones",
+                button {
+                    class: "btn btn-primary btn-sm",
+                    onclick: {
+                        let caja_daemon = caja_daemon.clone();
+                        move |_| {
+                            match persist::fijar_daemon_persistido(Some(&daemon_url())) {
+                                Ok(u) => {
+                                    daemon_url.set(if xmr_joint::daemon_es_defecto() {
+                                        String::new()
+                                    } else {
+                                        u.clone()
+                                    });
+                                    daemon_aviso.set(Some(match lang_now() {
+                                        Idioma::Es => format!("Nodo guardado: {u}"),
+                                        Idioma::En => format!("Node saved: {u}"),
+                                    }));
+                                    caja_daemon.pedir_actualizacion();
+                                    err.set(None);
+                                }
+                                Err(e) => {
+                                    daemon_aviso.set(None);
+                                    err.set(Some(e));
+                                }
+                            }
+                        }
+                    },
+                    {lang.t("Guardar nodo", "Save node")}
                 }
-                p { class: "hint",
-                    {lang.t(
-                        "Seleccioná la dirección y copiala. El scan no ve monedas que tengan más de lo que ya miramos: si el faucet es viejo, pedí mirar más atrás.",
-                        "Select the address and copy it. The scan misses coins older than what we already looked at: if the faucet is old, scan further back.",
-                    )}
+                button {
+                    class: "btn btn-ghost btn-sm",
+                    onclick: {
+                        let caja_daemon = caja_daemon.clone();
+                        move |_| {
+                            match persist::fijar_daemon_persistido(None) {
+                                Ok(u) => {
+                                    daemon_url.set(String::new());
+                                    daemon_aviso.set(Some(match lang_now() {
+                                        Idioma::Es => format!("Volví al nodo público: {u}"),
+                                        Idioma::En => format!("Back to public node: {u}"),
+                                    }));
+                                    caja_daemon.pedir_actualizacion();
+                                    err.set(None);
+                                }
+                                Err(e) => err.set(Some(e)),
+                            }
+                        }
+                    },
+                    {lang.t("Usar por defecto", "Use default")}
+                }
+                button {
+                    class: "btn btn-ghost btn-sm",
+                    disabled: daemon_probando(),
+                    onclick: move |_| {
+                        if daemon_probando() {
+                            return;
+                        }
+                        daemon_probando.set(true);
+                        let es = lang_now() == Idioma::Es;
+                        spawn(async move {
+                            let r = caja::probar_daemon(es).await;
+                            daemon_aviso.set(Some(r.mensaje));
+                            daemon_probando.set(false);
+                        });
+                    },
+                    if daemon_probando() {
+                        {lang.t("Probando RPC…", "Testing RPC…")}
+                    } else {
+                        {lang.t("Probar RPC del nodo", "Test node RPC")}
+                    }
+                }
+            }
+            if let Some(a) = daemon_aviso() {
+                p { class: "estado info", "{a}" }
+            }
+            if let Some(tip) = vista().tip {
+                dl { class: "datos",
+                    dt { {lang.t("Punta del nodo", "Node tip")} }
+                    dd { "{tip}" }
+                }
+            }
+            }
+            section { class: "panel",
+            h2 { {lang.t("Billetera", "Wallet")} }
+            p { class: "help", "{caja::escala(matches!(lang, Idioma::Es))}" }
+            if let Some(addr) = vista().personal.clone() {
+                span { class: "mono caja", "{addr}" }
+                button {
+                    class: "btn btn-ghost",
+                    onclick: move |_| screen.set(Screen::Billetera),
+                    {lang.t("Abrir billetera", "Open wallet")}
                 }
                 button {
                     class: "btn btn-ghost",
@@ -1221,93 +1076,368 @@ fn Billetera(
                     },
                     {lang.t("Guardar las 25 palabras", "Save the 25 words")}
                 }
-                RestaurarLlaves { caja: caja.clone(), yo, obras, red, vista, err }
-                div { class: "paso", b { "2" } {lang.t("Enviar", "Send")} }
-                label { class: "et", {lang.t("DESTINO", "DESTINATION")} }
-                input {
-                    r#type: "text",
-                    value: "{destino}",
-                    placeholder: lang.t("Dirección de stagenet", "Stagenet address"),
-                    oninput: move |e| destino.set(e.value()),
-                }
-                label { class: "et", {lang.t("MONTO EN XMR", "AMOUNT IN XMR")} }
-                input {
-                    r#type: "text",
-                    value: "{monto}",
-                    placeholder: "0.04",
-                    oninput: move |e| monto.set(e.value()),
-                }
-                p { class: "hint",
-                    {lang.t(
-                        "El cambio vuelve a esta billetera. Se reserva 0,001 XMR para el fee. Hace falta al menos 1 piconero de cambio.",
-                        "Change comes back to this wallet. 0.001 XMR is set aside for the fee. At least 1 piconero of change is required.",
-                    )}
-                }
-                button {
-                    class: "btn btn-ghost",
-                    onclick: move |_| {
-                        match caja::maximo_envio(vista().billetera.libre) {
-                            Some(texto) => {
-                                monto.set(texto);
-                                err.set(None);
-                            }
-                            None => err.set(Some(lang_now().t(
-                                "No hay saldo libre suficiente para el fee.",
-                                "There is not enough unlocked balance for the fee.",
-                            ).into())),
-                        }
-                    },
-                    {lang.t("Usar el máximo", "Use the maximum")}
-                }
-                button {
-                    class: "btn btn-primary",
-                    onclick: move |_| {
-                        match caja_envio.pedir_envio(&destino(), &monto()) {
-                            Ok(()) => err.set(None),
-                            Err(e) => err.set(Some(caja::aviso_humano(&e, lang_now() == Idioma::Es))),
-                        }
-                    },
-                    {lang.t("Enviar", "Send")}
-                }
-                button {
-                    class: "btn btn-ghost",
-                    onclick: move |_| caja_act.pedir_actualizacion(),
-                    {lang.t("Actualizar saldo", "Refresh balance")}
-                }
-                button {
-                    class: "btn btn-ghost",
-                    onclick: move |_| caja_atras.pedir_atras(),
-                    {lang.t("Mirar 200 bloques más atrás", "Scan 200 blocks further back")}
-                }
             } else {
-                p { class: "hint", "{caja::escala(matches!(lang, Idioma::Es))}" }
-                p { class: "hint",
-                    {lang.t(
-                        "Todavía no hay semilla en este equipo. Se crean 25 palabras nuevas y quedan en la carpeta de datos.",
-                        "This machine has no seed yet. This creates 25 new words and keeps them in the data folder.",
-                    )}
-                }
                 button {
                     class: "btn btn-primary",
                     onclick: move |_| {
                         match caja_crear.crear_semilla() {
-                            Ok(_) => {
-                                err.set(None);
-                                vista.set(caja_crear.vista());
-                            }
+                            Ok(_) => err.set(None),
                             Err(e) => err.set(Some(e)),
                         }
                     },
                     {lang.t("Crear billetera de stagenet", "Create stagenet wallet")}
                 }
-                RestaurarLlaves { caja: caja.clone(), yo, obras, red, vista, err }
             }
-            button {
-                class: "btn btn-ghost",
-                onclick: move |_| screen.set(Screen::Tablero),
-                {lang.t("Volver", "Back")}
+            }
+            details { class: "plegable",
+                summary { {lang.t("Respaldos y recuperación", "Backups and recovery")} }
+                div { class: "cuerpo",
+                    RestaurarLlaves { caja: caja.clone(), yo, obras, red, vista, err }
+                }
+            }
+            }
             }
         }
+    }
+}
+
+#[component]
+fn Billetera(
+    yo: Signal<Option<Persona>>,
+    obras: Signal<Vec<Obra>>,
+    red: Signal<Option<Nodo>>,
+    screen: Signal<Screen>,
+    mut err: Signal<Option<String>>,
+    caja: caja::Caja,
+    vista: Signal<caja::CajaVista>,
+) -> Element {
+    let mut destino = use_signal(String::new);
+    let mut monto = use_signal(String::new);
+    let mut ok_palabras = use_signal(|| None::<String>);
+    let lang = use_context::<Signal<Idioma>>()();
+    let es = matches!(lang, Idioma::Es);
+    let v = vista();
+    let b = v.billetera.clone();
+    let addr = v.personal.clone();
+    let caja_palabras = caja.clone();
+    let caja_envio = caja.clone();
+    let caja_act = caja.clone();
+    let caja_act2 = caja.clone();
+    let caja_atras = caja.clone();
+    let caja_crear = caja.clone();
+    // Estado de la billetera en una sola línea de alto fijo: no corre el contenido.
+    let (punto, linea) = barra_billetera(&b, addr.is_some(), v.tip, lang);
+    rsx! {
+        div { class: "pane",
+            div { class: "cabeza",
+                h1 { {lang.t("Billetera", "Wallet")} }
+                div { class: "barra-estado derecha", style: "flex: 1 1 360px; max-width: 620px;",
+                    span { class: "{punto}" }
+                    span { class: "txt", title: "{linea}", "{linea}" }
+                    if addr.is_some() {
+                        button {
+                            class: "btn btn-ghost btn-sm",
+                            style: "width: auto; min-height: 28px; padding: 2px 10px; font-size: 13px;",
+                            disabled: b.buscando,
+                            onclick: move |_| caja_act2.pedir_actualizacion(),
+                            {lang.t("Actualizar", "Refresh")}
+                        }
+                    }
+                }
+            }
+            p { class: "sub",
+                {lang.t(
+                    "Tu Monero personal de stagenet. La caja de una obra es otra dirección, de las dos personas.",
+                    "Your personal stagenet Monero. A job's box is a different address, shared by both people.",
+                )}
+            }
+            if let Some(addr) = addr {
+                div { class: "cols",
+                    div { class: "col",
+                        section { class: "panel",
+                            h2 { {lang.t("Saldo", "Balance")} }
+                            p { class: "saldo",
+                                "{caja::fmt_xmr(b.total)}"
+                                small { "XMR" }
+                            }
+                            dl { class: "datos",
+                                dt { {lang.t("Libre", "Unlocked")} }
+                                dd { "{caja::fmt_xmr(b.libre)} XMR" }
+                                dt { {lang.t("Trabado", "Locked")} }
+                                dd { "{caja::fmt_xmr(b.trabado)} XMR" }
+                                dt { {lang.t("Mirado", "Scanned")} }
+                                dd {
+                                    {match (b.desde, b.hasta) {
+                                        (Some(d), Some(h)) => match lang {
+                                            Idioma::Es => format!("bloques {d} – {h}"),
+                                            Idioma::En => format!("blocks {d} – {h}"),
+                                        },
+                                        _ => lang.t("todavía nada", "nothing yet").to_string(),
+                                    }}
+                                }
+                                dt { {lang.t("Punta del nodo", "Node tip")} }
+                                dd { {v.tip.map(|t| t.to_string()).unwrap_or_else(|| "—".into())} }
+                                dt { {lang.t("Nodo", "Node")} }
+                                dd { span { class: "mono", "{v.daemon}" } }
+                            }
+                            if let Some(aviso) = b.aviso.clone() {
+                                p { class: "estado err", "{caja::aviso_humano(&aviso, es)}" }
+                            }
+                            if let Some(tx) = b.ultimo.clone() {
+                                p { class: "estado info",
+                                    span {
+                                        {match lang {
+                                            Idioma::Es => format!(
+                                                "Último envío: fee {} XMR, cambio {} XMR (vuelve en el próximo bloque). ",
+                                                caja::fmt_xmr(b.ultimo_fee.unwrap_or(0)),
+                                                caja::fmt_xmr(b.ultimo_cambio.unwrap_or(0)),
+                                            ),
+                                            Idioma::En => format!(
+                                                "Last send: fee {} XMR, change {} XMR (returns in the next block). ",
+                                                caja::fmt_xmr(b.ultimo_fee.unwrap_or(0)),
+                                                caja::fmt_xmr(b.ultimo_cambio.unwrap_or(0)),
+                                            ),
+                                        }}
+                                        span { class: "mono", "{tx}" }
+                                    }
+                                }
+                            }
+                            p { class: "help",
+                                {lang.t(
+                                    "El scan arranca 40 bloques atrás. Si el faucet es más viejo, mirá más atrás. El candado de ~10 bloques es aparte.",
+                                    "The scan starts 40 blocks back. If the faucet is older, scan further back. The ~10 block lock is separate.",
+                                )}
+                            }
+                            div { class: "acciones",
+                                button {
+                                    class: "btn btn-ghost btn-sm",
+                                    onclick: move |_| caja_act.pedir_actualizacion(),
+                                    {lang.t("Actualizar saldo", "Refresh balance")}
+                                }
+                                button {
+                                    class: "btn btn-ghost btn-sm",
+                                    onclick: move |_| caja_atras.pedir_atras(),
+                                    {lang.t("Mirar 200 bloques más atrás", "Scan 200 blocks further back")}
+                                }
+                            }
+                        }
+                        section { class: "panel",
+                            h2 { {lang.t("Entradas", "Outputs")} }
+                            if b.movs.is_empty() {
+                                p { class: "help", {lang.t("Todavía no hay entradas en los bloques mirados.", "No outputs in the scanned blocks yet.")} }
+                            } else {
+                                div { class: "movs",
+                                    for mov in b.movs.iter() {
+                                        div { class: "mov",
+                                            b { "{caja::fmt_xmr(mov.monto)} XMR" }
+                                            span { class: if mov.libre { "chip chip-ok" } else { "chip chip-wait" },
+                                                {match lang {
+                                                    Idioma::Es => format!("bloque {} · {}", mov.altura, if mov.libre { "libre" } else { "trabado" }),
+                                                    Idioma::En => format!("block {} · {}", mov.altura, if mov.libre { "unlocked" } else { "locked" }),
+                                                }}
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    div { class: "col",
+                        section { class: "panel",
+                            h2 { {lang.t("Recibir", "Receive")} }
+                            input {
+                                class: "addr",
+                                r#type: "text",
+                                readonly: true,
+                                value: "{addr}",
+                            }
+                            p { class: "help",
+                                {lang.t(
+                                    "Seleccioná la dirección y copiala. El scan no ve monedas más viejas que lo ya mirado.",
+                                    "Select the address and copy it. The scan misses coins older than what was already scanned.",
+                                )}
+                            }
+                        }
+                        section { class: "panel",
+                            h2 { {lang.t("Enviar", "Send")} }
+                            label { class: "et", {lang.t("DESTINO", "DESTINATION")} }
+                            input {
+                                r#type: "text",
+                                value: "{destino}",
+                                placeholder: lang.t("Dirección de stagenet", "Stagenet address"),
+                                oninput: move |e| destino.set(e.value()),
+                            }
+                            label { class: "et", {lang.t("MONTO EN XMR", "AMOUNT IN XMR")} }
+                            input {
+                                r#type: "text",
+                                value: "{monto}",
+                                placeholder: "0.04",
+                                oninput: move |e| monto.set(e.value()),
+                            }
+                            p { class: "help",
+                                {lang.t(
+                                    "El cambio vuelve a esta billetera. Se reserva 0,001 XMR para el fee. Hace falta al menos 1 piconero de cambio.",
+                                    "Change comes back to this wallet. 0.001 XMR is set aside for the fee. At least 1 piconero of change is required.",
+                                )}
+                            }
+                            div { class: "acciones",
+                                button {
+                                    class: "btn btn-ghost",
+                                    onclick: move |_| {
+                                        match caja::maximo_envio(vista().billetera.libre) {
+                                            Some(texto) => {
+                                                monto.set(texto);
+                                                err.set(None);
+                                            }
+                                            None => err.set(Some(lang_now().t(
+                                                "No hay saldo libre suficiente para el fee.",
+                                                "There is not enough unlocked balance for the fee.",
+                                            ).into())),
+                                        }
+                                    },
+                                    {lang.t("Usar el máximo", "Use the maximum")}
+                                }
+                                button {
+                                    class: "btn btn-primary",
+                                    disabled: b.enviando,
+                                    onclick: move |_| {
+                                        match caja_envio.pedir_envio(&destino(), &monto()) {
+                                            Ok(()) => err.set(None),
+                                            Err(e) => err.set(Some(caja::aviso_humano(&e, lang_now() == Idioma::Es))),
+                                        }
+                                    },
+                                    if b.enviando { {lang.t("Enviando…", "Sending…")} } else { {lang.t("Enviar", "Send")} }
+                                }
+                            }
+                        }
+                        details { class: "plegable",
+                            summary { {lang.t("Respaldos y recuperación", "Backups and recovery")} }
+                            div { class: "cuerpo",
+                                div { class: "grupo",
+                                    h3 { {lang.t("Las 25 palabras", "The 25 words")} }
+                                    p { class: "help",
+                                        {lang.t(
+                                            "Guardan tu billetera personal y la altura desde la que hay que mirar. No traen la caja de una obra.",
+                                            "They keep your personal wallet and the height to scan from. They do not bring a job's box.",
+                                        )}
+                                    }
+                                    button {
+                                        class: "btn btn-ghost",
+                                        onclick: move |_| {
+                                            let Some(path) = rfd::FileDialog::new()
+                                                .set_file_name("konstruado-semilla.txt")
+                                                .save_file()
+                                            else {
+                                                return;
+                                            };
+                                            match caja_palabras.guardar_palabras(&path) {
+                                                Ok(()) => {
+                                                    err.set(None);
+                                                    ok_palabras.set(Some(lang_now().t("Guardé las 25 palabras.", "Saved the 25 words.").into()));
+                                                }
+                                                Err(e) => err.set(Some(e)),
+                                            }
+                                        },
+                                        {lang.t("Guardar las 25 palabras", "Save the 25 words")}
+                                    }
+                                    if let Some(m) = ok_palabras() {
+                                        p { class: "ok-msg", "{m}" }
+                                    }
+                                }
+                                RestaurarLlaves { caja: caja.clone(), yo, obras, red, vista, err }
+                            }
+                        }
+                    }
+                }
+            } else {
+                div { class: "cols",
+                    div { class: "col",
+                        section { class: "panel",
+                            h2 { {lang.t("Crear billetera", "Create wallet")} }
+                            p { class: "help", "{caja::escala(es)}" }
+                            p { class: "help",
+                                {lang.t(
+                                    "Todavía no hay semilla en este equipo. Se crean 25 palabras nuevas y quedan en la carpeta de datos.",
+                                    "This machine has no seed yet. This creates 25 new words and keeps them in the data folder.",
+                                )}
+                            }
+                            button {
+                                class: "btn btn-primary",
+                                onclick: move |_| {
+                                    match caja_crear.crear_semilla() {
+                                        Ok(_) => {
+                                            err.set(None);
+                                            vista.set(caja_crear.vista());
+                                        }
+                                        Err(e) => err.set(Some(e)),
+                                    }
+                                },
+                                {lang.t("Crear billetera de stagenet", "Create stagenet wallet")}
+                            }
+                        }
+                    }
+                    div { class: "col",
+                        details { class: "plegable",
+                            summary { {lang.t("Ya tengo un respaldo", "I already have a backup")} }
+                            div { class: "cuerpo",
+                                RestaurarLlaves { caja: caja.clone(), yo, obras, red, vista, err }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Punto y texto de la barra de estado de la billetera.
+fn barra_billetera(
+    b: &caja::BilleteraVista,
+    hay: bool,
+    tip: Option<usize>,
+    lang: Idioma,
+) -> (&'static str, String) {
+    if !hay {
+        return ("punto off", lang.t("Sin billetera en este equipo", "No wallet on this machine").into());
+    }
+    if b.enviando {
+        return ("punto wait", lang.t("Firmando y publicando el envío…", "Signing and publishing the send…").into());
+    }
+    if b.buscando || b.retro > 0 {
+        let base = lang.t("Mirando la cadena…", "Scanning the chain…");
+        let extra = if b.retro > 0 {
+            match lang {
+                Idioma::Es => format!(" quedan {} bloques hacia atrás", b.retro),
+                Idioma::En => format!(" {} blocks left backward", b.retro),
+            }
+        } else {
+            String::new()
+        };
+        return ("punto wait", format!("{base}{extra}"));
+    }
+    match (b.hasta, tip) {
+        (Some(h), Some(t)) if h >= t => (
+            "punto",
+            match lang {
+                Idioma::Es => format!("Al día · bloque {h}"),
+                Idioma::En => format!("Up to date · block {h}"),
+            },
+        ),
+        (Some(h), Some(t)) => (
+            "punto wait",
+            match lang {
+                Idioma::Es => format!("Mirado hasta {h} de {t}"),
+                Idioma::En => format!("Scanned to {h} of {t}"),
+            },
+        ),
+        (Some(h), None) => (
+            "punto",
+            match lang {
+                Idioma::Es => format!("Mirado hasta el bloque {h}"),
+                Idioma::En => format!("Scanned to block {h}"),
+            },
+        ),
+        _ => ("punto wait", lang.t("Esperando al nodo…", "Waiting for the node…").into()),
     }
 }
 
@@ -1326,10 +1456,13 @@ fn Tablero(
     tor: Signal<EstadoTor>,
     peers: Signal<usize>,
     garantia_acc: Signal<String>,
+    err: Signal<Option<String>>,
 ) -> Element {
     let lang = use_context::<Signal<Idioma>>()();
     let sec = use_context::<Signal<ClaveSec>>()().0;
     let mut buscando = use_signal(|| false);
+    // Qué oferta propia está pidiendo confirmación para quitarse.
+    let mut confirma_quitar = use_signal(|| None::<String>);
     let mid = yo().map(|p| p.id).unwrap_or_default();
     // Incluye archivadas para que no reaparezca la oferta al archivar la obra.
     let todas = red()
@@ -1359,9 +1492,14 @@ fn Tablero(
         .collect();
     let otros = otros_nombres(yo(), presentes(), peers());
     let status = lang.linea_red(tor(), peers(), &otros);
+    let punto_red = match tor() {
+        EstadoTor::Arrancando { .. } => "punto wait",
+        _ if peers() == 0 => "punto off",
+        _ => "punto",
+    };
     let soy_m = rol() == Some(Rol::Mandante);
     let sin_ajenas = ajenas.is_empty();
-    let sin_mias = mias.is_empty() && en_curso.is_empty();
+    let sin_mias = mias.is_empty();
     let avisos = avisos_para(&mid, soy_m, &mis_obras, &ajenas, lang, &sec);
     let hint_contratista = if otros.is_empty() {
         lang.t(
@@ -1382,173 +1520,220 @@ fn Tablero(
     };
     rsx! {
         div { class: "pane",
-            h1 { {lang.t("Tablero", "Board")} }
-            p { class: "status",
-                {lang.t("Red", "Net")} " " code { "{RED}" } " · {status}"
+            div { class: "cabeza",
+                h1 { {lang.t("Tablero", "Board")} }
+                div { class: "barra-estado derecha", style: "flex: 1 1 360px; max-width: 620px;",
+                    span { class: "{punto_red}" }
+                    span { class: "txt", title: "{status}",
+                        {lang.t("Red", "Net")} " " span { class: "mono", "{RED}" } " · {status}"
+                    }
+                }
             }
             if peers() == 0 {
-                p { class: "hint",
+                p { class: "help",
                     match tor() {
                         EstadoTor::Arrancando { .. } => lang.t("Tor está subiendo. El mandante abre la sala; el contratista solo busca.", "Tor is coming up. The client opens the room; the contractor only looks."),
                         _ => lang.t("Nadie más todavía. En la misma PC, un segundo cargo run se engancha solo. En otra máquina, Don Dinero abre la sala y Chasquilla busca.", "Nobody else yet. On the same PC, a second cargo run joins on its own. On another machine, the client opens the room and the contractor searches."),
                     }
                 }
             }
-
-            if !avisos.is_empty() {
-                p { class: "lead", {lang.t("Te toca", "Your turn")} }
-                div { class: "stack",
-                    for a in avisos {
-                        button {
-                            class: "card aviso",
-                            onclick: move |_| {
-                                if a.es_oferta {
-                                    if let Some(o) = ofertas().into_iter().find(|o| o.id == a.obra_id) {
-                                        garantia_acc.set(o.garantia_sugerida.to_string());
-                                        sel_oferta.set(Some(o));
-                                        screen.set(Screen::Oferta);
+            div { class: "cols",
+                div { class: "col",
+                    if !avisos.is_empty() {
+                        section { class: "panel foco",
+                            h2 { {lang.t("Te toca", "Your turn")} }
+                            div { class: "stack",
+                                for a in avisos {
+                                    button {
+                                        class: "card aviso",
+                                        onclick: move |_| {
+                                            if a.es_oferta {
+                                                if let Some(o) = ofertas().into_iter().find(|o| o.id == a.obra_id) {
+                                                    garantia_acc.set(o.garantia_sugerida.to_string());
+                                                    sel_oferta.set(Some(o));
+                                                    screen.set(Screen::Oferta);
+                                                }
+                                            } else if let Some(i) = a.partida {
+                                                sel_obra.set(Some(a.obra_id.clone()));
+                                                sel_partida.set(Some(i));
+                                                screen.set(Screen::VerPartida);
+                                            } else {
+                                                sel_obra.set(Some(a.obra_id.clone()));
+                                                screen.set(Screen::Detalle);
+                                            }
+                                        },
+                                        div { class: "card-h",
+                                            strong { "{a.texto}" }
+                                            span { class: "chip chip-info", {lang.t("Te toca", "Your turn")} }
+                                        }
                                     }
-                                } else if let Some(i) = a.partida {
-                                    sel_obra.set(Some(a.obra_id.clone()));
-                                    sel_partida.set(Some(i));
-                                    screen.set(Screen::VerPartida);
-                                } else {
-                                    sel_obra.set(Some(a.obra_id.clone()));
-                                    screen.set(Screen::Detalle);
                                 }
-                            },
-                            div { class: "card-h",
-                                strong { "{a.texto}" }
-                                span { class: "chip chip-wait", {lang.t("Te toca", "Your turn")} }
                             }
                         }
                     }
-                }
-                div { style: "height: 24px;" }
-            }
-
-            if soy_m {
-                p { class: "lead",
-                    {lang.t("Publicá. El contratista no te ve a vos: ve el aviso en su tablero.", "Post a job. The contractor does not see you: they see the notice on their board.")}
-                }
-                if sin_mias {
-                    p { class: "hint", {lang.t("Todavía no publicaste nada.", "You have not posted anything yet.")} }
-                }
-                div { class: "stack",
-                    for o in mias {
-                        div { class: "card static",
-                            div { class: "card-h",
-                                strong { "{o.nombre}" }
-                                span { class: "chip chip-off", {lang.t("Esperando contratista", "Waiting for contractor")} }
+                    if soy_m {
+                        section { class: "panel",
+                            h2 { {lang.t("Mis ofertas publicadas", "My posted offers")} }
+                            if sin_mias {
+                                p { class: "help", {lang.t("No hay ofertas tuyas esperando contratista.", "None of your offers is waiting for a contractor.")} }
+                            } else {
+                                p { class: "help", {lang.t("Mientras nadie la tome, podés quitarla. Desaparece también del tablero del contratista.", "While nobody takes it, you can remove it. It also disappears from the contractor's board.")} }
                             }
-                            p { class: "meta",
-                                {match lang { Idioma::Es => format!("Trabajo {} · garantía {} · {} partidas", monto(o.trabajo), monto(o.garantia_sugerida), o.n_partidas_sugeridas), Idioma::En => format!("Job {} · guarantee {} · {} stages", monto(o.trabajo), monto(o.garantia_sugerida), o.n_partidas_sugeridas) }}
+                            div { class: "stack",
+                                for o in mias {
+                                    {
+                                        let pidiendo = confirma_quitar().as_deref() == Some(o.id.as_str());
+                                        let oid_pedir = o.id.clone();
+                                        let oid = o.id.clone();
+                                        rsx! {
+                                            div { class: "card static",
+                                                div { class: "card-h",
+                                                    strong { "{o.nombre}" }
+                                                    span { class: "chip chip-off", {lang.t("Esperando contratista", "Waiting for contractor")} }
+                                                }
+                                                p { class: "meta",
+                                                    {match lang { Idioma::Es => format!("Trabajo {} · garantía {} · {} partidas", monto(o.trabajo), monto(o.garantia_sugerida), o.n_partidas_sugeridas), Idioma::En => format!("Job {} · guarantee {} · {} stages", monto(o.trabajo), monto(o.garantia_sugerida), o.n_partidas_sugeridas) }}
+                                                }
+                                                if let Some(r) = resumen_detalles(&o.detalles) {
+                                                    p { class: "meta", "{r}" }
+                                                }
+                                                if pidiendo {
+                                                    p { class: "estado err", {lang.t("¿Quitar esta oferta? Se retira para todos y no se puede deshacer.", "Remove this offer? It is withdrawn for everyone and cannot be undone.")} }
+                                                    div { class: "acciones",
+                                                        button {
+                                                            class: "btn btn-danger btn-sm",
+                                                            onclick: move |_| {
+                                                                confirma_quitar.set(None);
+                                                                let Some(nodo) = red() else { return };
+                                                                let Some(yo_p) = yo() else { return };
+                                                                let Some(o) = nodo.tablero().into_iter().find(|o| o.id == oid) else {
+                                                                    ofertas.set(nodo.tablero());
+                                                                    return;
+                                                                };
+                                                                let sec = consume_context::<Signal<ClaveSec>>()().0;
+                                                                match retirar_oferta(&o, &yo_p.id, &sec, &nodo.obras_todas()) {
+                                                                    Ok(r) => {
+                                                                        nodo.retirar(r);
+                                                                        ofertas.set(nodo.tablero());
+                                                                        err.set(None);
+                                                                    }
+                                                                    Err(e) => err.set(Some(lang_now().error(&e))),
+                                                                }
+                                                            },
+                                                            {lang.t("Sí, quitar", "Yes, remove")}
+                                                        }
+                                                        button {
+                                                            class: "btn btn-ghost btn-sm",
+                                                            onclick: move |_| confirma_quitar.set(None),
+                                                            {lang.t("No", "No")}
+                                                        }
+                                                    }
+                                                } else {
+                                                    div { class: "acciones",
+                                                        button {
+                                                            class: "btn btn-danger btn-sm",
+                                                            onclick: move |_| confirma_quitar.set(Some(oid_pedir.clone())),
+                                                            {lang.t("Quitar oferta", "Remove offer")}
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
                             }
-                            if let Some(r) = resumen_detalles(&o.detalles) {
-                                p { class: "meta", "{r}" }
-                            }
-                            button {
-                                class: "btn btn-ghost",
-                                onclick: {
-                                    let oid = o.id.clone();
-                                    move |_| {
+                        }
+                    } else {
+                        section { class: "panel",
+                            div { class: "panel-h",
+                                h2 { {lang.t("Ofertas del mandante", "Jobs from the client")} }
+                                button {
+                                    class: "btn btn-primary btn-sm",
+                                    style: "width: auto;",
+                                    disabled: buscando(),
+                                    onclick: move |_| {
                                         let Some(nodo) = red() else { return };
-                                        nodo.quitar(&oid);
-                                        ofertas.set(nodo.tablero());
-                                    }
-                                },
-                                {lang.t("Quitar oferta", "Remove offer")}
-                            }
-                        }
-                    }
-                    for o in en_curso {
-                        button {
-                            class: "card",
-                            onclick: move |_| {
-                                sel_obra.set(Some(o.id.clone()));
-                                screen.set(Screen::Detalle);
-                            },
-                            div { class: "card-h",
-                                strong { "{o.nombre}" }
-                                span { class: chip_estado(o.estado), "{lang.label_estado(o.estado)}" }
-                            }
-                            p { class: "meta",
-                                {match lang { Idioma::Es => format!("Contratista {} · {} partidas · {} por lado", o.contratista.nombre, o.n_partidas, monto(o.garantia)), Idioma::En => format!("Contractor {} · {} stages · {} per side", o.contratista.nombre, o.n_partidas, monto(o.garantia)) }}
-                            }
-                            if o.estado == EstadoObra::Contra {
-                                p { class: "meta", {lang.t("Te toca: contra de garantía", "Your turn: guarantee counter")} }
-                            }
-                        }
-                    }
-                }
-                div { style: "height: 24px;" }
-                button {
-                    class: "btn btn-primary",
-                    onclick: move |_| screen.set(Screen::Nueva),
-                    {lang.t("Publicar obra", "Post a job")}
-                }
-            } else {
-                p { class: "lead",
-                    {lang.t("Ofertas del mandante. Aceptás las condiciones o proponés otra garantía.", "Jobs from the client. Accept the terms or propose another guarantee.")}
-                }
-                button {
-                    class: "btn btn-primary",
-                    disabled: buscando(),
-                    onclick: move |_| {
-                        let Some(nodo) = red() else { return };
-                        buscando.set(true);
-                        nodo.buscar();
-                        spawn(async move {
-                            nodo.esperar(Duration::from_secs(4)).await;
-                            buscando.set(false);
-                        });
-                    },
-                    if buscando() { {lang.t("Buscando…", "Searching…")} } else { {lang.t("Buscar ofertas", "Search jobs")} }
-                }
-                div { style: "height: 16px;" }
-                div { class: "stack",
-                    for o in ajenas {
-                        button {
-                            class: "card",
-                            onclick: move |_| {
-                                garantia_acc.set(o.garantia_sugerida.to_string());
-                                sel_oferta.set(Some(o.clone()));
-                                screen.set(Screen::Oferta);
-                            },
-                            div { class: "card-h",
-                                strong { "{o.nombre}" }
-                                span { class: "chip chip-off", {match lang { Idioma::Es => format!("{} partidas", o.n_partidas_sugeridas), Idioma::En => format!("{} stages", o.n_partidas_sugeridas) }} }
-                            }
-                            p { class: "meta", "{lang.t(\"Mandante\", \"Client\")}: {o.mandante.nombre}" }
-                            p { class: "meta",
-                                {match lang { Idioma::Es => format!("Trabajo {} · garantía sugerida {}", monto(o.trabajo), monto(o.garantia_sugerida)), Idioma::En => format!("Job {} · suggested guarantee {}", monto(o.trabajo), monto(o.garantia_sugerida)) }}
-                            }
-                            if let Some(r) = resumen_detalles(&o.detalles) {
-                                p { class: "meta", "{r}" }
-                            }
-                        }
-                    }
-                }
-                if sin_ajenas {
-                    p { class: "hint", "{hint_contratista}" }
-                }
-                if !en_curso.is_empty() {
-                    div { style: "height: 24px;" }
-                    p { class: "lead", {lang.t("En curso", "In progress")} }
-                    div { class: "stack",
-                        for o in en_curso {
-                            button {
-                                class: "card",
-                                onclick: move |_| {
-                                    sel_obra.set(Some(o.id.clone()));
-                                    screen.set(Screen::Detalle);
-                                },
-                                div { class: "card-h",
-                                    strong { "{o.nombre}" }
-                                    span { class: chip_estado(o.estado), "{lang.label_estado(o.estado)}" }
+                                        buscando.set(true);
+                                        nodo.buscar();
+                                        spawn(async move {
+                                            nodo.esperar(Duration::from_secs(4)).await;
+                                            buscando.set(false);
+                                        });
+                                    },
+                                    if buscando() { {lang.t("Buscando…", "Searching…")} } else { {lang.t("Buscar ofertas", "Search jobs")} }
                                 }
-                                p { class: "meta",
-                                    {match lang { Idioma::Es => format!("Mandante {} · {} partidas · {} por lado", o.mandante.nombre, o.n_partidas, monto(o.garantia)), Idioma::En => format!("Client {} · {} stages · {} per side", o.mandante.nombre, o.n_partidas, monto(o.garantia)) }}
+                            }
+                            p { class: "help", {lang.t("Aceptás las condiciones o proponés otra garantía.", "Accept the terms or propose another guarantee.")} }
+                            div { class: "stack",
+                                for o in ajenas {
+                                    button {
+                                        class: "card",
+                                        onclick: move |_| {
+                                            garantia_acc.set(o.garantia_sugerida.to_string());
+                                            sel_oferta.set(Some(o.clone()));
+                                            screen.set(Screen::Oferta);
+                                        },
+                                        div { class: "card-h",
+                                            strong { "{o.nombre}" }
+                                            span { class: "chip chip-off", {match lang { Idioma::Es => format!("{} partidas", o.n_partidas_sugeridas), Idioma::En => format!("{} stages", o.n_partidas_sugeridas) }} }
+                                        }
+                                        p { class: "meta", "{lang.t(\"Mandante\", \"Client\")}: {o.mandante.nombre}" }
+                                        p { class: "meta",
+                                            {match lang { Idioma::Es => format!("Trabajo {} · garantía sugerida {}", monto(o.trabajo), monto(o.garantia_sugerida)), Idioma::En => format!("Job {} · suggested guarantee {}", monto(o.trabajo), monto(o.garantia_sugerida)) }}
+                                        }
+                                        if let Some(r) = resumen_detalles(&o.detalles) {
+                                            p { class: "meta", "{r}" }
+                                        }
+                                    }
+                                }
+                            }
+                            if sin_ajenas {
+                                p { class: "estado info", "{hint_contratista}" }
+                            }
+                        }
+                    }
+                }
+                div { class: "col",
+                    if soy_m {
+                        section { class: "panel",
+                            h2 { {lang.t("Publicar", "Post")} }
+                            p { class: "help",
+                                {lang.t("El contratista no te ve a vos: ve el aviso en su tablero.", "The contractor does not see you: they see the notice on their board.")}
+                            }
+                            button {
+                                class: "btn btn-primary",
+                                onclick: move |_| screen.set(Screen::Nueva),
+                                {lang.t("Publicar obra", "Post a job")}
+                            }
+                        }
+                    }
+                    section { class: "panel",
+                        h2 { {lang.t("Obras en curso", "Jobs in progress")} }
+                        if en_curso.is_empty() {
+                            p { class: "help", {lang.t("Ninguna todavía. Cuando un contratista toma una oferta, aparece acá.", "None yet. When a contractor takes an offer, it shows up here.")} }
+                        }
+                        div { class: "stack",
+                            for o in en_curso {
+                                button {
+                                    class: "card",
+                                    onclick: move |_| {
+                                        sel_obra.set(Some(o.id.clone()));
+                                        screen.set(Screen::Detalle);
+                                    },
+                                    div { class: "card-h",
+                                        strong { "{o.nombre}" }
+                                        span { class: chip_estado(o.estado), "{lang.label_estado(o.estado)}" }
+                                    }
+                                    p { class: "meta",
+                                        if soy_m {
+                                            {match lang { Idioma::Es => format!("Contratista {} · {} partidas · {} por lado", o.contratista.nombre, o.n_partidas, monto(o.garantia)), Idioma::En => format!("Contractor {} · {} stages · {} per side", o.contratista.nombre, o.n_partidas, monto(o.garantia)) }}
+                                        } else {
+                                            {match lang { Idioma::Es => format!("Mandante {} · {} partidas · {} por lado", o.mandante.nombre, o.n_partidas, monto(o.garantia)), Idioma::En => format!("Client {} · {} stages · {} per side", o.mandante.nombre, o.n_partidas, monto(o.garantia)) }}
+                                        }
+                                    }
+                                    if o.estado == EstadoObra::Contra && soy_m {
+                                        p { class: "meta", {lang.t("Te toca: contra de garantía", "Your turn: guarantee counter")} }
+                                    }
                                 }
                             }
                         }
@@ -1585,9 +1770,16 @@ fn Nueva(
     });
     let lang = use_context::<Signal<Idioma>>()();
     rsx! {
-        div { class: "pane narrow",
+        div { class: "pane",
+            div { class: "migas",
+                button { onclick: move |_| screen.set(Screen::Tablero), {lang.t("← Tablero", "← Board")} }
+            }
             h1 { {lang.t("Publicar obra", "Post a job")} }
-            p { class: "lead", {lang.t("Vos sos el mandante. El contratista va a ver esto en el tablero.", "You are the client. The contractor will see this on the board.")} }
+            p { class: "sub", {lang.t("Vos sos el mandante. El contratista va a ver esto en el tablero.", "You are the client. The contractor will see this on the board.")} }
+            div { class: "cols parejas",
+            div { class: "col",
+            section { class: "panel",
+            h2 { {lang.t("Condiciones", "Terms")} }
             label { class: "et", {lang.t("NOMBRE", "NAME")} }
             input {
                 r#type: "text",
@@ -1606,15 +1798,40 @@ fn Nueva(
                 value: "{garantia}",
                 oninput: move |e| garantia.set(e.value()),
             }
-            p { class: "hint",
+            p { class: if preview.is_ok() { "estado info" } else { "estado err" },
                 match preview.clone() {
                     Ok(n) => match lang { Idioma::Es => format!("{n} partidas. En cada una los dos encierran {g}."), Idioma::En => format!("{n} stages. In each one both lock {g}.") },
                     Err(e) => lang.error(&e),
                 }
             }
+            p { class: "help", {lang.t("Mientras nadie la tome, la podés quitar del tablero. Se retira también para el contratista.", "While nobody takes it, you can remove it from the board. It is withdrawn for the contractor too.")} }
+            button {
+                class: "btn btn-primary",
+                onclick: move |_| {
+                    let Some(m) = yo() else { return };
+                    let Some(nodo) = red() else {
+                        err.set(Some(lang_now().t("La red todavía no arrancó.", "The network has not started yet.").into()));
+                        return;
+                    };
+                    match Oferta::publicar(m, obra_nom(), t, g, detalles()) {
+                        Ok(mut o) => {
+                            o.sellar_retiro(&consume_context::<Signal<ClaveSec>>()().0);
+                            err.set(None);
+                            nodo.publicar(o);
+                            screen.set(Screen::Tablero);
+                        }
+                        Err(e) => err.set(Some(lang_now().error(&e))),
+                    }
+                },
+                {lang.t("Publicar en la red", "Post to the network")}
+            }
+            }
+            }
+            div { class: "col",
+            section { class: "panel",
+            h2 { {lang.t("Qué entra en cada partida", "What each stage covers")} }
             if let Ok(n) = preview {
-                div { class: "paso", b { "3" } {lang.t("Qué entra en cada partida", "What each stage covers")} }
-                p { class: "hint", {lang.t("Como en un presupuesto: cimientos, muros, techumbre. El texto es opcional.", "Like a quote: foundations, walls, roof. The text is optional.")} }
+                p { class: "help", {lang.t("Como en un presupuesto: cimientos, muros, techumbre. El texto es opcional.", "Like a quote: foundations, walls, roof. The text is optional.")} }
                 for (i, d) in detalles().into_iter().enumerate() {
                     label { class: "et", "{lang.t(\"PARTIDA\", \"STAGE\")} {i + 1}" }
                     input {
@@ -1630,26 +1847,11 @@ fn Nueva(
                         },
                     }
                 }
+            } else {
+                p { class: "help", {lang.t("Con un trabajo y una garantía válidos aparecen las partidas.", "With a valid job amount and guarantee, the stages show up.")} }
             }
-            div { style: "height: 24px;" }
-            button {
-                class: "btn btn-primary",
-                onclick: move |_| {
-                    let Some(m) = yo() else { return };
-                    let Some(nodo) = red() else {
-                        err.set(Some(lang_now().t("La red todavía no arrancó.", "The network has not started yet.").into()));
-                        return;
-                    };
-                    match Oferta::publicar(m, obra_nom(), t, g, detalles()) {
-                        Ok(o) => {
-                            err.set(None);
-                            nodo.publicar(o);
-                            screen.set(Screen::Tablero);
-                        }
-                        Err(e) => err.set(Some(lang_now().error(&e))),
-                    }
-                },
-                {lang.t("Publicar en la red", "Post to the network")}
+            }
+            }
             }
         }
     }
@@ -1694,60 +1896,44 @@ fn VerOferta(
     let preview = n_partidas(o.trabajo, g);
     let contra = g != o.garantia_sugerida;
     rsx! {
-        div { class: "pane narrow",
+        div { class: "pane",
+            div { class: "migas",
+                button { onclick: move |_| screen.set(Screen::Tablero), {lang.t("← Tablero", "← Board")} }
+            }
             h1 { "{o.nombre}" }
-            p { class: "lead",
+            p { class: "sub",
                 {match lang { Idioma::Es => format!("{} ofrece trabajo por {}. Garantía sugerida {} ({} partidas).", o.mandante.nombre, monto(o.trabajo), monto(o.garantia_sugerida), o.n_partidas_sugeridas), Idioma::En => format!("{} offers a job for {}. Suggested guarantee {} ({} stages).", o.mandante.nombre, monto(o.trabajo), monto(o.garantia_sugerida), o.n_partidas_sugeridas) }}
             }
+            div { class: "cols parejas",
+            div { class: "col",
+            section { class: "panel",
+            h2 { {lang.t("Tu respuesta", "Your answer")} }
             label { class: "et", {lang.t("TU GARANTÍA", "YOUR GUARANTEE")} }
             input {
                 r#type: "text",
                 value: "{garantia_acc}",
                 oninput: move |e| garantia_acc.set(e.value()),
             }
-            p { class: "hint",
+            p { class: if preview.is_err() { "estado err" } else if contra { "estado wait" } else { "estado info" },
                 match preview.clone() {
                     Ok(n) if contra => match lang { Idioma::Es => format!("Contra: {n} partidas de {g}. El mandante tiene que confirmar."), Idioma::En => format!("Counter: {n} stages of {g}. The client has to confirm.") },
                     Ok(n) => match lang { Idioma::Es => format!("Aceptás {n} partidas. Los dos encierran {g} en cada una."), Idioma::En => format!("You accept {n} stages. Both lock {g} in each one.") },
                     Err(e) => lang.error(&e),
                 }
             }
-            if let Ok(n) = preview {
-                label { class: "et", {lang.t("PARTIDAS", "STAGES")} }
-                if contra {
-                    p { class: "hint", {lang.t("Al cambiar la garantía, el número de partidas cambia. Completá o ajustá los textos.", "Changing the guarantee changes the number of stages. Fill in or adjust the texts.")} }
-                    for (i, d) in detalles().into_iter().enumerate() {
-                        label { class: "et", "{lang.t(\"PARTIDA\", \"STAGE\")} {i + 1}" }
-                        input {
-                            r#type: "text",
-                            placeholder: "{lang.placeholder_partida(i, n)}",
-                            value: "{d}",
-                            oninput: move |e| {
-                                let mut v = detalles();
-                                if i < v.len() {
-                                    v[i] = e.value();
-                                    detalles.set(v);
-                                }
-                            },
-                        }
-                    }
-                } else {
-                    div { class: "lista-part",
-                        for (i, d) in o.detalles.iter().enumerate() {
-                            div { class: "lista-part-item",
-                                b { "{i + 1}" }
-                                span { "{lang.titulo_partida(i, d)}" }
-                            }
-                        }
-                    }
-                }
-            }
-            div { style: "height: 24px;" }
+            p { class: "help", {lang.t("Si cambiás la garantía, mandás una contra: el mandante la confirma o la rechaza.", "If you change the guarantee, you send a counter: the client confirms or rejects it.")} }
             button {
                 class: "btn btn-primary",
                 onclick: move |_| {
                     let Some(c) = yo() else { return };
                     let Some(nodo) = red() else { return };
+                    if !nodo.tablero().iter().any(|x| x.id == o.id) {
+                        err.set(Some(lang_now().t(
+                            "El mandante quitó esta oferta. Ya no se puede aceptar.",
+                            "The client removed this offer. It can no longer be accepted.",
+                        ).into()));
+                        return;
+                    }
                     let oferta = o.clone();
                     let dets = if contra { detalles() } else { oferta.detalles.clone() };
                     match Aceptacion::de_con(&oferta, c, g, dets) {
@@ -1765,6 +1951,43 @@ fn VerOferta(
                     }
                 },
                 if contra { {lang.t("Proponer esta garantía", "Propose this guarantee")} } else { {lang.t("Aceptar condiciones", "Accept terms")} }
+            }
+            }
+            }
+            div { class: "col",
+            section { class: "panel",
+            h2 { {lang.t("Partidas", "Stages")} }
+            if let Ok(n) = preview {
+                if contra {
+                    p { class: "help", {lang.t("Al cambiar la garantía, el número de partidas cambia. Completá o ajustá los textos.", "Changing the guarantee changes the number of stages. Fill in or adjust the texts.")} }
+                    for (i, d) in detalles().into_iter().enumerate() {
+                        label { class: "et", "{lang.t(\"PARTIDA\", \"STAGE\")} {i + 1}" }
+                        input {
+                            r#type: "text",
+                            placeholder: "{lang.placeholder_partida(i, n)}",
+                            value: "{d}",
+                            oninput: move |e| {
+                                let mut v = detalles();
+                                if i < v.len() {
+                                    v[i] = e.value();
+                                    detalles.set(v);
+                                }
+                            },
+                        }
+                    }
+                } else {
+                    div { class: "stack",
+                        for (i, d) in o.detalles.iter().enumerate() {
+                            div { class: "partida static",
+                                span { class: "num", "{i + 1}" }
+                                div { class: "txt", strong { "{lang.titulo_partida(i, d)}" } }
+                            }
+                        }
+                    }
+                }
+            }
+            }
+            }
             }
         }
     }
@@ -1785,7 +2008,9 @@ fn RestaurarLlaves(
     let caja_share = caja.clone();
     let caja_vista = caja.clone();
     rsx! {
-        p { class: "hint",
+        div { class: "grupo",
+        h3 { {lang.t("Recuperar las 25 palabras", "Restore the 25 words")} }
+        p { class: "help",
             {lang.t(
                 "Recuperar las 25 palabras trae tu dirección personal. Si el archivo trae altura de bloque, el scan parte de ahí; si es un respaldo viejo sin altura, usa la ventana reciente (podés mirar más atrás). No trae la caja ni tu nombre en el trato.",
                 "Restoring the 25 words brings back your personal address. If the file has a block height, scan starts there; old backups without height use the recent window (you can look further back). It does not bring the box or your name on the deal.",
@@ -1805,9 +2030,12 @@ fn RestaurarLlaves(
                     Err(e) => err.set(Some(caja::aviso_humano(&e, lang_now() == Idioma::Es))),
                 }
             },
-            {lang.t("Recuperar las 25 palabras", "Restore the 25 words")}
+            {lang.t("Elegir el archivo de palabras", "Pick the words file")}
         }
-        p { class: "hint",
+        }
+        div { class: "grupo",
+        h3 { {lang.t("Recuperar un share", "Restore a share")} }
+        p { class: "help",
             {lang.t(
                 "Recuperar un share trae la caja de una obra que ya está en este equipo. Tiene que ser el tuyo: el del otro lado no sirve. Si perdiste el perfil entero, esto no te vuelve a unir.",
                 "Restoring a share brings back the box of a job already on this machine. It has to be yours: the other side's file will not work. If the whole profile is gone, this does not rejoin the deal.",
@@ -1834,9 +2062,12 @@ fn RestaurarLlaves(
                     Err(e) => err.set(Some(caja::aviso_humano(&e, lang_now() == Idioma::Es))),
                 }
             },
-            {lang.t("Recuperar un share", "Restore a share")}
+            {lang.t("Elegir el archivo del share", "Pick the share file")}
         }
-        p { class: "hint",
+        }
+        div { class: "grupo",
+        h3 { {lang.t("Respaldo de obras", "Job backup")} }
+        p { class: "help",
             {lang.t(
                 "Respaldo de obras: guarda el perfil (obras y ofertas) para reinstalar. Puede estar desfasado respecto al otro; la cadena y el share mandan para el dinero. No incluye seed ni share.",
                 "Job backup: saves the profile (jobs and offers) for reinstall. It may be behind the peer; chain and share rule the money. It does not include seed or share.",
@@ -1930,14 +2161,16 @@ fn RestaurarLlaves(
             },
             {lang.t("Recuperar respaldo de obras", "Restore job backup")}
         }
+        }
         if let Some(m) = ok() {
-            p { class: "hint", "{m}" }
+            p { class: "ok-msg", "{m}" }
         }
     }
 }
 
+/// Respaldos de la caja de una obra: guardar el share propio y recuperarlo.
 #[component]
-fn CajaProfundidad(
+fn CajaRespaldo(
     obra_id: String,
     caja: caja::Caja,
     vista: Signal<caja::CajaVista>,
@@ -1947,124 +2180,145 @@ fn CajaProfundidad(
 ) -> Element {
     let mut ok = use_signal(|| None::<String>);
     let lang = use_context::<Signal<Idioma>>()();
-    let v = vista();
-    let hay = v.caja_de(&obra_id).is_some();
-    let mirada = v.miradas.into_iter().find(|m| m.obra == obra_id);
-    let (linea_bloques, linea_retro, linea_aviso) = match &mirada {
-        Some(m) => (
-            match lang {
-                Idioma::Es => format!("La caja mira {} bloques hacia atrás.", m.bloques),
-                Idioma::En => format!("The box looks {} blocks back.", m.bloques),
-            },
-            if m.retro > 0 {
-                Some(match lang {
-                    Idioma::Es => format!("Quedan {} bloques por mirar en la caja.", m.retro),
-                    Idioma::En => format!("{} box blocks left to scan backward.", m.retro),
-                })
-            } else {
-                None
-            },
-            m.aviso.clone(),
-        ),
-        None => (
-            lang.t(
-                "La caja arranca por los últimos 40 bloques.",
-                "The box starts with the last 40 blocks.",
-            ).to_string(),
-            None,
-            None,
-        ),
-    };
+    let hay = vista().caja_de(&obra_id).is_some();
     let caja_guardar = caja.clone();
-    let caja_atras = caja.clone();
     let caja_share = caja.clone();
     let caja_vista = caja.clone();
     let obra_guardar = obra_id.clone();
-    let obra_atras = obra_id;
     rsx! {
         if hay {
+            div { class: "grupo",
+                h3 { {lang.t("Guardar el share", "Save the share")} }
+                p { class: "help",
+                    {lang.t(
+                        "Esta copia puede gastar, junto con el share del otro. Guardala aparte y no la pegues en un chat.",
+                        "This copy can spend, together with the other person's share. Keep it aside and do not paste it into a chat.",
+                    )}
+                }
+                button {
+                    class: "btn btn-ghost",
+                    onclick: move |_| {
+                        let Some(path) = rfd::FileDialog::new()
+                            .set_file_name(format!("konstruado-{obra_guardar}.share"))
+                            .save_file()
+                        else {
+                            return;
+                        };
+                        ok.set(None);
+                        match caja_guardar.guardar_share(&obra_guardar, &path) {
+                            Ok(()) => {
+                                err.set(None);
+                                ok.set(Some(lang_now().t(
+                                    "Guardé el share. Esa copia puede gastar, junto con la del otro.",
+                                    "Saved the share. That copy can spend, together with the other person's.",
+                                ).into()));
+                            }
+                            Err(e) => err.set(Some(caja::aviso_humano(&e, lang_now() == Idioma::Es))),
+                        }
+                    },
+                    {lang.t("Guardar el share de la caja", "Save the box share")}
+                }
+            }
+        }
+        div { class: "grupo",
+            h3 { {lang.t("Recuperar un share", "Restore a share")} }
+            p { class: "help",
+                {lang.t(
+                    "Si perdiste el share de esta obra, recuperalo desde el archivo que guardaste. Tiene que ser el tuyo y la obra tiene que seguir en este equipo.",
+                    "If you lost this job's share, restore it from the file you saved. It has to be yours, and the job has to still be on this machine.",
+                )}
+            }
             button {
                 class: "btn btn-ghost",
                 onclick: move |_| {
-                    let Some(path) = rfd::FileDialog::new()
-                        .set_file_name(format!("konstruado-{obra_guardar}.share"))
-                        .save_file()
-                    else {
+                    let Some(path) = rfd::FileDialog::new().pick_file() else { return };
+                    let Some(quien) = yo() else {
+                        err.set(Some(lang_now().t(
+                            "Falta tu nombre en este equipo.",
+                            "This machine does not have your name yet.",
+                        ).into()));
                         return;
                     };
                     ok.set(None);
-                    match caja_guardar.guardar_share(&obra_guardar, &path) {
-                        Ok(()) => {
+                    match caja_share.restaurar_share(&path, &quien, &obras()) {
+                        Ok(code) => {
+                            vista.set(caja_vista.vista());
                             err.set(None);
-                            ok.set(Some(lang_now().t(
-                                "Guardé el share. Esa copia puede gastar, junto con la del otro.",
-                                "Saved the share. That copy can spend, together with the other person's.",
-                            ).into()));
+                            ok.set(Some(caja::listo_humano(code, lang_now() == Idioma::Es)));
                         }
                         Err(e) => err.set(Some(caja::aviso_humano(&e, lang_now() == Idioma::Es))),
                     }
                 },
-                {lang.t("Guardar el share de la caja", "Save the box share")}
-            }
-            p { class: "hint",
-                {lang.t(
-                    "Esta copia puede gastar, junto con el share del otro. Guardala aparte y no la pegues en un chat.",
-                    "This copy can spend, together with the other person's share. Keep it aside and do not paste it into a chat.",
-                )}
-            }
-            p { class: "hint", "{linea_bloques}" }
-            if let Some(retro) = linea_retro {
-                p { class: "hint", "{retro}" }
-            }
-            if let Some(aviso) = linea_aviso {
-                p { class: "err", "{caja::aviso_humano(&aviso, matches!(lang, Idioma::Es))}" }
-            }
-            button {
-                class: "btn btn-ghost",
-                onclick: move |_| {
-                    ok.set(None);
-                    match caja_atras.pedir_atras_caja(&obra_atras) {
-                        Ok(()) => {
-                            vista.set(caja_atras.vista());
-                            err.set(None);
-                        }
-                        Err(e) => err.set(Some(caja::aviso_humano(&e, lang_now() == Idioma::Es))),
-                    }
-                },
-                {lang.t("Mirar 200 bloques más atrás en la caja", "Scan 200 more blocks back in the box")}
+                {lang.t("Recuperar un share", "Restore a share")}
             }
         }
-        p { class: "hint",
+        if let Some(m) = ok() {
+            p { class: "ok-msg", "{m}" }
+        }
+    }
+}
+
+/// Qué tan atrás mira la caja de una obra, y el botón para mirar más.
+#[component]
+fn CajaMirar(
+    obra_id: String,
+    caja: caja::Caja,
+    vista: Signal<caja::CajaVista>,
+    mut err: Signal<Option<String>>,
+) -> Element {
+    let lang = use_context::<Signal<Idioma>>()();
+    let v = vista();
+    let hay = v.caja_de(&obra_id).is_some();
+    let mirada = v.miradas.into_iter().find(|m| m.obra == obra_id);
+    let caja_atras = caja.clone();
+    let obra_atras = obra_id.clone();
+    if !hay {
+        return rsx! {
+            p { class: "help", {lang.t("La caja todavía no está armada en este equipo.", "The box is not built on this machine yet.")} }
+        };
+    }
+    rsx! {
+        dl { class: "datos",
+            dt { {lang.t("La caja mira", "The box scans")} }
+            dd {
+                {match (&mirada, lang) {
+                    (Some(m), Idioma::Es) => format!("{} bloques hacia atrás", m.bloques),
+                    (Some(m), Idioma::En) => format!("{} blocks back", m.bloques),
+                    (None, Idioma::Es) => "los últimos 40 bloques".to_string(),
+                    (None, Idioma::En) => "the last 40 blocks".to_string(),
+                }}
+            }
+            if let Some(m) = mirada.as_ref().filter(|m| m.retro > 0) {
+                dt { {lang.t("Falta mirar", "Left to scan")} }
+                dd {
+                    {match lang {
+                        Idioma::Es => format!("{} bloques", m.retro),
+                        Idioma::En => format!("{} blocks", m.retro),
+                    }}
+                }
+            }
+        }
+        if let Some(aviso) = mirada.as_ref().and_then(|m| m.aviso.clone()) {
+            p { class: "estado err", "{caja::aviso_humano(&aviso, matches!(lang, Idioma::Es))}" }
+        }
+        p { class: "help",
             {lang.t(
-                "Si perdiste el share de esta obra, recuperalo desde el archivo que guardaste. Tiene que ser el tuyo y la obra tiene que seguir en este equipo.",
-                "If you lost this job's share, restore it from the file you saved. It has to be yours, and the job has to still be on this machine.",
+                "Sirve si el fondeo es más viejo que lo que la caja ya miró.",
+                "Useful if the funding is older than what the box already scanned.",
             )}
         }
         button {
             class: "btn btn-ghost",
             onclick: move |_| {
-                let Some(path) = rfd::FileDialog::new().pick_file() else { return };
-                let Some(quien) = yo() else {
-                    err.set(Some(lang_now().t(
-                        "Falta tu nombre en este equipo.",
-                        "This machine does not have your name yet.",
-                    ).into()));
-                    return;
-                };
-                ok.set(None);
-                match caja_share.restaurar_share(&path, &quien, &obras()) {
-                    Ok(code) => {
-                        vista.set(caja_vista.vista());
+                match caja_atras.pedir_atras_caja(&obra_atras) {
+                    Ok(()) => {
+                        vista.set(caja_atras.vista());
                         err.set(None);
-                        ok.set(Some(caja::listo_humano(code, lang_now() == Idioma::Es)));
                     }
                     Err(e) => err.set(Some(caja::aviso_humano(&e, lang_now() == Idioma::Es))),
                 }
             },
-            {lang.t("Recuperar un share", "Restore a share")}
-        }
-        if let Some(m) = ok() {
-            p { class: "hint", "{m}" }
+            {lang.t("Mirar 200 bloques más atrás en la caja", "Scan 200 more blocks back in the box")}
         }
     }
 }
@@ -2079,15 +2333,16 @@ fn CajaLlave(obra_id: String, caja: caja::Caja, vista: Signal<caja::CajaVista>) 
     };
     let clave = if mostrar() { caja.view_de(&obra_id) } else { None };
     rsx! {
-        p { class: "meta", {match lang { Idioma::Es => format!("Caja stagenet {addr}"), Idioma::En => format!("Stagenet box {addr}") }} }
+        label { class: "et", {lang.t("DIRECCIÓN DE LA CAJA (STAGENET)", "BOX ADDRESS (STAGENET)")} }
+        span { class: "mono caja", "{addr}" }
         button {
-            class: "btn btn-ghost",
+            class: "btn btn-ghost btn-sm",
             onclick: move |_| mostrar.set(!mostrar()),
             {if mostrar() { lang.t("Ocultar view key", "Hide view key") } else { lang.t("Mostrar view key de la caja", "Show the box view key") }}
         }
         if let Some(clave) = clave {
             p { class: "clave", "{clave}" }
-            p { class: "hint",
+            p { class: "help",
                 {lang.t(
                     "Junto con la dirección, esta view key muestra los movimientos de la caja. No alcanza para gastar.",
                     "With the address, this view key shows the box movements. It cannot spend.",
@@ -2115,6 +2370,7 @@ fn Detalle(
     let mut extra_nom = use_signal(String::new);
     let mut extra_monto = use_signal(String::new);
     let lang = use_context::<Signal<Idioma>>()();
+    let es = matches!(lang, Idioma::Es);
     let sec = use_context::<Signal<ClaveSec>>()().0;
     let id = sel_obra().unwrap_or_default();
     let Some(obra) = obras().into_iter().find(|o| o.id == id) else {
@@ -2147,402 +2403,539 @@ fn Detalle(
     };
     let hay_caja = vista().caja_de(&obra.id).is_some();
     let obra_caja = obra.id.clone();
+    let v = vista();
+    // Estado en curso de cada partida, con la misma regla que la pantalla de partida.
+    let en_curso: Vec<(Option<&'static str>, bool, bool)> = (0..partidas.len())
+        .map(|i| {
+            let a = caja::acciones_partida(&obra, i, &mid, &v.lineas_de(&obra.id, i));
+            let toca = a.aceptar_pago || a.avisar_termino || a.confirmar_fondeo || a.empezar_fondeo_de_nuevo;
+            (caja::en_curso_corto(a.en_curso, es), a.frenado, toca)
+        })
+        .collect();
+    let pagadas = partidas.iter().filter(|p| p.estado == PartidaEstado::Pagada).count();
+    let hay_foco = contra || obra.cierre.is_some() || (abierta && obra.extra.is_some()) || estado == EstadoObra::Abandonada;
     rsx! {
         div { class: "pane",
-            div { class: "card-h",
+            div { class: "cabeza",
                 h1 { "{nom}" }
                 span { class: chip_estado(estado), "{lang.label_estado(estado)}" }
+                if sincronizando {
+                    span { class: "chip chip-wait", {lang.t("Sincronizando…", "Syncing…")} }
+                }
             }
             p { class: "lead",
-                {match lang { Idioma::Es => format!("Mandante {mnom} · contratista {cnom} · {n_part} partidas · trabajo {}", monto(obra.trabajo)), Idioma::En => format!("Client {mnom} · contractor {cnom} · {n_part} stages · job {}", monto(obra.trabajo)) }}
+                {match lang { Idioma::Es => format!("Mandante {mnom} · contratista {cnom} · trabajo {}", monto(obra.trabajo)), Idioma::En => format!("Client {mnom} · contractor {cnom} · job {}", monto(obra.trabajo)) }}
             }
-            if hay_caja {
-                CajaLlave { obra_id: obra_caja, caja: caja.clone(), vista }
-            } else if matches!(estado, EstadoObra::Acordada | EstadoObra::EnMarcha) && (soy_m || soy_c) {
-                p { class: "hint", {lang.t("Armando la caja 2-de-2. Los dos tienen que seguir en línea.", "Building the 2-of-2 box. Both have to stay online.")} }
-            }
-            if abierta && (soy_m || soy_c) {
-                CajaProfundidad { obra_id: obra.id.clone(), caja: caja.clone(), vista, yo, obras, err }
-            }
-            if sincronizando {
-                p { class: "hint", {lang.t("Sincronizando el trato… las acciones esperan a bajar el estado del otro.", "Syncing the deal… actions wait until the other side's state arrives.")} }
-            }
-            if let Some(m) = export_msg() {
-                p { class: "hint", "{m}" }
-            }
-            button {
-                class: "btn btn-ghost",
-                onclick: {
-                    let obra = obra.clone();
-                    let sec = sec.clone();
-                    move |_| {
-                        match export::guardar_txt(&obra, lang_now(), &sec) {
-                            Ok(p) => export_msg.set(Some(format!("{} {}", lang_now().t("Guardado en", "Saved to"), p.display()))),
-                            Err(e) => export_msg.set(Some(e)),
-                        }
-                    }
-                },
-                {lang.t("Exportar texto", "Export text")}
-            }
-            button {
-                class: "btn btn-ghost",
-                onclick: {
-                    let obra = obra.clone();
-                    let sec = sec.clone();
-                    move |_| {
-                        match export::guardar_pdf(&obra, lang_now(), &sec) {
-                            Ok(p) => export_msg.set(Some(format!("{} {}", lang_now().t("Guardado en", "Saved to"), p.display()))),
-                            Err(e) => export_msg.set(Some(e)),
-                        }
-                    }
-                },
-                {lang.t("Exportar PDF", "Export PDF")}
-            }
-            if contra {
-                p { class: "hint",
-                    {match lang { Idioma::Es => format!("El contratista propone garantía {} ({} partidas).", monto(garantia), n_part), Idioma::En => format!("The contractor proposes guarantee {} ({} stages).", monto(garantia), n_part) }}
-                }
-                if soy_m {
-                    button {
-                        class: "btn btn-primary",
-                        onclick: {
-                            let mut obra = obra.clone();
-                            let mid = mid.clone();
-                            move |_| {
-                                if !exigir_sesion(red, yo, &obra, err) {
-                                    return;
+            div { class: "cols",
+                div { class: "col",
+                    if hay_foco {
+                        section { class: "panel foco",
+                            h2 { {lang.t("Para resolver", "To resolve")} }
+                            if contra {
+                                p { class: "estado info",
+                                    {match lang { Idioma::Es => format!("El contratista propone garantía {} ({} partidas).", monto(garantia), n_part), Idioma::En => format!("The contractor proposes guarantee {} ({} stages).", monto(garantia), n_part) }}
                                 }
-                                let Some(nodo) = red() else { return };
-                                match obra.confirmar_contra(&mid) {
-                                    Ok(()) => {
-                                        publicar_trato(&nodo, obra.clone(), yo(), err);
+                                if soy_m {
+                                    div { class: "acciones",
+                                        button {
+                                            class: "btn btn-primary",
+                                            onclick: {
+                                                let obra = obra.clone();
+                                                let mid = mid.clone();
+                                                move |_| {
+                                                    let mut obra = obra.clone();
+                                                    if !exigir_sesion(red, yo, &obra, err) {
+                                                        return;
+                                                    }
+                                                    let Some(nodo) = red() else { return };
+                                                    match obra.confirmar_contra(&mid) {
+                                                        Ok(()) => {
+                                                            publicar_trato(&nodo, obra.clone(), yo(), err);
+                                                        }
+                                                        Err(e) => err.set(Some(lang_now().error(&e))),
+                                                    }
+                                                }
+                                            },
+                                            {lang.t("Confirmar contra", "Confirm counter")}
+                                        }
+                                        button {
+                                            class: "btn btn-ghost",
+                                            onclick: {
+                                                let obra = obra.clone();
+                                                let mid = mid.clone();
+                                                move |_| {
+                                                    let mut obra = obra.clone();
+                                                    if !exigir_sesion(red, yo, &obra, err) {
+                                                        return;
+                                                    }
+                                                    let Some(nodo) = red() else { return };
+                                                    match obra.rechazar_contra(&mid) {
+                                                        Ok(()) => {
+                                                            let gpub = if obra.garantia_publicada > 0 {
+                                                                obra.garantia_publicada
+                                                            } else {
+                                                                obra.garantia
+                                                            };
+                                                            let dets: Vec<String> =
+                                                                obra.partidas.iter().map(|p| p.detalle.clone()).collect();
+                                                            match Oferta::publicar(
+                                                                obra.mandante.clone(),
+                                                                obra.nombre.clone(),
+                                                                obra.trabajo,
+                                                                gpub,
+                                                                dets,
+                                                            ) {
+                                                                Ok(mut oferta) => {
+                                                                    oferta.id = obra.id.clone();
+                                                                    oferta.sellar_retiro(&consume_context::<Signal<ClaveSec>>()().0);
+                                                                    err.set(None);
+                                                                    publicar_trato(&nodo, obra.clone(), yo(), err);
+                                                                    nodo.publicar(oferta);
+                                                                    screen.set(Screen::Tablero);
+                                                                }
+                                                                Err(e) => err.set(Some(lang_now().error(&e))),
+                                                            }
+                                                        }
+                                                        Err(e) => err.set(Some(lang_now().error(&e))),
+                                                    }
+                                                }
+                                            },
+                                            {lang.t("No aceptar esta garantía", "Do not accept this guarantee")}
+                                        }
                                     }
-                                    Err(e) => err.set(Some(lang_now().error(&e))),
-                                }
-                            }
-                        },
-                        {lang.t("Confirmar contra", "Confirm counter")}
-                    }
-                    button {
-                        class: "btn btn-ghost",
-                        onclick: {
-                            let mut obra = obra.clone();
-                            let mid = mid.clone();
-                            move |_| {
-                                if !exigir_sesion(red, yo, &obra, err) {
-                                    return;
-                                }
-                                let Some(nodo) = red() else { return };
-                                match obra.rechazar_contra(&mid) {
-                                    Ok(()) => {
-                                let gpub = if obra.garantia_publicada > 0 {
-                                    obra.garantia_publicada
                                 } else {
-                                    obra.garantia
-                                };
-                                let dets: Vec<String> =
-                                    obra.partidas.iter().map(|p| p.detalle.clone()).collect();
-                                match Oferta::publicar(
-                                        obra.mandante.clone(),
-                                        obra.nombre.clone(),
-                                        obra.trabajo,
-                                        gpub,
-                                        dets,
-                                    ) {
-                                        Ok(mut oferta) => {
-                                            oferta.id = obra.id.clone();
-                                            err.set(None);
-                                            publicar_trato(&nodo, obra.clone(), yo(), err);
-                                            nodo.publicar(oferta);
-                                            screen.set(Screen::Tablero);
+                                    p { class: "estado wait", {lang.t("Esperando que el mandante responda la contra.", "Waiting for the client to answer the counter.")} }
+                                }
+                            }
+                            if estado == EstadoObra::Abandonada {
+                                p { class: "estado err", {lang.t("Esta obra se abandonó. El trato quedó cortado.", "This job was abandoned. The deal is cut.")} }
+                            }
+                            if let Some(cl) = obra.cierre.clone() {
+                                if cl.id == mid {
+                                    p { class: "estado wait", {lang.t("Esperando que acepten cortar el trato.", "Waiting for them to accept ending the deal.")} }
+                                } else if se_puede_abandonar {
+                                    p { class: "estado err", {match lang { Idioma::Es => format!("{} quiere cortar el trato.", cl.nombre), Idioma::En => format!("{} wants to end the deal.", cl.nombre) }} }
+                                    div { class: "acciones",
+                                        button {
+                                            class: "btn btn-danger",
+                                            onclick: {
+                                                let obra = obra.clone();
+                                                move |_| {
+                                                    let mut obra = obra.clone();
+                                                    if !exigir_sesion(red, yo, &obra, err) {
+                                                        return;
+                                                    }
+                                                    let Some(quien) = yo() else { return };
+                                                    let Some(nodo) = red() else { return };
+                                                    match obra.aceptar_cierre(&quien) {
+                                                        Ok(()) => {
+                                                            err.set(None);
+                                                            publicar_trato(&nodo, obra.clone(), yo(), err);
+                                                            screen.set(Screen::Tablero);
+                                                        }
+                                                        Err(e) => err.set(Some(lang_now().error(&e))),
+                                                    }
+                                                }
+                                            },
+                                            {lang.t("Aceptar cierre", "Accept close")}
                                         }
-                                        Err(e) => err.set(Some(lang_now().error(&e))),
+                                        button {
+                                            class: "btn btn-primary",
+                                            onclick: {
+                                                let obra = obra.clone();
+                                                move |_| {
+                                                    let mut obra = obra.clone();
+                                                    if !exigir_sesion(red, yo, &obra, err) {
+                                                        return;
+                                                    }
+                                                    let Some(quien) = yo() else { return };
+                                                    let Some(nodo) = red() else { return };
+                                                    match obra.rechazar_cierre(&quien) {
+                                                        Ok(()) => {
+                                                            err.set(None);
+                                                            publicar_trato(&nodo, obra.clone(), yo(), err);
+                                                        }
+                                                        Err(e) => err.set(Some(lang_now().error(&e))),
+                                                    }
+                                                }
+                                            },
+                                            {lang.t("Seguir con la obra", "Keep going")}
+                                        }
                                     }
-                                    }
-                                    Err(e) => err.set(Some(lang_now().error(&e))),
                                 }
                             }
-                        },
-                        {lang.t("No aceptar esta garantía", "Do not accept this guarantee")}
+                            if abierta {
+                                if let Some(ex) = obra.extra.clone() {
+                                    if ex.por.id == mid {
+                                        p { class: "estado wait", {match lang { Idioma::Es => format!("Esperando respuesta a la extra: {} ({} por lado)", extra_label, monto(ex.monto)), Idioma::En => format!("Waiting for an answer on the extra: {} ({} per side)", extra_label, monto(ex.monto)) }} }
+                                    } else {
+                                        p { class: "estado info", {match lang { Idioma::Es => format!("{} propone extra: {} (+{} por lado)", ex.por.nombre, extra_label, monto(ex.monto)), Idioma::En => format!("{} proposes extra: {} (+{} per side)", ex.por.nombre, extra_label, monto(ex.monto)) }} }
+                                        div { class: "acciones",
+                                            button {
+                                                class: "btn btn-primary",
+                                                onclick: {
+                                                    let obra = obra.clone();
+                                                    move |_| {
+                                                        let mut obra = obra.clone();
+                                                        if !exigir_sesion(red, yo, &obra, err) {
+                                                            return;
+                                                        }
+                                                        let Some(quien) = yo() else { return };
+                                                        let Some(nodo) = red() else { return };
+                                                        let sec = consume_context::<Signal<ClaveSec>>()().0;
+                                                        if let Err(e) = obra.abrir_extra(&sec) {
+                                                            err.set(Some(lang_now().error(&e)));
+                                                            return;
+                                                        }
+                                                        match obra.aceptar_extra(&quien) {
+                                                            Ok(()) => {
+                                                                err.set(None);
+                                                                publicar_trato(&nodo, obra.clone(), yo(), err);
+                                                            }
+                                                            Err(e) => err.set(Some(lang_now().error(&e))),
+                                                        }
+                                                    }
+                                                },
+                                                {lang.t("Aceptar extra", "Accept extra")}
+                                            }
+                                            button {
+                                                class: "btn btn-ghost",
+                                                onclick: {
+                                                    let obra = obra.clone();
+                                                    move |_| {
+                                                        let mut obra = obra.clone();
+                                                        if !exigir_sesion(red, yo, &obra, err) {
+                                                            return;
+                                                        }
+                                                        let Some(quien) = yo() else { return };
+                                                        let Some(nodo) = red() else { return };
+                                                        match obra.rechazar_extra(&quien) {
+                                                            Ok(()) => {
+                                                                err.set(None);
+                                                                publicar_trato(&nodo, obra.clone(), yo(), err);
+                                                            }
+                                                            Err(e) => err.set(Some(lang_now().error(&e))),
+                                                        }
+                                                    }
+                                                },
+                                                {lang.t("No agregar", "Do not add")}
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    section { class: "panel",
+                        div { class: "panel-h",
+                            h2 { {lang.t("Partidas", "Stages")} }
+                            span { class: "chip chip-info",
+                                {match lang { Idioma::Es => format!("{pagadas} de {} pagadas", partidas.len()), Idioma::En => format!("{pagadas} of {} paid", partidas.len()) }}
+                            }
+                        }
+                        p { class: "help", {lang.t("Entrá a cada partida para encerrar, avisar que terminó, tratar el porcentaje y ver el hilo.", "Open each stage to lock it, report finish, deal the percentage and see the thread.")} }
+                        div { class: "stack",
+                            for (i, p) in partidas.iter().enumerate() {
+                                {
+                                    let on = activa == Some(i);
+                                    let titulo = lang.titulo_partida(i, &p.detalle);
+                                    let label = lang.label_partida(p);
+                                    let kind = chip_partida(p.estado);
+                                    let (curso, frenado, toca) = en_curso.get(i).cloned().unwrap_or((None, false, false));
+                                    let corto = caja::saldo_corto(es, p.estado, p.capital(garantia), p.fondeo_txid.is_some());
+                                    rsx! {
+                                        button {
+                                            class: if on { "partida on" } else { "partida" },
+                                            onclick: move |_| {
+                                                sel_partida.set(Some(i));
+                                                screen.set(Screen::VerPartida);
+                                            },
+                                            span { class: "num", "{i + 1}" }
+                                            div { class: "txt",
+                                                strong { "{titulo}" }
+                                                span { "{monto(p.capital(garantia))} {lang.t(\"por lado\", \"per side\")}" }
+                                                if let Some(corto) = corto {
+                                                    span { "{corto}" }
+                                                }
+                                            }
+                                            div { class: "chips",
+                                                span { class: kind, "{label}" }
+                                                if frenado {
+                                                    span { class: "chip chip-err", {lang.t("Frenado", "Stopped")} }
+                                                } else if let Some(c) = curso {
+                                                    span { class: "chip chip-wait", "{c}" }
+                                                } else if toca {
+                                                    span { class: "chip chip-info", {lang.t("Te toca", "Your turn")} }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    if abierta && se_puede_abandonar && estado != EstadoObra::Contra && obra.extra.is_none() {
+                        details { class: "plegable",
+                            summary { {lang.t("Proponer partida extra", "Propose an extra stage")} }
+                            div { class: "cuerpo",
+                                p { class: "help", {lang.t("Una extra suma una partida al final. El otro tiene que aceptarla.", "An extra adds a stage at the end. The other person has to accept it.")} }
+                                label { class: "et", {lang.t("NOMBRE", "NAME")} }
+                                input {
+                                    r#type: "text",
+                                    placeholder: lang.t("P. ej. Techumbre extra", "E.g. Extra roof"),
+                                    value: "{extra_nom}",
+                                    oninput: move |e| extra_nom.set(e.value()),
+                                }
+                                label { class: "et", {lang.t("MONTO POR LADO", "AMOUNT PER SIDE")} }
+                                input {
+                                    r#type: "text",
+                                    placeholder: lang.t("P. ej. 3000", "E.g. 3000"),
+                                    value: "{extra_monto}",
+                                    oninput: move |e| extra_monto.set(e.value()),
+                                }
+                                button {
+                                    class: "btn btn-ghost",
+                                    onclick: {
+                                        let obra = obra.clone();
+                                        move |_| {
+                                            let mut obra = obra.clone();
+                                            if extra_nom().trim().is_empty() {
+                                                return;
+                                            }
+                                            let m = extra_monto()
+                                                .chars()
+                                                .filter(|c| c.is_ascii_digit())
+                                                .collect::<String>()
+                                                .parse()
+                                                .unwrap_or(0);
+                                            if m == 0 {
+                                                err.set(Some(lang_now().t("La extra lleva un monto mayor a cero.", "The extra needs an amount greater than zero.").into()));
+                                                return;
+                                            }
+                                            if !exigir_sesion(red, yo, &obra, err) {
+                                                return;
+                                            }
+                                            let Some(quien) = yo() else { return };
+                                            let Some(nodo) = red() else { return };
+                                            match obra.proponer_extra(&quien, extra_nom(), m) {
+                                                Ok(()) => {
+                                                    err.set(None);
+                                                    extra_nom.set(String::new());
+                                                    extra_monto.set(String::new());
+                                                    publicar_trato(&nodo, obra.clone(), yo(), err);
+                                                }
+                                                Err(e) => err.set(Some(lang_now().error(&e))),
+                                            }
+                                        }
+                                    },
+                                    {lang.t("Proponer extra", "Propose extra")}
+                                }
+                            }
+                        }
                     }
                 }
-            }
-            if estado == EstadoObra::Abandonada {
-                p { class: "hint", {lang.t("Esta obra se abandonó. El trato quedó cortado.", "This job was abandoned. The deal is cut.")} }
-            }
-            if let Some(cl) = obra.cierre.clone() {
-                if cl.id == mid {
-                    p { class: "hint", {lang.t("Esperando que acepten cortar el trato.", "Waiting for them to accept ending the deal.")} }
-                } else if se_puede_abandonar {
-                    p { class: "lead", {match lang { Idioma::Es => format!("{} quiere cortar el trato.", cl.nombre), Idioma::En => format!("{} wants to end the deal.", cl.nombre) }} }
-                    button {
-                        class: "btn btn-primary",
-                        onclick: {
-                            let mut obra = obra.clone();
-                            move |_| {
-                                if !exigir_sesion(red, yo, &obra, err) {
-                                    return;
-                                }
-                                let Some(quien) = yo() else { return };
-                                let Some(nodo) = red() else { return };
-                                match obra.aceptar_cierre(&quien) {
-                                    Ok(()) => {
-                                        err.set(None);
-                                        publicar_trato(&nodo, obra.clone(), yo(), err);
-                                        screen.set(Screen::Tablero);
-                                    }
-                                    Err(e) => err.set(Some(lang_now().error(&e))),
-                                }
-                            }
-                        },
-                        {lang.t("Aceptar cierre", "Accept close")}
-                    }
-                    button {
-                        class: "btn btn-ghost",
-                        onclick: {
-                            let mut obra = obra.clone();
-                            move |_| {
-                                if !exigir_sesion(red, yo, &obra, err) {
-                                    return;
-                                }
-                                let Some(quien) = yo() else { return };
-                                let Some(nodo) = red() else { return };
-                                match obra.rechazar_cierre(&quien) {
-                                    Ok(()) => {
-                                        err.set(None);
-                                        publicar_trato(&nodo, obra.clone(), yo(), err);
-                                    }
-                                    Err(e) => err.set(Some(lang_now().error(&e))),
-                                }
-                            }
-                        },
-                        {lang.t("Seguir con la obra", "Keep going")}
-                    }
-                }
-            } else if abierta && se_puede_abandonar {
-                if confirma_abandono() {
-                    p { class: "hint",
-                        if obra.hay_riesgo() {
-                            {lang.t("Hay partidas encerradas. El otro tiene que aceptar el cierre.", "There are locked stages. The other person has to accept the close.")}
+                div { class: "col",
+                    section { class: "panel",
+                        h2 { {lang.t("Caja 2-de-2", "2-of-2 box")} }
+                        if hay_caja {
+                            CajaLlave { obra_id: obra_caja, caja: caja.clone(), vista }
+                        } else if matches!(estado, EstadoObra::Acordada | EstadoObra::EnMarcha) && (soy_m || soy_c) {
+                            p { class: "estado wait", {lang.t("Armando la caja 2-de-2. Los dos tienen que seguir en línea.", "Building the 2-of-2 box. Both have to stay online.")} }
                         } else {
-                            {lang.t("¿Abandonar? Se corta el trato y no se puede deshacer.", "Abandon? The deal is cut and cannot be undone.")}
+                            p { class: "help", {lang.t("La caja se arma cuando los dos acuerdan la obra.", "The box is built once both agree on the job.")} }
+                        }
+                        dl { class: "datos",
+                            dt { {lang.t("Partidas", "Stages")} }
+                            dd { "{n_part}" }
+                            dt { {lang.t("Garantía", "Guarantee")} }
+                            dd { "{monto(garantia)}" }
+                            dt { {lang.t("Trabajo", "Job")} }
+                            dd { "{monto(obra.trabajo)}" }
                         }
                     }
-                    button {
-                        class: "btn btn-primary",
-                        onclick: {
-                            let mut obra = obra.clone();
-                            move |_| {
-                                if obra.hay_riesgo() && !exigir_sesion(red, yo, &obra, err) {
-                                    return;
-                                }
-                                let Some(quien) = yo() else { return };
-                                let Some(nodo) = red() else { return };
-                                match obra.abandonar(&quien) {
-                                    Ok(()) => {
-                                        err.set(None);
-                                        confirma_abandono.set(false);
-                                        publicar_trato(&nodo, obra.clone(), yo(), err);
-                                        if !obra.hay_riesgo() || obra.estado == EstadoObra::Abandonada {
-                                            screen.set(Screen::Tablero);
+                    section { class: "panel",
+                        h2 { {lang.t("Constancia", "Record")} }
+                        p { class: "help", {lang.t("Un resumen de la obra, sus partidas y el hilo, para guardar o imprimir.", "A summary of the job, its stages and the thread, to keep or print.")} }
+                        div { class: "acciones",
+                            button {
+                                class: "btn btn-ghost btn-sm",
+                                onclick: {
+                                    let obra = obra.clone();
+                                    let sec = sec.clone();
+                                    move |_| {
+                                        match export::guardar_txt(&obra, lang_now(), &sec) {
+                                            Ok(p) => export_msg.set(Some(format!("{} {}", lang_now().t("Guardado en", "Saved to"), p.display()))),
+                                            Err(e) => export_msg.set(Some(e)),
                                         }
                                     }
-                                    Err(e) => err.set(Some(lang_now().error(&e))),
-                                }
+                                },
+                                {lang.t("Exportar texto", "Export text")}
                             }
-                        },
-                        if obra.hay_riesgo() { {lang.t("Proponer cierre", "Propose close")} } else { {lang.t("Sí, abandonar", "Yes, abandon")} }
-                    }
-                    button {
-                        class: "btn btn-ghost",
-                        onclick: move |_| confirma_abandono.set(false),
-                        {lang.t("No", "No")}
-                    }
-                } else {
-                    button {
-                        class: "btn btn-ghost",
-                        onclick: move |_| confirma_abandono.set(true),
-                        {lang.t("Abandonar esta obra", "Abandon this job")}
-                    }
-                }
-            }
-            if se_puede_abandonar {
-                if confirma_salida_local() {
-                    p { class: "hint",
-                        {lang.t(
-                            "¿Archivar en este equipo? Sale del tablero y de Mis obras. No mueve fondos ni corta el trato del otro. El share y el contexto quedan en disco.",
-                            "Archive on this device? It leaves the board and My jobs. Funds are not moved and the other side is not cut off. Share and context stay on disk.",
-                        )}
-                    }
-                    button {
-                        class: "btn btn-primary",
-                        onclick: {
-                            let obra = obra.clone();
-                            let caja = caja.clone();
-                            move |_| {
-                                let Some(nodo) = red() else { return };
-                                for i in 0..obra.partidas.len() {
-                                    caja.cancelar_fondeo(&obra.id, i);
-                                }
-                                nodo.quitar(&obra.id);
-                                nodo.archivar_obra_local(&obra.id);
-                                obras.set(nodo.obras());
-                                confirma_salida_local.set(false);
-                                err.set(None);
-                                screen.set(Screen::Tablero);
-                            }
-                        },
-                        {lang.t("Sí, archivar aquí", "Yes, archive here")}
-                    }
-                    button {
-                        class: "btn btn-ghost",
-                        onclick: move |_| confirma_salida_local.set(false),
-                        {lang.t("No", "No")}
-                    }
-                } else {
-                    button {
-                        class: "btn btn-ghost",
-                        onclick: move |_| confirma_salida_local.set(true),
-                        {lang.t("Archivar esta obra", "Archive this job")}
-                    }
-                }
-            }
-            p { class: "hint", {lang.t("Entrá a cada partida para avisar que terminó, tratar el porcentaje y ver el hilo.", "Open each stage to report finish, deal the percentage and see the thread.")} }
-            div { style: "height: 16px;" }
-            for (i, p) in partidas.iter().enumerate() {
-                {
-                    let on = activa == Some(i);
-                    let titulo = lang.titulo_partida(i, &p.detalle);
-                    let label = lang.label_partida(p);
-                    let kind = chip_partida(p.estado);
-                    rsx! {
-                        button {
-                            class: if on { "partida on" } else { "partida" },
-                            onclick: move |_| {
-                                sel_partida.set(Some(i));
-                                screen.set(Screen::VerPartida);
-                            },
-                            div { class: "txt",
-                                strong { "{i + 1}  {titulo}" }
-                                span { "{monto(p.capital(garantia))} {lang.t(\"por lado\", \"per side\")}" }
-                                if let Some(corto) = caja::saldo_corto(matches!(lang, Idioma::Es), p.estado, p.capital(garantia), p.fondeo_txid.is_some()) {
-                                    span { "{corto}" }
-                                }
-                            }
-                            span { class: kind, "{label}" }
-                        }
-                    }
-                }
-            }
-            div { class: "extra-box",
-                if !abierta {}
-                else if let Some(ex) = obra.extra.clone() {
-                    if ex.por.id == mid {
-                        p { class: "hint", {match lang { Idioma::Es => format!("Esperando extra: {} ({} por lado)", extra_label, monto(ex.monto)), Idioma::En => format!("Waiting on extra: {} ({} per side)", extra_label, monto(ex.monto)) }} }
-                    } else {
-                        p { class: "hint", {match lang { Idioma::Es => format!("{} propone extra: {} (+{} por lado)", ex.por.nombre, extra_label, monto(ex.monto)), Idioma::En => format!("{} proposes extra: {} (+{} per side)", ex.por.nombre, extra_label, monto(ex.monto)) }} }
-                        button {
-                            class: "btn btn-primary",
-                            onclick: {
-                                let mut obra = obra.clone();
-                                move |_| {
-                                    if !exigir_sesion(red, yo, &obra, err) {
-                                        return;
-                                    }
-                                    let Some(quien) = yo() else { return };
-                                    let Some(nodo) = red() else { return };
-                                    let sec = consume_context::<Signal<ClaveSec>>()().0;
-                                    if let Err(e) = obra.abrir_extra(&sec) {
-                                        err.set(Some(lang_now().error(&e)));
-                                        return;
-                                    }
-                                    match obra.aceptar_extra(&quien) {
-                                        Ok(()) => {
-                                            err.set(None);
-                                            publicar_trato(&nodo, obra.clone(), yo(), err);
+                            button {
+                                class: "btn btn-ghost btn-sm",
+                                onclick: {
+                                    let obra = obra.clone();
+                                    let sec = sec.clone();
+                                    move |_| {
+                                        match export::guardar_pdf(&obra, lang_now(), &sec) {
+                                            Ok(p) => export_msg.set(Some(format!("{} {}", lang_now().t("Guardado en", "Saved to"), p.display()))),
+                                            Err(e) => export_msg.set(Some(e)),
                                         }
-                                        Err(e) => err.set(Some(lang_now().error(&e))),
                                     }
-                                }
-                            },
-                            {lang.t("Aceptar extra", "Accept extra")}
+                                },
+                                {lang.t("Exportar PDF", "Export PDF")}
+                            }
                         }
-                        button {
-                            class: "btn btn-ghost",
-                            onclick: {
-                                let mut obra = obra.clone();
-                                move |_| {
-                                    if !exigir_sesion(red, yo, &obra, err) {
-                                        return;
-                                    }
-                                    let Some(quien) = yo() else { return };
-                                    let Some(nodo) = red() else { return };
-                                    match obra.rechazar_extra(&quien) {
-                                        Ok(()) => {
-                                            err.set(None);
-                                            publicar_trato(&nodo, obra.clone(), yo(), err);
+                        if let Some(m) = export_msg() {
+                            p { class: "ok-msg", "{m}" }
+                        }
+                    }
+                    if abierta && (soy_m || soy_c) {
+                        details { class: "plegable",
+                            summary { {lang.t("Respaldos y recuperación", "Backups and recovery")} }
+                            div { class: "cuerpo",
+                                CajaRespaldo { obra_id: obra.id.clone(), caja: caja.clone(), vista, yo, obras, err }
+                            }
+                        }
+                        details { class: "plegable",
+                            summary { {lang.t("Avanzado", "Advanced")} }
+                            div { class: "cuerpo",
+                                CajaMirar { obra_id: obra.id.clone(), caja: caja.clone(), vista, err }
+                            }
+                        }
+                    }
+                    if se_puede_abandonar && (obra.cierre.is_none() || !abierta) {
+                        details { class: "plegable cuidado",
+                            summary { {lang.t("Cortar o archivar", "End or archive")} }
+                            div { class: "cuerpo",
+                                if abierta && obra.cierre.is_none() {
+                                    div { class: "grupo",
+                                        h3 { {lang.t("Abandonar la obra", "Abandon the job")} }
+                                        if confirma_abandono() {
+                                            p { class: "estado err",
+                                                if obra.hay_riesgo() {
+                                                    {lang.t("Hay partidas encerradas. El otro tiene que aceptar el cierre.", "There are locked stages. The other person has to accept the close.")}
+                                                } else {
+                                                    {lang.t("¿Abandonar? Se corta el trato y no se puede deshacer.", "Abandon? The deal is cut and cannot be undone.")}
+                                                }
+                                            }
+                                            div { class: "acciones",
+                                                button {
+                                                    class: "btn btn-danger",
+                                                    onclick: {
+                                                        let obra = obra.clone();
+                                                        move |_| {
+                                                            let mut obra = obra.clone();
+                                                            if obra.hay_riesgo() && !exigir_sesion(red, yo, &obra, err) {
+                                                                return;
+                                                            }
+                                                            let Some(quien) = yo() else { return };
+                                                            let Some(nodo) = red() else { return };
+                                                            match obra.abandonar(&quien) {
+                                                                Ok(()) => {
+                                                                    err.set(None);
+                                                                    confirma_abandono.set(false);
+                                                                    publicar_trato(&nodo, obra.clone(), yo(), err);
+                                                                    if !obra.hay_riesgo() || obra.estado == EstadoObra::Abandonada {
+                                                                        screen.set(Screen::Tablero);
+                                                                    }
+                                                                }
+                                                                Err(e) => err.set(Some(lang_now().error(&e))),
+                                                            }
+                                                        }
+                                                    },
+                                                    if obra.hay_riesgo() { {lang.t("Proponer cierre", "Propose close")} } else { {lang.t("Sí, abandonar", "Yes, abandon")} }
+                                                }
+                                                button {
+                                                    class: "btn btn-ghost",
+                                                    onclick: move |_| confirma_abandono.set(false),
+                                                    {lang.t("No", "No")}
+                                                }
+                                            }
+                                        } else {
+                                            p { class: "help", {lang.t("Corta el trato con el otro. Si hay partidas encerradas, el otro tiene que aceptar el cierre.", "Ends the deal with the other person. If stages are locked, they have to accept the close.")} }
+                                            button {
+                                                class: "btn btn-danger btn-sm",
+                                                onclick: move |_| confirma_abandono.set(true),
+                                                {lang.t("Abandonar esta obra", "Abandon this job")}
+                                            }
                                         }
-                                        Err(e) => err.set(Some(lang_now().error(&e))),
                                     }
                                 }
-                            },
-                            {lang.t("No agregar", "Do not add")}
-                        }
-                    }
-                } else if abierta && se_puede_abandonar && estado != EstadoObra::Contra {
-                    label { class: "et", {lang.t("PARTIDA EXTRA (OPCIONAL)", "EXTRA STAGE (OPTIONAL)")} }
-                    input {
-                        r#type: "text",
-                        placeholder: lang.t("P. ej. Techumbre extra", "E.g. Extra roof"),
-                        value: "{extra_nom}",
-                        oninput: move |e| extra_nom.set(e.value()),
-                    }
-                    label { class: "et", {lang.t("MONTO POR LADO", "AMOUNT PER SIDE")} }
-                    input {
-                        r#type: "text",
-                        placeholder: lang.t("P. ej. 3000", "E.g. 3000"),
-                        value: "{extra_monto}",
-                        oninput: move |e| extra_monto.set(e.value()),
-                    }
-                    button {
-                        class: "btn btn-ghost",
-                        onclick: {
-                            let mut obra = obra.clone();
-                            move |_| {
-                                if extra_nom().trim().is_empty() {
-                                    return;
-                                }
-                                let m = extra_monto()
-                                    .chars()
-                                    .filter(|c| c.is_ascii_digit())
-                                    .collect::<String>()
-                                    .parse()
-                                    .unwrap_or(0);
-                                if m == 0 {
-                                    err.set(Some(lang_now().t("La extra lleva un monto mayor a cero.", "The extra needs an amount greater than zero.").into()));
-                                    return;
-                                }
-                                if !exigir_sesion(red, yo, &obra, err) {
-                                    return;
-                                }
-                                let Some(quien) = yo() else { return };
-                                let Some(nodo) = red() else { return };
-                                match obra.proponer_extra(&quien, extra_nom(), m) {
-                                    Ok(()) => {
-                                        err.set(None);
-                                        extra_nom.set(String::new());
-                                        extra_monto.set(String::new());
-                                        publicar_trato(&nodo, obra.clone(), yo(), err);
+                                div { class: "grupo",
+                                    h3 { {lang.t("Archivar en este equipo", "Archive on this device")} }
+                                    p { class: "help",
+                                        {lang.t(
+                                            "Sale del tablero y de Mis obras. No mueve fondos ni corta el trato del otro. El share y el contexto quedan en disco.",
+                                            "It leaves the board and My jobs. Funds are not moved and the other side is not cut off. Share and context stay on disk.",
+                                        )}
                                     }
-                                    Err(e) => err.set(Some(lang_now().error(&e))),
+                                    if confirma_salida_local() {
+                                        div { class: "acciones",
+                                            button {
+                                                class: "btn btn-danger",
+                                                onclick: {
+                                                    let obra = obra.clone();
+                                                    let caja = caja.clone();
+                                                    move |_| {
+                                                        let Some(nodo) = red() else { return };
+                                                        for i in 0..obra.partidas.len() {
+                                                            caja.cancelar_fondeo(&obra.id, i);
+                                                        }
+                                                        nodo.quitar(&obra.id);
+                                                        nodo.archivar_obra_local(&obra.id);
+                                                        obras.set(nodo.obras());
+                                                        confirma_salida_local.set(false);
+                                                        err.set(None);
+                                                        screen.set(Screen::Tablero);
+                                                    }
+                                                },
+                                                {lang.t("Sí, archivar aquí", "Yes, archive here")}
+                                            }
+                                            button {
+                                                class: "btn btn-ghost",
+                                                onclick: move |_| confirma_salida_local.set(false),
+                                                {lang.t("No", "No")}
+                                            }
+                                        }
+                                    } else {
+                                        button {
+                                            class: "btn btn-danger btn-sm",
+                                            onclick: move |_| confirma_salida_local.set(true),
+                                            {lang.t("Archivar esta obra", "Archive this job")}
+                                        }
+                                    }
                                 }
                             }
-                        },
-                        {lang.t("Proponer extra", "Propose extra")}
+                        }
                     }
                 }
             }
         }
+    }
+}
+
+/// Clase, texto y txid (aparte, en monoespaciado) de una línea del motor.
+fn linea_estado(t: &caja::Texto, es: bool) -> (&'static str, String, Option<String>) {
+    let clase = if caja::es_freno(t) {
+        "estado err"
+    } else if t.en_curso() != caja::EnCurso::Nada {
+        "estado wait"
+    } else {
+        "estado info"
+    };
+    match t {
+        caja::Texto::EsperandoFondeo(tx) => (
+            clase,
+            if es { "Fondeo publicado, esperando un bloque." } else { "Funding published, waiting for a block." }.into(),
+            Some(tx.clone()),
+        ),
+        caja::Texto::EsperandoPago(tx) => (
+            clase,
+            if es { "Pago publicado, esperando un bloque." } else { "Payment published, waiting for a block." }.into(),
+            Some(tx.clone()),
+        ),
+        _ => (clase, t.mostrar(es), None),
     }
 }
 
@@ -2563,6 +2956,7 @@ fn VerPartida(
     let mut confirma_encerrar = use_signal(|| false);
     let mut detalle_edit = use_signal(String::new);
     let lang = use_context::<Signal<Idioma>>()();
+    let es = matches!(lang, Idioma::Es);
     let sec = use_context::<Signal<ClaveSec>>()().0;
     use_effect(move || {
         let id = sel_obra();
@@ -2593,10 +2987,6 @@ fn VerPartida(
     }
     let soy_m = obra.mandante.id == mid;
     let soy_c = obra.contratista.id == mid;
-    let mi_turno = p.turno.map(|r| match r {
-        Rol::Mandante => soy_m,
-        Rol::Contratista => soy_c,
-    });
     let espera_nom = match p.turno {
         Some(Rol::Mandante) => obra.mandante.nombre.clone(),
         Some(Rol::Contratista) => obra.contratista.nombre.clone(),
@@ -2619,9 +3009,13 @@ fn VerPartida(
         .as_ref()
         .map(|q| q.id == mid)
         .unwrap_or(false);
-    let fondeo_curso = vista().linea(&obra.id, i).cloned();
-    let frenado = fondeo_curso.as_ref().is_some_and(caja::es_freno);
-    let clase_linea = if frenado { "err" } else { "hint" };
+    // Una sola regla (caja.rs) decide qué botones existen; Android usa la misma.
+    let lineas = vista().lineas_de(&obra.id, i);
+    let acc = caja::acciones_partida(&obra, i, &mid, &lineas);
+    let pagando = matches!(acc.en_curso, caja::EnCurso::PagoFirmando | caja::EnCurso::PagoEnRed);
+    let en_curso_txt = caja::en_curso_corto(acc.en_curso, es);
+    let lineas_vis: Vec<(&'static str, String, Option<String>)> =
+        lineas.iter().map(|t| linea_estado(t, es)).collect();
     let sincronizando = !cortada && sincronizando_trato(red, yo, &obra);
     let notas_vis: Vec<(String, String, bool)> = p
         .notas
@@ -2643,417 +3037,476 @@ fn VerPartida(
             }
         })
         .collect();
-    rsx! {
-        div { class: "pane narrow",
+    let nom_obra = obra.nombre.clone();
+    let saldo = caja::saldo_partida(es, p.estado, p.capital(garantia), p.fondeo_txid.is_some(), &obra.mandante.nombre, &obra.contratista.nombre);
+    // Botón "solo este equipo": a la vista si el motor se frenó, si no en Avanzado.
+    let salir_btn = {
+        let obra = obra.clone();
+        let caja = caja.clone();
+        let clase = if acc.frenado { "btn btn-danger" } else { "btn btn-danger btn-sm" };
+        rsx! {
             button {
-                class: "btn btn-ghost",
-                onclick: move |_| screen.set(Screen::Detalle),
-                {lang.t("Volver a la obra", "Back to the job")}
-            }
-            div { class: "card-h",
-                h1 { "{i + 1}  {titulo}" }
-                span { class: chip_partida(p.estado), "{label}" }
-            }
-            p { class: "lead",
-                {match lang { Idioma::Es => format!("{} por lado. Mandante {} · contratista {}", monto(p.capital(garantia)), obra.mandante.nombre, obra.contratista.nombre), Idioma::En => format!("{} per side. Client {} · contractor {}", monto(p.capital(garantia)), obra.mandante.nombre, obra.contratista.nombre) }}
-            }
-            if let Some(s) = caja::saldo_partida(matches!(lang, Idioma::Es), p.estado, p.capital(garantia), p.fondeo_txid.is_some(), &obra.mandante.nombre, &obra.contratista.nombre) {
-                p { class: "lead", "{s.estado}" }
-                p { class: "lead", "{s.detalle}" }
-                if let Some(c) = s.candado {
-                    p { class: "hint", "{c}" }
-                }
-                CajaLlave { obra_id: obra.id.clone(), caja: caja.clone(), vista }
-            } else if let Some(pico) = caja::a_piconero(p.capital(garantia)) {
-                p { class: "hint", {match lang { Idioma::Es => format!("{} XMR por lado en stagenet.", caja::fmt_xmr(pico)), Idioma::En => format!("{} XMR per side on stagenet.", caja::fmt_xmr(pico)) }} }
-            }
-            if !cortada && (soy_m || soy_c) {
-                CajaProfundidad { obra_id: obra.id.clone(), caja: caja.clone(), vista, yo, obras, err }
-            }
-            if let Some(tx) = p.fondeo_txid.as_ref() {
-                p { class: "meta", {match lang { Idioma::Es => format!("Fondeo {tx}"), Idioma::En => format!("Funding {tx}") }} }
-            }
-            if let Some(tx) = p.pago_txid.as_ref() {
-                p { class: "meta", {match lang { Idioma::Es => format!("Pago {tx}"), Idioma::En => format!("Payment {tx}") }} }
-            }
-            if let Some(txt) = vista().linea(&obra.id, i).cloned() {
-                p { class: "{clase_linea}", "{txt.mostrar(matches!(lang, Idioma::Es))}" }
-            }
-            if sincronizando {
-                p { class: "hint", {lang.t("Sincronizando el trato… las acciones esperan a bajar el estado del otro.", "Syncing the deal… actions wait until the other side's state arrives.")} }
-            }
-            if !cortada && p.estado == PartidaEstado::Pendiente && (soy_m || soy_c) {
-                label { class: "et", {lang.t("TEXTO", "TEXT")} }
-                input {
-                    r#type: "text",
-                    value: "{detalle_edit}",
-                    oninput: move |e| detalle_edit.set(e.value()),
-                }
-                button {
-                    class: "btn btn-ghost",
-                    onclick: {
-                        let mut obra = obra.clone();
-                        move |_| {
-                            let Some(quien) = yo() else { return };
-                            let Some(nodo) = red() else { return };
-                            match obra.editar_detalle(i, &quien, detalle_edit()) {
-                                Ok(()) => {
-                                    err.set(None);
-                                    publicar_trato(&nodo, obra.clone(), yo(), err);
-                                }
-                                Err(e) => err.set(Some(lang_now().error(&e))),
+                class: clase,
+                onclick: move |_| {
+                    let mut obra = obra.clone();
+                    let Some(quien) = yo() else { return };
+                    let Some(nodo) = red() else { return };
+                    caja.cancelar_fondeo(&obra.id, i);
+                    if obra.partidas.get(i).map(|p| p.estado == PartidaEstado::Encerrando).unwrap_or(false) {
+                        match obra.encerrar_cancelar(i, &quien) {
+                            Ok(()) => {
+                                publicar_trato(&nodo, obra.clone(), yo(), err);
                             }
-                        }
-                    },
-                    {lang.t("Guardar texto", "Save text")}
-                }
-            }
-            if cerrado {
-                if let Some(r) = p.recibo.as_ref() {
-                    div { class: "recibo",
-                        strong { "{lang.t(\"Recibo\", \"Receipt\")} · {r.titulo}" }
-                        p { {match lang { Idioma::Es => format!("Pagó {}% · {} · aceptó {} · {}", r.porcentaje, monto(r.monto), r.acepto_nombre, lang.fmt_cuando(r.cuando)), Idioma::En => format!("Paid {}% · {} · accepted by {} · {}", r.porcentaje, monto(r.monto), r.acepto_nombre, lang.fmt_cuando(r.cuando)) }} }
-                    }
-                } else {
-                    p { class: "hint",
-                        {match lang { Idioma::Es => format!("Cerró al {}% ({}). El hilo quedó guardado.", p.pago.unwrap_or(0), monto(monto_pct(garantia, p.pago.unwrap_or(0)))), Idioma::En => format!("Closed at {}% ({}). The thread was saved.", p.pago.unwrap_or(0), monto(monto_pct(garantia, p.pago.unwrap_or(0)))) }}
-                    }
-                }
-            }
-            if let Some(q) = p.encerrado_por.as_ref() {
-                p { class: "meta", {match lang { Idioma::Es => format!("Encerró {} · {}", q.nombre, lang.fmt_cuando(p.encerrado_cuando)), Idioma::En => format!("Locked by {} · {}", q.nombre, lang.fmt_cuando(p.encerrado_cuando)) }} }
-            }
-            if !notas_vis.is_empty() {
-                div { class: "notas",
-                    for (cabeza, cuerpo, cifrada) in notas_vis {
-                        div { class: "nota",
-                            strong { "{cabeza}" }
-                            if cifrada {
-                                p { class: "hint", "{cuerpo}" }
-                            } else if !cuerpo.is_empty() {
-                                p { "{cuerpo}" }
-                            }
-                        }
-                    }
-                }
-            }
-            if !cortada && p.estado == PartidaEstado::Pendiente {
-                if contra {
-                    p { class: "hint", {lang.t("Primero hay que confirmar la contra de la obra.", "The job counter has to be confirmed first.")} }
-                } else if !activa {
-                    p { class: "hint", {lang.t("Todavía no toca. Cerrá la partida que está en curso.", "Not this one yet. Close the stage that is underway.")} }
-                } else if confirma_encerrar() {
-                    p { class: "hint", {lang.t("Los dos tienen que confirmar el encierre. El otro tiene que estar en línea.", "Both have to confirm the lock. The other person has to be online.")} }
-                    button {
-                        class: "btn btn-primary",
-                        onclick: {
-                            let mut obra = obra.clone();
-                            move |_| {
-                                if !exigir_sesion(red, yo, &obra, err) {
-                                    return;
-                                }
-                                let Some(quien) = yo() else { return };
-                                let Some(nodo) = red() else { return };
-                                match obra.encerrar_proponer(i, &quien) {
-                                    Ok(()) => {
-                                        err.set(None);
-                                        confirma_encerrar.set(false);
-                                        publicar_trato(&nodo, obra.clone(), yo(), err);
-                                    }
-                                    Err(e) => err.set(Some(lang_now().error(&e))),
-                                }
-                            }
-                        },
-                        {lang.t("Proponer encerrar", "Propose lock")}
-                    }
-                    button {
-                        class: "btn btn-ghost",
-                        onclick: move |_| confirma_encerrar.set(false),
-                        {lang.t("No", "No")}
-                    }
-                } else {
-                    div { style: "height: 16px;" }
-                    button {
-                        class: "btn btn-primary",
-                        onclick: move |_| confirma_encerrar.set(true),
-                        {lang.t("Encerrar esta partida", "Lock this stage")}
-                    }
-                }
-            }
-            if !cortada && p.estado == PartidaEstado::Encerrando {
-                if soy_prop_enc && !frenado {
-                    if fondeo_curso.is_none() {
-                        p { class: "hint", {lang.t("Esperando que el otro confirme el encierre.", "Waiting for the other person to confirm the lock.")} }
-                    }
-                    button {
-                        class: "btn btn-ghost",
-                        onclick: {
-                            let mut obra = obra.clone();
-                            move |_| {
-                                if !exigir_sesion(red, yo, &obra, err) {
-                                    return;
-                                }
-                                let Some(quien) = yo() else { return };
-                                let Some(nodo) = red() else { return };
-                                match obra.encerrar_cancelar(i, &quien) {
-                                    Ok(()) => {
-                                        err.set(None);
-                                        publicar_trato(&nodo, obra.clone(), yo(), err);
-                                    }
-                                    Err(e) => err.set(Some(lang_now().error(&e))),
-                                }
-                            }
-                        },
-                        {lang.t("Cancelar propuesta", "Cancel proposal")}
-                    }
-                } else if caja::puede_empezar_fondeo_de_nuevo(true, frenado) {
-                    button {
-                        class: "btn btn-primary",
-                        onclick: {
-                            let obra = obra.clone();
-                            let caja = caja.clone();
-                            move |_| {
-                                if !exigir_sesion(red, yo, &obra, err) {
-                                    return;
-                                }
-                                let Some(quien) = yo() else { return };
-                                let Some(nodo) = red() else { return };
-                                match caja.empezar_fondeo_de_nuevo(&obra, i, &quien, &nodo) {
-                                    Ok(()) => err.set(None),
-                                    Err(e) => err.set(Some(caja::aviso_humano(&e, lang_now() == Idioma::Es))),
-                                }
-                            }
-                        },
-                        {lang.t("Empezar el fondeo de nuevo", "Start funding again")}
-                    }
-                    button {
-                        class: "btn btn-ghost",
-                        onclick: {
-                            let mut obra = obra.clone();
-                            move |_| {
-                                if !exigir_sesion(red, yo, &obra, err) {
-                                    return;
-                                }
-                                let Some(quien) = yo() else { return };
-                                let Some(nodo) = red() else { return };
-                                match obra.encerrar_cancelar(i, &quien) {
-                                    Ok(()) => {
-                                        err.set(None);
-                                        publicar_trato(&nodo, obra.clone(), yo(), err);
-                                    }
-                                    Err(e) => err.set(Some(lang_now().error(&e))),
-                                }
-                            }
-                        },
-                        {lang.t("No encerrar", "Do not lock")}
-                    }
-                } else if fondeo_curso.is_none() {
-                    p { class: "lead", {lang.t("El otro quiere encerrar esta partida. Confirmar arma una sola transacción con los dos.", "The other person wants to lock this stage. Confirm builds one transaction from both wallets.")} }
-                    button {
-                        class: "btn btn-primary",
-                        onclick: {
-                            let obra = obra.clone();
-                            let caja = caja.clone();
-                            move |_| {
-                                if !exigir_sesion(red, yo, &obra, err) {
-                                    return;
-                                }
-                                let Some(quien) = yo() else { return };
-                                match caja.pedir_fondeo(&obra, i, &quien) {
-                                    Ok(()) => err.set(None),
-                                    Err(e) => err.set(Some(caja::aviso_humano(&e, lang_now() == Idioma::Es))),
-                                }
-                            }
-                        },
-                        {lang.t("Confirmar y fondear", "Confirm and fund")}
-                    }
-                    button {
-                        class: "btn btn-ghost",
-                        onclick: {
-                            let mut obra = obra.clone();
-                            move |_| {
-                                if !exigir_sesion(red, yo, &obra, err) {
-                                    return;
-                                }
-                                let Some(quien) = yo() else { return };
-                                let Some(nodo) = red() else { return };
-                                match obra.encerrar_cancelar(i, &quien) {
-                                    Ok(()) => {
-                                        err.set(None);
-                                        publicar_trato(&nodo, obra.clone(), yo(), err);
-                                    }
-                                    Err(e) => err.set(Some(lang_now().error(&e))),
-                                }
-                            }
-                        },
-                        {lang.t("No encerrar", "Do not lock")}
-                    }
-                } else {
-                    button {
-                        class: "btn btn-ghost",
-                        onclick: {
-                            let mut obra = obra.clone();
-                            move |_| {
-                                if !exigir_sesion(red, yo, &obra, err) {
-                                    return;
-                                }
-                                let Some(quien) = yo() else { return };
-                                let Some(nodo) = red() else { return };
-                                match obra.encerrar_cancelar(i, &quien) {
-                                    Ok(()) => {
-                                        err.set(None);
-                                        publicar_trato(&nodo, obra.clone(), yo(), err);
-                                    }
-                                    Err(e) => err.set(Some(lang_now().error(&e))),
-                                }
-                            }
-                        },
-                        {lang.t("No encerrar", "Do not lock")}
-                    }
-                }
-            }
-            if !cortada && p.estado == PartidaEstado::Encerrada && soy_c {
-                label { class: "et", {lang.t("PORCENTAJE A COBRAR", "PERCENT TO CHARGE")} }
-                input {
-                    r#type: "text",
-                    value: "{pct}",
-                    oninput: move |e| pct.set(e.value()),
-                }
-                label { class: "et", "{lang.t(\"NOTA\", \"NOTE\")} ({n_nota}/{MAX_NOTA})" }
-                input {
-                    r#type: "text",
-                    placeholder: lang.t("Terminé las fundaciones", "Foundations are done"),
-                    value: "{nota}",
-                    oninput: move |e| nota.set(recorta_nota(e.value())),
-                }
-                div { style: "height: 16px;" }
-                button {
-                    class: "btn btn-primary",
-                    onclick: {
-                        let mut obra = obra.clone();
-                        move |_| {
-                            if !exigir_sesion(red, yo, &obra, err) {
+                            Err(e) => {
+                                err.set(Some(lang_now().error(&e)));
                                 return;
                             }
-                            let Some(quien) = yo() else { return };
-                            let Some(nodo) = red() else { return };
-                            match obra.avisar_termino(i, &quien, parse_pct(&pct()), nota()) {
-                                Ok(()) => {
-                                    err.set(None);
-                                    publicar_trato(&nodo, obra.clone(), yo(), err);
-                                }
-                                Err(e) => err.set(Some(lang_now().error(&e))),
-                            }
                         }
-                    },
-                    {lang.t("Avisar que terminé", "Report that I finished")}
-                }
+                    }
+                    let peer = if obra.mandante.id == quien.id {
+                        obra.contratista.id.clone()
+                    } else {
+                        obra.mandante.id.clone()
+                    };
+                    let cuerpo = i.to_string();
+                    let _ = nodo.enviar_caja(&obra.id, &peer, &quien.id, "partida-salida", cuerpo.as_bytes());
+                    err.set(None);
+                },
+                {lang.t("Abandonar partida (solo este equipo)", "Leave stage (this device only)")}
             }
-            if !cortada && p.estado == PartidaEstado::Encerrada && soy_m {
-                p { class: "hint", {lang.t("El contratista avisa cuando termina y propone cuánto se paga.", "The contractor reports when they finish and proposes how much is paid.")} }
+            p { class: "help",
+                {lang.t(
+                    "Cancela fondeo o propuesta locales. No mueve monedas ni firma por el otro. Si ya está Encerrada en cadena, la caja sigue.",
+                    "Cancels local funding or proposal. Does not move coins or sign for the other side. If already Locked on-chain, the box stays.",
+                )}
             }
-            if !cortada && p.estado == PartidaEstado::EnTrato {
-                if let Some(n) = propuesto {
-                    p { class: "lead", {match lang { Idioma::Es => format!("Sobre la mesa: {n}% ({}).", monto(monto_pct(garantia, n))), Idioma::En => format!("On the table: {n}% ({}).", monto(monto_pct(garantia, n))) }} }
-                }
-                if mi_turno == Some(false) {
-                    p { class: "hint", {match lang { Idioma::Es => format!("Esperando a {espera_nom}."), Idioma::En => format!("Waiting for {espera_nom}.") }} }
-                }
-                if mi_turno == Some(true) {
-                    div { style: "height: 12px;" }
-                    button {
-                        class: "btn btn-primary",
-                        onclick: {
-                            let obra = obra.clone();
-                            let caja = caja.clone();
-                            move |_| {
-                                if !exigir_sesion(red, yo, &obra, err) {
-                                    return;
-                                }
-                                let Some(quien) = yo() else { return };
-                                match caja.pedir_gasto(&obra, i, &quien) {
-                                    Ok(()) => err.set(None),
-                                    Err(e) => err.set(Some(caja::aviso_humano(&e, lang_now() == Idioma::Es))),
-                                }
-                            }
-                        },
-                        {match lang { Idioma::Es => format!("Aceptar {}% y pagar", propuesto.unwrap_or(0)), Idioma::En => format!("Accept {}% and pay", propuesto.unwrap_or(0)) }}
-                    }
-                    label { class: "et", {lang.t("OTRO PORCENTAJE", "OTHER PERCENT")} }
-                    input {
-                        r#type: "text",
-                        value: "{pct}",
-                        oninput: move |e| pct.set(e.value()),
-                    }
-                    label { class: "et", "{lang.t(\"NOTA\", \"NOTE\")} ({n_nota}/{MAX_NOTA})" }
-                    input {
-                        r#type: "text",
-                        placeholder: lang.t("Falta la entrada de auto", "The driveway is missing"),
-                        value: "{nota}",
-                        oninput: move |e| nota.set(recorta_nota(e.value())),
-                    }
-                    button {
-                        class: "btn btn-ghost",
-                        onclick: {
-                            let mut obra = obra.clone();
-                            move |_| {
-                                if !exigir_sesion(red, yo, &obra, err) {
-                                    return;
-                                }
-                                let Some(quien) = yo() else { return };
-                                let Some(nodo) = red() else { return };
-                                match obra.contra_pago(i, &quien, parse_pct(&pct()), nota()) {
-                                    Ok(()) => {
-                                        err.set(None);
-                                        publicar_trato(&nodo, obra.clone(), yo(), err);
-                                    }
-                                    Err(e) => err.set(Some(lang_now().error(&e))),
-                                }
-                            }
-                        },
-                        {lang.t("Proponer este porcentaje", "Propose this percentage")}
-                    }
-                }
+        }
+    };
+    let cancelar_enc = {
+        let obra = obra.clone();
+        move |_: Event<MouseData>| {
+            let mut obra = obra.clone();
+            if !exigir_sesion(red, yo, &obra, err) {
+                return;
             }
-            if !cortada && (soy_m || soy_c) {
-                div { style: "height: 16px;" }
+            let Some(quien) = yo() else { return };
+            let Some(nodo) = red() else { return };
+            match obra.encerrar_cancelar(i, &quien) {
+                Ok(()) => {
+                    err.set(None);
+                    publicar_trato(&nodo, obra.clone(), yo(), err);
+                }
+                Err(e) => err.set(Some(lang_now().error(&e))),
+            }
+        }
+    };
+    rsx! {
+        div { class: "pane",
+            div { class: "migas",
                 button {
-                    class: "btn btn-ghost",
-                    onclick: {
-                        let mut obra = obra.clone();
-                        let caja = caja.clone();
-                        move |_| {
-                            let Some(quien) = yo() else { return };
-                            let Some(nodo) = red() else { return };
-                            caja.cancelar_fondeo(&obra.id, i);
-                            if obra.partidas.get(i).map(|p| p.estado == PartidaEstado::Encerrando).unwrap_or(false) {
-                                match obra.encerrar_cancelar(i, &quien) {
-                                    Ok(()) => {
-                                        publicar_trato(&nodo, obra.clone(), yo(), err);
+                    onclick: move |_| screen.set(Screen::Detalle),
+                    "← {nom_obra}"
+                }
+                span { "/" }
+                span { {lang.t("Partida", "Stage")} " {i + 1}" }
+            }
+            div { class: "cabeza",
+                h1 { "{i + 1}  {titulo}" }
+                span { class: chip_partida(p.estado), "{label}" }
+                if let Some(t) = en_curso_txt {
+                    span { class: "chip chip-wait", "{t}" }
+                } else if acc.me_toca {
+                    span { class: "chip chip-info", {lang.t("Te toca", "Your turn")} }
+                }
+            }
+            p { class: "lead",
+                {match lang { Idioma::Es => format!("{} por lado · mandante {} · contratista {}", monto(p.capital(garantia)), obra.mandante.nombre, obra.contratista.nombre), Idioma::En => format!("{} per side · client {} · contractor {}", monto(p.capital(garantia)), obra.mandante.nombre, obra.contratista.nombre) }}
+            }
+            div { class: "cols",
+                div { class: "col",
+                    section { class: "panel foco",
+                        div { class: "panel-h",
+                            h2 { {lang.t("Ahora", "Now")} }
+                        }
+                        for (clase, texto, tx) in lineas_vis {
+                            div { class: "{clase}",
+                                span { "{texto}" }
+                                if let Some(tx) = tx {
+                                    span { class: "mono", "{tx}" }
+                                }
+                            }
+                        }
+                        if sincronizando {
+                            p { class: "estado wait", {lang.t("Sincronizando el trato… las acciones esperan a bajar el estado del otro.", "Syncing the deal… actions wait until the other side's state arrives.")} }
+                        }
+                        if cortada {
+                            p { class: "estado info", {lang.t("La obra está cortada. Esta partida ya no tiene acciones.", "The job is cut. This stage has no actions left.")} }
+                        }
+                        // ── Pagada ──
+                        if cerrado {
+                            if let Some(r) = p.recibo.as_ref() {
+                                div { class: "recibo",
+                                    strong { "{lang.t(\"Recibo\", \"Receipt\")} · {r.titulo}" }
+                                    p { {match lang { Idioma::Es => format!("Pagó {}% · {} · aceptó {} · {}", r.porcentaje, monto(r.monto), r.acepto_nombre, lang.fmt_cuando(r.cuando)), Idioma::En => format!("Paid {}% · {} · accepted by {} · {}", r.porcentaje, monto(r.monto), r.acepto_nombre, lang.fmt_cuando(r.cuando)) }} }
+                                }
+                            } else {
+                                p { class: "estado ok",
+                                    {match lang { Idioma::Es => format!("Cerró al {}% ({}). El hilo quedó guardado.", p.pago.unwrap_or(0), monto(monto_pct(garantia, p.pago.unwrap_or(0)))), Idioma::En => format!("Closed at {}% ({}). The thread was saved.", p.pago.unwrap_or(0), monto(monto_pct(garantia, p.pago.unwrap_or(0)))) }}
+                                }
+                            }
+                        }
+                        // ── Pendiente ──
+                        if !cortada && p.estado == PartidaEstado::Pendiente {
+                            if contra {
+                                p { class: "estado info", {lang.t("Primero hay que confirmar la contra de la obra.", "The job counter has to be confirmed first.")} }
+                            } else if !activa {
+                                p { class: "estado info", {lang.t("Todavía no toca. Cerrá la partida que está en curso.", "Not this one yet. Close the stage that is underway.")} }
+                            } else if acc.proponer_encierre {
+                                p { class: "help", {lang.t("Encerrar pone la garantía de los dos en la caja 2-de-2. Los dos tienen que confirmar y estar en línea.", "Locking puts both guarantees in the 2-of-2 box. Both have to confirm and be online.")} }
+                                if confirma_encerrar() {
+                                    div { class: "acciones",
+                                        button {
+                                            class: "btn btn-primary",
+                                            onclick: {
+                                                let obra = obra.clone();
+                                                move |_| {
+                                                    let mut obra = obra.clone();
+                                                    if !exigir_sesion(red, yo, &obra, err) {
+                                                        return;
+                                                    }
+                                                    let Some(quien) = yo() else { return };
+                                                    let Some(nodo) = red() else { return };
+                                                    match obra.encerrar_proponer(i, &quien) {
+                                                        Ok(()) => {
+                                                            err.set(None);
+                                                            confirma_encerrar.set(false);
+                                                            publicar_trato(&nodo, obra.clone(), yo(), err);
+                                                        }
+                                                        Err(e) => err.set(Some(lang_now().error(&e))),
+                                                    }
+                                                }
+                                            },
+                                            {lang.t("Sí, proponer encerrar", "Yes, propose lock")}
+                                        }
+                                        button {
+                                            class: "btn btn-ghost",
+                                            onclick: move |_| confirma_encerrar.set(false),
+                                            {lang.t("No", "No")}
+                                        }
                                     }
-                                    Err(e) => {
-                                        err.set(Some(lang_now().error(&e)));
-                                        return;
+                                } else {
+                                    button {
+                                        class: "btn btn-primary",
+                                        onclick: move |_| confirma_encerrar.set(true),
+                                        {lang.t("Encerrar esta partida", "Lock this stage")}
                                     }
                                 }
                             }
-                            let peer = if obra.mandante.id == quien.id {
-                                obra.contratista.id.clone()
-                            } else {
-                                obra.mandante.id.clone()
-                            };
-                            let cuerpo = i.to_string();
-                            let _ = nodo.enviar_caja(&obra.id, &peer, &quien.id, "partida-salida", cuerpo.as_bytes());
-                            err.set(None);
                         }
-                    },
-                    {lang.t("Abandonar partida (solo este equipo)", "Leave stage (this device only)")}
+                        // ── Encerrando ──
+                        if !cortada && p.estado == PartidaEstado::Encerrando {
+                            if soy_prop_enc && !acc.frenado && acc.en_curso == caja::EnCurso::Nada {
+                                p { class: "estado wait", {lang.t("Esperando que el otro confirme el encierre.", "Waiting for the other person to confirm the lock.")} }
+                            }
+                            if acc.confirmar_fondeo {
+                                p { class: "estado info", {lang.t("El otro quiere encerrar esta partida. Confirmar arma una sola transacción con los dos.", "The other person wants to lock this stage. Confirm builds one transaction from both wallets.")} }
+                            }
+                            div { class: "acciones",
+                                if acc.confirmar_fondeo {
+                                    button {
+                                        class: "btn btn-primary",
+                                        onclick: {
+                                            let obra = obra.clone();
+                                            let caja = caja.clone();
+                                            move |_| {
+                                                if !exigir_sesion(red, yo, &obra, err) {
+                                                    return;
+                                                }
+                                                let Some(quien) = yo() else { return };
+                                                match caja.pedir_fondeo(&obra, i, &quien) {
+                                                    Ok(()) => err.set(None),
+                                                    Err(e) => err.set(Some(caja::aviso_humano(&e, lang_now() == Idioma::Es))),
+                                                }
+                                            }
+                                        },
+                                        {lang.t("Confirmar y fondear", "Confirm and fund")}
+                                    }
+                                }
+                                if acc.empezar_fondeo_de_nuevo {
+                                    button {
+                                        class: "btn btn-primary",
+                                        onclick: {
+                                            let obra = obra.clone();
+                                            let caja = caja.clone();
+                                            move |_| {
+                                                if !exigir_sesion(red, yo, &obra, err) {
+                                                    return;
+                                                }
+                                                let Some(quien) = yo() else { return };
+                                                let Some(nodo) = red() else { return };
+                                                match caja.empezar_fondeo_de_nuevo(&obra, i, &quien, &nodo) {
+                                                    Ok(()) => err.set(None),
+                                                    Err(e) => err.set(Some(caja::aviso_humano(&e, lang_now() == Idioma::Es))),
+                                                }
+                                            }
+                                        },
+                                        {lang.t("Empezar el fondeo de nuevo", "Start funding again")}
+                                    }
+                                }
+                                if acc.cancelar_propuesta {
+                                    button {
+                                        class: "btn btn-ghost",
+                                        onclick: cancelar_enc.clone(),
+                                        {lang.t("Cancelar propuesta", "Cancel proposal")}
+                                    }
+                                }
+                                if acc.no_encerrar {
+                                    button {
+                                        class: "btn btn-ghost",
+                                        onclick: cancelar_enc.clone(),
+                                        {lang.t("No encerrar", "Do not lock")}
+                                    }
+                                }
+                            }
+                            if acc.en_curso == caja::EnCurso::FondeoEnRed {
+                                p { class: "help", {lang.t("El fondeo ya está en la red. No se puede cancelar; se encierra solo cuando entra en un bloque.", "The funding is already on the network. It cannot be cancelled; it locks by itself once it is in a block.")} }
+                            }
+                        }
+                        // ── Encerrada ──
+                        if !cortada && p.estado == PartidaEstado::Encerrada {
+                            if acc.avisar_termino {
+                                p { class: "help", {lang.t("Cuando termines, avisá y proponé cuánto se paga. El mandante acepta o contraoferta.", "When you finish, report it and propose how much is paid. The client accepts or counters.")} }
+                                div { class: "parejas-in",
+                                    label { class: "et", {lang.t("PORCENTAJE A COBRAR", "PERCENT TO CHARGE")} }
+                                    input {
+                                        r#type: "text",
+                                        value: "{pct}",
+                                        oninput: move |e| pct.set(e.value()),
+                                    }
+                                    label { class: "et", "{lang.t(\"NOTA\", \"NOTE\")} ({n_nota}/{MAX_NOTA})" }
+                                    input {
+                                        r#type: "text",
+                                        placeholder: lang.t("Terminé las fundaciones", "Foundations are done"),
+                                        value: "{nota}",
+                                        oninput: move |e| nota.set(recorta_nota(e.value())),
+                                    }
+                                }
+                                button {
+                                    class: "btn btn-primary",
+                                    onclick: {
+                                        let obra = obra.clone();
+                                        move |_| {
+                                            let mut obra = obra.clone();
+                                            if !exigir_sesion(red, yo, &obra, err) {
+                                                return;
+                                            }
+                                            let Some(quien) = yo() else { return };
+                                            let Some(nodo) = red() else { return };
+                                            match obra.avisar_termino(i, &quien, parse_pct(&pct()), nota()) {
+                                                Ok(()) => {
+                                                    err.set(None);
+                                                    publicar_trato(&nodo, obra.clone(), yo(), err);
+                                                }
+                                                Err(e) => err.set(Some(lang_now().error(&e))),
+                                            }
+                                        }
+                                    },
+                                    {lang.t("Avisar que terminé", "Report that I finished")}
+                                }
+                            } else if soy_m {
+                                p { class: "estado info", {lang.t("Encerrada. El contratista avisa cuando termina y propone cuánto se paga.", "Locked. The contractor reports when they finish and proposes how much is paid.")} }
+                            }
+                        }
+                        // ── En trato ──
+                        if !cortada && p.estado == PartidaEstado::EnTrato {
+                            if let Some(n) = propuesto {
+                                dl { class: "datos",
+                                    dt { {lang.t("Sobre la mesa", "On the table")} }
+                                    dd { strong { "{n}%" } " · {monto(monto_pct(garantia, n))}" }
+                                    if !espera_nom.is_empty() {
+                                        dt { {lang.t("Responde", "Answers")} }
+                                        dd { if acc.me_toca { {lang.t("vos", "you")} } else { "{espera_nom}" } }
+                                    }
+                                }
+                            }
+                            if pagando {
+                                p { class: "estado wait",
+                                    {match lang {
+                                        Idioma::Es => format!("Pago del {}% en curso. No hace falta volver a aceptar; se cierra cuando la transacción entra en un bloque.", propuesto.unwrap_or(0)),
+                                        Idioma::En => format!("Payment of {}% in progress. No need to accept again; it closes once the transaction is in a block.", propuesto.unwrap_or(0)),
+                                    }}
+                                }
+                            } else if !acc.me_toca {
+                                p { class: "estado wait", {match lang { Idioma::Es => format!("Esperando a {espera_nom}."), Idioma::En => format!("Waiting for {espera_nom}.") }} }
+                            }
+                            if acc.aceptar_pago {
+                                button {
+                                    class: "btn btn-primary",
+                                    onclick: {
+                                        let obra = obra.clone();
+                                        let caja = caja.clone();
+                                        move |_| {
+                                            if !exigir_sesion(red, yo, &obra, err) {
+                                                return;
+                                            }
+                                            let Some(quien) = yo() else { return };
+                                            match caja.pedir_gasto(&obra, i, &quien) {
+                                                Ok(()) => err.set(None),
+                                                Err(e) => err.set(Some(caja::aviso_humano(&e, lang_now() == Idioma::Es))),
+                                            }
+                                        }
+                                    },
+                                    {match lang { Idioma::Es => format!("Aceptar {}% y pagar", propuesto.unwrap_or(0)), Idioma::En => format!("Accept {}% and pay", propuesto.unwrap_or(0)) }}
+                                }
+                            }
+                            if acc.contraofertar {
+                                details { class: "plegable",
+                                    summary { {lang.t("Proponer otro porcentaje", "Propose another percentage")} }
+                                    div { class: "cuerpo",
+                                        label { class: "et", {lang.t("OTRO PORCENTAJE", "OTHER PERCENT")} }
+                                        input {
+                                            r#type: "text",
+                                            value: "{pct}",
+                                            oninput: move |e| pct.set(e.value()),
+                                        }
+                                        label { class: "et", "{lang.t(\"NOTA\", \"NOTE\")} ({n_nota}/{MAX_NOTA})" }
+                                        input {
+                                            r#type: "text",
+                                            placeholder: lang.t("Falta la entrada de auto", "The driveway is missing"),
+                                            value: "{nota}",
+                                            oninput: move |e| nota.set(recorta_nota(e.value())),
+                                        }
+                                        button {
+                                            class: "btn btn-ghost",
+                                            onclick: {
+                                                let obra = obra.clone();
+                                                move |_| {
+                                                    let mut obra = obra.clone();
+                                                    if !exigir_sesion(red, yo, &obra, err) {
+                                                        return;
+                                                    }
+                                                    let Some(quien) = yo() else { return };
+                                                    let Some(nodo) = red() else { return };
+                                                    match obra.contra_pago(i, &quien, parse_pct(&pct()), nota()) {
+                                                        Ok(()) => {
+                                                            err.set(None);
+                                                            publicar_trato(&nodo, obra.clone(), yo(), err);
+                                                        }
+                                                        Err(e) => err.set(Some(lang_now().error(&e))),
+                                                    }
+                                                }
+                                            },
+                                            {lang.t("Proponer este porcentaje", "Propose this percentage")}
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        if acc.salir_local && acc.frenado {
+                            {salir_btn.clone()}
+                        }
+                    }
+                    section { class: "panel",
+                        h2 { {lang.t("Hilo", "Thread")} }
+                        if notas_vis.is_empty() {
+                            p { class: "help", {lang.t("Todavía no hay notas. Cada aviso y contraoferta deja una acá.", "No notes yet. Each report and counteroffer leaves one here.")} }
+                        } else {
+                            div { class: "notas",
+                                for (cabeza, cuerpo, cifrada) in notas_vis {
+                                    div { class: "nota",
+                                        strong { "{cabeza}" }
+                                        if cifrada {
+                                            p { class: "cifrada", "{cuerpo}" }
+                                        } else if !cuerpo.is_empty() {
+                                            p { "{cuerpo}" }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    if acc.editar_texto {
+                        details { class: "plegable",
+                            summary { {lang.t("Texto de la partida", "Stage text")} }
+                            div { class: "cuerpo",
+                                p { class: "help", {lang.t("Se puede cambiar mientras la partida está pendiente. El otro ve el cambio.", "It can change while the stage is pending. The other person sees the change.")} }
+                                input {
+                                    r#type: "text",
+                                    value: "{detalle_edit}",
+                                    oninput: move |e| detalle_edit.set(e.value()),
+                                }
+                                button {
+                                    class: "btn btn-ghost",
+                                    onclick: {
+                                        let obra = obra.clone();
+                                        move |_| {
+                                            let mut obra = obra.clone();
+                                            let Some(quien) = yo() else { return };
+                                            let Some(nodo) = red() else { return };
+                                            match obra.editar_detalle(i, &quien, detalle_edit()) {
+                                                Ok(()) => {
+                                                    err.set(None);
+                                                    publicar_trato(&nodo, obra.clone(), yo(), err);
+                                                }
+                                                Err(e) => err.set(Some(lang_now().error(&e))),
+                                            }
+                                        }
+                                    },
+                                    {lang.t("Guardar texto", "Save text")}
+                                }
+                            }
+                        }
+                    }
                 }
-                p { class: "hint",
-                    {lang.t(
-                        "Cancela fondeo o propuesta locales. No mueve monedas ni firma por el otro. Si ya está Encerrada en cadena, la caja sigue.",
-                        "Cancels local funding or proposal. Does not move coins or sign for the other side. If already Locked on-chain, the box stays.",
-                    )}
+                div { class: "col",
+                    section { class: "panel",
+                        h2 { {lang.t("Caja y transacciones", "Box and transactions")} }
+                        if let Some(s) = saldo {
+                            p { strong { "{s.estado}" } }
+                            p { "{s.detalle}" }
+                            if let Some(c) = s.candado {
+                                p { class: "help", "{c}" }
+                            }
+                        } else if let Some(pico) = caja::a_piconero(p.capital(garantia)) {
+                            p { {match lang { Idioma::Es => format!("{} XMR por lado en stagenet.", caja::fmt_xmr(pico)), Idioma::En => format!("{} XMR per side on stagenet.", caja::fmt_xmr(pico)) }} }
+                        }
+                        CajaLlave { obra_id: obra.id.clone(), caja: caja.clone(), vista }
+                        if p.fondeo_txid.is_some() || p.pago_txid.is_some() || p.encerrado_por.is_some() {
+                            dl { class: "datos",
+                                if let Some(tx) = p.fondeo_txid.as_ref() {
+                                    dt { {lang.t("Fondeo", "Funding")} }
+                                    dd { span { class: "mono", "{tx}" } }
+                                }
+                                if let Some(tx) = p.pago_txid.as_ref() {
+                                    dt { {lang.t("Pago", "Payment")} }
+                                    dd { span { class: "mono", "{tx}" } }
+                                }
+                                if let Some(q) = p.encerrado_por.as_ref() {
+                                    dt { {lang.t("Encerró", "Locked by")} }
+                                    dd { "{q.nombre} · {lang.fmt_cuando(p.encerrado_cuando)}" }
+                                }
+                            }
+                        }
+                    }
+                    if !cortada && (soy_m || soy_c) {
+                        details { class: "plegable",
+                            summary { {lang.t("Respaldos y recuperación", "Backups and recovery")} }
+                            div { class: "cuerpo",
+                                CajaRespaldo { obra_id: obra.id.clone(), caja: caja.clone(), vista, yo, obras, err }
+                            }
+                        }
+                        details { class: "plegable",
+                            summary { {lang.t("Avanzado", "Advanced")} }
+                            div { class: "cuerpo",
+                                div { class: "grupo",
+                                    CajaMirar { obra_id: obra.id.clone(), caja: caja.clone(), vista, err }
+                                }
+                                if acc.salir_local && !acc.frenado {
+                                    div { class: "grupo", {salir_btn} }
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }
