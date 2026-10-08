@@ -25,6 +25,80 @@ struct Snap {
     socks: Option<SocketAddr>,
     onion: Option<String>,
     hospeda: bool,
+    diag: DiagSocks,
+}
+
+/// Qué se sabe del camino SOCKS → sala, medido en cada intento real.
+///
+/// Separa "Orbot no contesta" de "Orbot contesta pero la sala no": con el
+/// SOCKS vivo no hay que pedir que enciendan Orbot.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum DiagSocks {
+    /// No hay SOCKS configurado (Orbot apagado en la app, o escritorio con tor propio).
+    SinSocks,
+    /// Todavía no hubo intento.
+    SinProbar,
+    /// No se pudo abrir TCP al SOCKS, o no habla SOCKS5. Lleva el error corto.
+    SocksCaido(String),
+    /// El SOCKS aceptó; esperando la respuesta del onion.
+    SocksOk,
+    /// El SOCKS respondió, pero el onion de destino no (host apagado, onion sin publicar).
+    DestinoNoResponde(String),
+    /// Hubo sesión con el destino.
+    Conectado,
+}
+
+/// Error corto y humano de tokio-socks / io.
+fn corto_socks(e: &tokio_socks::Error) -> String {
+    use tokio_socks::Error as E;
+    match e {
+        E::HostUnreachable | E::TtlExpired => "onion sin respuesta".into(),
+        E::GeneralSocksServerFailure => "falla general de Tor".into(),
+        E::NetworkUnreachable => "red inalcanzable".into(),
+        E::ConnectionRefused => "conexión rechazada".into(),
+        E::Io(io) => io.kind().to_string(),
+        otro => otro.to_string(),
+    }
+}
+
+/// `true` si el error vino después de que el SOCKS respondió (problema del destino).
+fn es_del_destino(e: &tokio_socks::Error) -> bool {
+    use tokio_socks::Error as E;
+    matches!(
+        e,
+        E::HostUnreachable
+            | E::TtlExpired
+            | E::GeneralSocksServerFailure
+            | E::NetworkUnreachable
+            | E::ConnectionRefused
+            | E::ConnectionNotAllowedByRuleset
+    )
+}
+
+/// Saludo SOCKS5 mínimo (sin autenticación) a `socks`. `Ok` si contesta `05 00`.
+///
+/// No abre ninguna conexión a través del proxy: solo prueba que hay un SOCKS5
+/// escuchando. Sirve para saber si Orbot está andando sin depender de la sala.
+pub async fn probar_socks(socks: SocketAddr, espera: Duration) -> Result<(), String> {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let mut s = match timeout(espera, TcpStream::connect(socks)).await {
+        Ok(Ok(s)) => s,
+        Ok(Err(e)) => return Err(e.kind().to_string()),
+        Err(_) => return Err("sin respuesta".into()),
+    };
+    let r = timeout(espera, async {
+        s.write_all(&[5, 1, 0]).await?;
+        let mut b = [0u8; 2];
+        s.read_exact(&mut b).await?;
+        Ok::<_, std::io::Error>(b)
+    })
+    .await;
+    match r {
+        Ok(Ok([5, 0])) => Ok(()),
+        Ok(Ok(_)) => Err("no habla SOCKS5".into()),
+        Ok(Err(e)) => Err(e.kind().to_string()),
+        Err(_) => Err("sin respuesta".into()),
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -43,6 +117,7 @@ impl Tor {
                 socks: None,
                 onion: None,
                 hospeda: false,
+                diag: DiagSocks::SinSocks,
             })),
             ctl: Arc::new(tokio::sync::Mutex::new(None)),
         }
@@ -64,6 +139,7 @@ impl Tor {
                 socks: Some(socks),
                 onion: Some("(socks externo / Orbot)".into()),
                 hospeda: false,
+                diag: DiagSocks::SinProbar,
             })),
             ctl: Arc::new(tokio::sync::Mutex::new(None)),
         }
@@ -79,6 +155,7 @@ impl Tor {
             g.socks = Some(socks);
             g.onion = Some("(socks externo / Orbot)".into());
             g.hospeda = false;
+            g.diag = DiagSocks::SinProbar;
             g.estado = EstadoTor::Listo {
                 onion: "(socks externo / Orbot)".into(),
             };
@@ -108,6 +185,22 @@ impl Tor {
         self.snap.lock().unwrap().estado.clone()
     }
 
+    pub fn diag(&self) -> DiagSocks {
+        self.snap.lock().unwrap().diag.clone()
+    }
+
+    pub fn fijar_diag(&self, d: DiagSocks) {
+        self.snap.lock().unwrap().diag = d;
+    }
+
+    /// Sin SOCKS (p. ej. el usuario apagó Orbot en la app).
+    pub fn quitar_socks(&self) {
+        let mut g = self.snap.lock().unwrap();
+        g.socks = None;
+        g.diag = DiagSocks::SinSocks;
+        g.estado = EstadoTor::Ausente;
+    }
+
     pub fn onion_addr(&self) -> Option<PeerAddr> {
         let g = self.snap.lock().unwrap();
         Some(PeerAddr::Onion {
@@ -124,13 +217,40 @@ impl Tor {
         self.snap.lock().unwrap().hospeda
     }
 
+    /// Conecta a `host:port` por el SOCKS si hay. Deja el diagnóstico en `diag()`:
+    /// TCP al SOCKS caído, SOCKS vivo esperando al onion, o el onion sin respuesta.
     pub async fn conectar(&self, host: &str, port: u16) -> std::io::Result<TcpStream> {
         if let Some(socks) = self.socks() {
             let dest = format!("{host}:{port}");
-            let s = tokio_socks::tcp::Socks5Stream::connect(socks, dest.as_str())
-                .await
-                .map_err(|e| std::io::Error::other(e.to_string()))?;
-            Ok(s.into_inner())
+            let tcp = match timeout(Duration::from_secs(8), TcpStream::connect(socks)).await {
+                Ok(Ok(t)) => t,
+                Ok(Err(e)) => {
+                    self.fijar_diag(DiagSocks::SocksCaido(e.kind().to_string()));
+                    return Err(e);
+                }
+                Err(_) => {
+                    self.fijar_diag(DiagSocks::SocksCaido("sin respuesta".into()));
+                    return Err(std::io::Error::new(std::io::ErrorKind::TimedOut, "socks sin respuesta"));
+                }
+            };
+            // El proxy aceptó TCP: si después falla, es el destino (o no es SOCKS5).
+            // Sin pisar "la sala no responde" ni "conectado" en cada reintento:
+            // así la pantalla no parpadea entre estados cada 4 s.
+            if matches!(self.diag(), DiagSocks::SinProbar | DiagSocks::SocksCaido(_)) {
+                self.fijar_diag(DiagSocks::SocksOk);
+            }
+            match tokio_socks::tcp::Socks5Stream::connect_with_socket(tcp, dest.as_str()).await {
+                Ok(s) => Ok(s.into_inner()),
+                Err(e) => {
+                    let corto = corto_socks(&e);
+                    if es_del_destino(&e) {
+                        self.fijar_diag(DiagSocks::DestinoNoResponde(corto));
+                    } else {
+                        self.fijar_diag(DiagSocks::SocksCaido(corto));
+                    }
+                    Err(std::io::Error::other(e.to_string()))
+                }
+            }
         } else {
             TcpStream::connect((host, port)).await
         }
@@ -341,6 +461,74 @@ mod tests {
         assert!(RENDEZVOUS_ONION.ends_with(".onion"));
         assert_eq!(RENDEZVOUS_ONION.len(), 56 + 6);
         assert_eq!(RENDEZVOUS_KEY.len(), 88);
+    }
+
+    #[test]
+    fn diag_arranca_segun_socks() {
+        assert_eq!(Tor::ausente().diag(), DiagSocks::SinSocks);
+        let t = Tor::socks_externo("127.0.0.1", 9050);
+        assert_eq!(t.diag(), DiagSocks::SinProbar);
+        t.quitar_socks();
+        assert_eq!(t.diag(), DiagSocks::SinSocks);
+        assert!(t.socks().is_none());
+    }
+
+    #[tokio::test]
+    async fn socks_cerrado_se_ve_como_socks_caido() {
+        // Puerto libre sin nadie escuchando: Orbot "apagado".
+        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = l.local_addr().unwrap().port();
+        drop(l);
+        let t = Tor::socks_externo("127.0.0.1", port);
+        assert!(t.conectar("abc.onion", 1).await.is_err());
+        assert!(matches!(t.diag(), DiagSocks::SocksCaido(_)), "{:?}", t.diag());
+        let addr = t.socks().unwrap();
+        assert!(probar_socks(addr, Duration::from_secs(1)).await.is_err());
+    }
+
+    /// SOCKS5 de juguete: saluda bien y responde `codigo` al CONNECT.
+    async fn socks_falso(codigo: u8) -> SocketAddr {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = l.local_addr().unwrap();
+        tokio::spawn(async move {
+            loop {
+                let Ok((mut s, _)) = l.accept().await else { return };
+                tokio::spawn(async move {
+                    let mut b = [0u8; 3];
+                    if s.read_exact(&mut b).await.is_err() {
+                        return;
+                    }
+                    let _ = s.write_all(&[5, 0]).await;
+                    // CONNECT: VER CMD RSV ATYP(3) LEN host PORT
+                    let mut h = [0u8; 5];
+                    if s.read_exact(&mut h).await.is_err() {
+                        return;
+                    }
+                    let mut resto = vec![0u8; h[4] as usize + 2];
+                    let _ = s.read_exact(&mut resto).await;
+                    let _ = s.write_all(&[5, codigo, 0, 1, 0, 0, 0, 0, 0, 0]).await;
+                });
+            }
+        });
+        addr
+    }
+
+    #[tokio::test]
+    async fn socks_vivo_pero_onion_caido_no_es_culpa_de_orbot() {
+        let addr = socks_falso(4).await; // 04 = host unreachable
+        assert!(probar_socks(addr, Duration::from_secs(1)).await.is_ok());
+        let t = Tor::socks_externo("127.0.0.1", addr.port());
+        assert!(t.conectar("abc.onion", 17432).await.is_err());
+        assert_eq!(t.diag(), DiagSocks::DestinoNoResponde("onion sin respuesta".into()));
+    }
+
+    #[tokio::test]
+    async fn socks_vivo_y_onion_vivo_conecta() {
+        let addr = socks_falso(0).await;
+        let t = Tor::socks_externo("127.0.0.1", addr.port());
+        assert!(t.conectar("abc.onion", 17432).await.is_ok());
+        assert_eq!(t.diag(), DiagSocks::SocksOk);
     }
 
     #[test]

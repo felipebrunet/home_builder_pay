@@ -11,7 +11,7 @@ mod tor;
 pub use dht::Nodo;
 pub use proto::{CajaMsg, Msg, PeerAddr};
 pub use rendezvous::{RENDEZVOUS_ONION, VIRT_PORT};
-pub use tor::{EstadoTor, Tor};
+pub use tor::{probar_socks, DiagSocks, EstadoTor, Tor};
 
 /// Hardcoded rendezvous. Every build joins this swarm.
 pub const RED: &str = "konstruado-red-1";

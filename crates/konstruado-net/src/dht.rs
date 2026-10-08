@@ -132,6 +132,21 @@ impl Nodo {
         self.inner.lock().unwrap().tor.socks()
     }
 
+    /// Diagnóstico del último intento por SOCKS (Orbot) hacia la sala.
+    pub fn diag_socks(&self) -> crate::tor::DiagSocks {
+        self.inner.lock().unwrap().tor.diag()
+    }
+
+    pub fn fijar_diag_socks(&self, d: crate::tor::DiagSocks) {
+        self.inner.lock().unwrap().tor.fijar_diag(d);
+    }
+
+    /// Deja de usar el SOCKS externo (Orbot apagado en la app).
+    pub fn quitar_socks(&self) {
+        let tor = self.inner.lock().unwrap().tor.clone();
+        tor.quitar_socks();
+    }
+
     /// Mantiene una sesión saliente con `destino`: si se corta, vuelve a marcar.
     pub fn agregar_destino(&self, destino: PeerAddr) {
         if !destino.marcable() {
@@ -178,6 +193,7 @@ impl Nodo {
                 Ok(Ok(stream)) => {
                     if es_sala {
                         tor.marcar_listo();
+                        tor.fijar_diag(crate::tor::DiagSocks::Conectado);
                     }
                     tokio::select! {
                         _ = halt.changed() => return,
@@ -194,6 +210,10 @@ impl Nodo {
                 Err(_) => {
                     if es_sala && self.n_vivos() == 0 {
                         tor.marcar_arrancando("Orbot: buscando sala (sin respuesta)");
+                    }
+                    // El SOCKS aceptó y el onion nunca contestó: es la sala, no Orbot.
+                    if es_sala && tor.diag() == crate::tor::DiagSocks::SocksOk {
+                        tor.fijar_diag(crate::tor::DiagSocks::DestinoNoResponde("sin respuesta".into()));
                     }
                     Duration::from_secs(4)
                 }
