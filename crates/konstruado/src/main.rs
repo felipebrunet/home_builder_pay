@@ -1390,55 +1390,21 @@ fn Billetera(
     }
 }
 
-/// Punto y texto de la barra de estado de la billetera.
+/// Punto y texto de la barra de estado de la billetera (regla compartida en caja.rs).
 fn barra_billetera(
     b: &caja::BilleteraVista,
     hay: bool,
     tip: Option<usize>,
     lang: Idioma,
 ) -> (&'static str, String) {
-    if !hay {
-        return ("punto off", lang.t("Sin billetera en este equipo", "No wallet on this machine").into());
-    }
-    if b.enviando {
-        return ("punto wait", lang.t("Firmando y publicando el envío…", "Signing and publishing the send…").into());
-    }
-    if b.buscando || b.retro > 0 {
-        let base = lang.t("Mirando la cadena…", "Scanning the chain…");
-        let extra = if b.retro > 0 {
-            match lang {
-                Idioma::Es => format!(" quedan {} bloques hacia atrás", b.retro),
-                Idioma::En => format!(" {} blocks left backward", b.retro),
-            }
-        } else {
-            String::new()
-        };
-        return ("punto wait", format!("{base}{extra}"));
-    }
-    match (b.hasta, tip) {
-        (Some(h), Some(t)) if h >= t => (
-            "punto",
-            match lang {
-                Idioma::Es => format!("Al día · bloque {h}"),
-                Idioma::En => format!("Up to date · block {h}"),
-            },
-        ),
-        (Some(h), Some(t)) => (
-            "punto wait",
-            match lang {
-                Idioma::Es => format!("Mirado hasta {h} de {t}"),
-                Idioma::En => format!("Scanned to {h} of {t}"),
-            },
-        ),
-        (Some(h), None) => (
-            "punto",
-            match lang {
-                Idioma::Es => format!("Mirado hasta el bloque {h}"),
-                Idioma::En => format!("Scanned to block {h}"),
-            },
-        ),
-        _ => ("punto wait", lang.t("Esperando al nodo…", "Waiting for the node…").into()),
-    }
+    let (tono, texto) = caja::estado_billetera(b, hay, tip, matches!(lang, Idioma::Es));
+    let punto = match tono {
+        caja::Tono::Ok => "punto",
+        caja::Tono::Espera => "punto wait",
+        caja::Tono::Error => "punto err",
+        caja::Tono::Apagado => "punto off",
+    };
+    (punto, texto)
 }
 
 #[component]

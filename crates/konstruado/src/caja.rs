@@ -1050,6 +1050,81 @@ pub fn en_curso_corto(e: EnCurso, es: bool) -> Option<&'static str> {
     })
 }
 
+/// Tono de una línea de estado: color del punto/chip en las dos UIs.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Tono {
+    Ok,
+    Espera,
+    Error,
+    Apagado,
+}
+
+impl Tono {
+    pub fn codigo(self) -> &'static str {
+        match self {
+            Tono::Ok => "ok",
+            Tono::Espera => "espera",
+            Tono::Error => "error",
+            Tono::Apagado => "apagado",
+        }
+    }
+}
+
+/// Una sola línea de estado de la billetera, de alto fijo en la pantalla:
+/// escaneando, enviando, al día o un error. Escritorio y Android la usan igual.
+pub fn estado_billetera(b: &BilleteraVista, hay: bool, tip: Option<usize>, es: bool) -> (Tono, String) {
+    let t = |a: &str, b: &str| if es { a.to_string() } else { b.to_string() };
+    if !hay {
+        return (Tono::Apagado, t("Sin billetera en este equipo", "No wallet on this machine"));
+    }
+    if b.enviando {
+        return (Tono::Espera, t("Firmando y publicando el envío…", "Signing and publishing the send…"));
+    }
+    if b.retro > 0 {
+        return (
+            Tono::Espera,
+            if es {
+                format!("Mirando la cadena… quedan {} bloques hacia atrás", b.retro)
+            } else {
+                format!("Scanning the chain… {} blocks left backward", b.retro)
+            },
+        );
+    }
+    if b.buscando {
+        return (
+            Tono::Espera,
+            match (b.hasta, tip) {
+                (Some(h), Some(tp)) if tp > h => {
+                    if es {
+                        format!("Mirando la cadena… quedan {} bloques", tp - h)
+                    } else {
+                        format!("Scanning the chain… {} blocks left", tp - h)
+                    }
+                }
+                _ => t("Mirando la cadena…", "Scanning the chain…"),
+            },
+        );
+    }
+    if let Some(a) = b.aviso.as_ref() {
+        return (Tono::Error, aviso_humano(a, es));
+    }
+    match (b.hasta, tip) {
+        (Some(h), Some(tp)) if h >= tp => (
+            Tono::Ok,
+            if es { format!("Al día · bloque {h}") } else { format!("Up to date · block {h}") },
+        ),
+        (Some(h), Some(tp)) => (
+            Tono::Espera,
+            if es { format!("Mirado hasta {h} de {tp}") } else { format!("Scanned to {h} of {tp}") },
+        ),
+        (Some(h), None) => (
+            Tono::Ok,
+            if es { format!("Mirado hasta el bloque {h}") } else { format!("Scanned to block {h}") },
+        ),
+        _ => (Tono::Espera, t("Esperando al nodo…", "Waiting for the node…")),
+    }
+}
+
 fn otro_id_obra(obra: &Obra, yo: &str) -> String {
     if yo == obra.mandante.id {
         obra.contratista.id.clone()
@@ -5489,6 +5564,27 @@ mod tests {
 
     /// La captura de 0.2.5: el pago ya salió y esperaba bloque, pero la ficha
     /// seguía ofreciendo "Aceptar 100% y pagar" y "Otro porcentaje".
+    #[test]
+    fn estado_billetera_es_una_sola_linea_por_estado() {
+        let mut b = BilleteraVista::vacia();
+        assert_eq!(estado_billetera(&b, false, None, true).0, Tono::Apagado);
+        b.hasta = Some(100);
+        b.buscando = true;
+        let (t, s) = estado_billetera(&b, true, Some(130), true);
+        assert_eq!(t, Tono::Espera);
+        assert_eq!(s, "Mirando la cadena… quedan 30 bloques");
+        assert_eq!(estado_billetera(&b, true, Some(130), false).1, "Scanning the chain… 30 blocks left");
+        b.retro = 200;
+        assert!(estado_billetera(&b, true, Some(130), true).1.contains("quedan 200 bloques hacia atrás"));
+        b.retro = 0;
+        b.buscando = false;
+        assert_eq!(estado_billetera(&b, true, Some(100), true), (Tono::Ok, "Al día · bloque 100".into()));
+        b.aviso = Some("algo".into());
+        assert_eq!(estado_billetera(&b, true, Some(100), true).0, Tono::Error);
+        b.enviando = true;
+        assert_eq!(estado_billetera(&b, true, Some(100), true).0, Tono::Espera);
+    }
+
     #[test]
     fn con_pago_en_curso_no_se_ofrece_aceptar_de_nuevo() {
         let (obra, m, c) = obra_en_trato();
