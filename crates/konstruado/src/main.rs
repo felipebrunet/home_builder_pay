@@ -3,6 +3,7 @@ mod export;
 mod help;
 mod i18n;
 mod persist;
+mod portapapeles;
 mod respaldo;
 
 use std::time::Duration;
@@ -1142,7 +1143,7 @@ fn Cuenta(
                 }
             }
             }
-            details { class: "plegable",
+            details { class: "plegable", ontoggle: move |_| ocultar_semilla(),
                 summary { {lang.t("Respaldos y recuperación", "Backups and recovery")} }
                 div { class: "cuerpo",
                     SeccionRespaldos { caja: caja.clone(), yo, obras, red, vista, err }
@@ -1358,7 +1359,7 @@ fn Billetera(
                                 }
                             }
                         }
-                        details { class: "plegable", open: true,
+                        details { class: "plegable", ontoggle: move |_| ocultar_semilla(), open: true,
                             summary { {lang.t("Respaldos y recuperación", "Backups and recovery")} }
                             div { class: "cuerpo",
                                 SeccionRespaldos { caja: caja.clone(), yo, obras, red, vista, err }
@@ -1394,7 +1395,7 @@ fn Billetera(
                         }
                     }
                     div { class: "col",
-                        details { class: "plegable", open: true,
+                        details { class: "plegable", ontoggle: move |_| ocultar_semilla(), open: true,
                             summary { {lang.t("Respaldos y recuperación", "Backups and recovery")} }
                             div { class: "cuerpo",
                                 SeccionRespaldos { caja: caja.clone(), yo, obras, red, vista, err }
@@ -2135,6 +2136,14 @@ fn estado_respaldo(caja: &caja::Caja, yo: Option<Persona>, obras: &[Obra]) -> re
 }
 
 /// «Respaldos y recuperación»: respaldo completo, restaurar, y lo viejo en Avanzado.
+/// Sube cada vez que se abre o cierra un plegable de «Respaldos y recuperación»:
+/// las 25 palabras se ocultan solas.
+static OCULTAR_SEMILLA: GlobalSignal<u64> = Signal::global(|| 0);
+
+fn ocultar_semilla() {
+    *OCULTAR_SEMILLA.write() += 1;
+}
+
 #[component]
 fn SeccionRespaldos(
     caja: caja::Caja,
@@ -2149,11 +2158,184 @@ fn SeccionRespaldos(
         if yo().is_some() {
             ExportarRespaldo { caja: caja.clone(), yo, obras, err }
         }
+        if vista().tiene_semilla {
+            VerSemilla { caja: caja.clone() }
+        }
         RestaurarRespaldo { err }
         details { class: "plegable",
             summary { {lang.t("Avanzado: importar respaldos sueltos (0.2.7 o antes)", "Advanced: import standalone backups (0.2.7 or older)")} }
             div { class: "cuerpo",
                 RestaurarLlaves { caja: caja.clone(), yo, obras, red, vista, err }
+            }
+        }
+    }
+}
+
+/// «Ver las 25 palabras» de la billetera personal y su view key. Las palabras
+/// solo se leen tras la advertencia y se sueltan (con zeroize) al ocultar,
+/// al cerrar el plegable o al cambiar de vista.
+#[component]
+fn VerSemilla(caja: caja::Caja) -> Element {
+    let lang = use_context::<Signal<Idioma>>()();
+    let es = lang == Idioma::Es;
+    let mut paso = use_signal(|| 0u8);
+    let mut semilla = use_signal(|| None::<caja::SemillaVista>);
+    let mut nota = use_signal(|| None::<String>);
+    let mut ver_vk = use_signal(|| false);
+    // Solo reacciona a un cierre/cambio posterior: el primer valor (0) o el
+    // toogle de apertura del plegable no deben ocultar lo que el usuario acaba de abrir.
+    let mut visto = use_signal(|| None::<u64>);
+    use_effect(move || {
+        let g = OCULTAR_SEMILLA();
+        let prev = *visto.peek();
+        visto.set(Some(g));
+        if let Some(p) = prev {
+            if g != p {
+                paso.set(0);
+                semilla.set(None);
+                nota.set(None);
+                ver_vk.set(false);
+            }
+        }
+    });
+    let llaves = caja.llaves_billetera();
+    let caja_ver = caja.clone();
+    let mostrar = paso() == 2 && semilla.read().is_some();
+    rsx! {
+        div { class: "grupo",
+            h3 { {lang.t("Las 25 palabras y la view key", "The 25 words and the view key")} }
+            p { class: "help",
+                {lang.t(
+                    "Para abrir esta billetera personal en Feather o monero-wallet-cli (stagenet).",
+                    "To open this personal wallet in Feather or monero-wallet-cli (stagenet).",
+                )}
+            }
+            if paso() == 0 {
+                button {
+                    class: "btn btn-ghost",
+                    onclick: move |_| paso.set(1),
+                    {lang.t("Ver las 25 palabras", "Show the 25 words")}
+                }
+            }
+            if paso() == 1 {
+                div { class: "estado err aviso-semilla",
+                    div {
+                        for t in caja::aviso_ver_semilla(es) {
+                            p { "{t}" }
+                        }
+                    }
+                }
+                div { class: "fila-btn",
+                    button {
+                        class: "btn btn-danger",
+                        onclick: move |_| {
+                            match caja_ver.ver_semilla() {
+                                Ok(v) => {
+                                    semilla.set(Some(v));
+                                    paso.set(2);
+                                }
+                                Err(e) => {
+                                    nota.set(Some(caja::aviso_humano(&e, lang_now() == Idioma::Es)));
+                                    paso.set(0);
+                                }
+                            }
+                        },
+                        {lang.t("Mostrar", "Show")}
+                    }
+                    button {
+                        class: "btn btn-ghost",
+                        onclick: move |_| paso.set(0),
+                        {lang.t("Cancelar", "Cancel")}
+                    }
+                }
+            }
+            if mostrar {
+                if let Some(v) = semilla.read().as_ref() {
+                    ol { class: "semilla",
+                        for (i, w) in v.numeradas() {
+                            li { span { class: "n", "{i}" } span { class: "w", "{w}" } }
+                        }
+                    }
+                    label { class: "et", {lang.t("ALTURA DE RESTAURACIÓN (BLOQUE)", "RESTORE HEIGHT (BLOCK)")} }
+                    span { class: "mono", {v.altura.map(|h| h.to_string()).unwrap_or_else(|| "—".into())} }
+                    p { class: "help",
+                        {lang.t(
+                            "En la otra billetera elegí «restaurar desde semilla», red stagenet, y poné este bloque.",
+                            "In the other wallet choose «restore from seed», stagenet, and enter this block.",
+                        )}
+                    }
+                }
+                div { class: "fila-btn",
+                    button {
+                        class: "btn btn-ghost",
+                        onclick: move |_| {
+                            let es = lang_now() == Idioma::Es;
+                            let ok = semilla
+                                .read()
+                                .as_ref()
+                                .map(|v| portapapeles::copiar_secreto(v.palabras.as_str(), caja::SEMILLA_PORTAPAPELES_SEG))
+                                .unwrap_or(false);
+                            nota.set(Some(if ok {
+                                caja::aviso_copia_semilla(es)
+                            } else if es {
+                                "No pude usar el portapapeles: seleccioná y copiá a mano.".into()
+                            } else {
+                                "Could not use the clipboard: select and copy by hand.".into()
+                            }));
+                        },
+                        {lang.t("Copiar las 25 palabras", "Copy the 25 words")}
+                    }
+                    button {
+                        class: "btn btn-primary",
+                        onclick: move |_| {
+                            semilla.set(None);
+                            paso.set(0);
+                        },
+                        {lang.t("Ocultar", "Hide")}
+                    }
+                }
+            }
+            if let Some(n) = nota() {
+                p { class: "help", "{n}" }
+            }
+            if let Some(l) = llaves {
+                label { class: "et", {lang.t("DIRECCIÓN DE TU BILLETERA (STAGENET)", "YOUR WALLET ADDRESS (STAGENET)")} }
+                span { class: "mono caja", "{l.direccion}" }
+                div { class: "fila-btn",
+                    button {
+                        class: "btn btn-ghost btn-sm",
+                        onclick: {
+                            let d = l.direccion.clone();
+                            move |_| {
+                                let es = lang_now() == Idioma::Es;
+                                let ok = portapapeles::copiar(&d);
+                                nota.set(Some(if ok { if es { "Dirección copiada." } else { "Address copied." } } else if es { "No pude usar el portapapeles." } else { "Could not use the clipboard." }.into()));
+                            }
+                        },
+                        {lang.t("Copiar dirección", "Copy address")}
+                    }
+                    button {
+                        class: "btn btn-ghost btn-sm",
+                        onclick: move |_| ver_vk.set(!ver_vk()),
+                        {if ver_vk() { lang.t("Ocultar view key", "Hide view key") } else { lang.t("Mostrar view key", "Show view key") }}
+                    }
+                }
+                if ver_vk() {
+                    p { class: "clave", "{l.view_key}" }
+                    button {
+                        class: "btn btn-ghost btn-sm",
+                        onclick: {
+                            let k = l.view_key.clone();
+                            move |_| {
+                                let es = lang_now() == Idioma::Es;
+                                let ok = portapapeles::copiar(&k);
+                                nota.set(Some(if ok { if es { "View key copiada." } else { "View key copied." } } else if es { "No pude usar el portapapeles." } else { "Could not use the clipboard." }.into()));
+                            }
+                        },
+                        {lang.t("Copiar view key", "Copy view key")}
+                    }
+                    p { class: "help", {caja::ayuda_view_key_billetera(es)} }
+                }
             }
         }
     }

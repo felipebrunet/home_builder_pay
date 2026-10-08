@@ -852,3 +852,28 @@ button { -webkit-tap-highlight-color: transparent; }
 .recordatorio { display: flex; align-items: center; gap: 12px; margin: 0 0 14px; max-width: 1280px; }
 .recordatorio .estado { flex: 1 1 auto; min-width: 0; margin: 0; }
 .recordatorio .btn { flex: 0 0 auto; width: auto; padding-left: 18px; padding-right: 18px; }
+
+/* ------------------------------------------------------------ 25 palabras */
+ol.semilla {
+  list-style: none;
+  margin: 10px 0 12px;
+  padding: 12px 14px;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 6px 16px;
+  border: 1px solid var(--linea);
+  border-radius: 10px;
+  background: var(--card-2);
+  font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  font-size: 14px;
+  user-select: text;
+}
+ol.semilla li { display: flex; gap: 8px; align-items: baseline; }
+ol.semilla .n { color: var(--apagado); min-width: 2ch; text-align: right; font-size: 12px; user-select: none; }
+.aviso-semilla { align-items: flex-start; }
+.aviso-semilla::before { margin-top: 6px; }
+.aviso-semilla > div { display: flex; flex-direction: column; gap: 6px; }
+.aviso-semilla p { margin: 0; }
+.aviso-semilla p:first-child { font-weight: 700; }
+.fila-btn { display: flex; flex-wrap: wrap; gap: 10px; margin: 8px 0; }
+.fila-btn > .btn { width: auto; flex: 0 0 auto; padding-left: 18px; padding-right: 18px; }

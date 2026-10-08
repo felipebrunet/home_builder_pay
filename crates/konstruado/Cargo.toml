@@ -20,3 +20,7 @@ printpdf = "0.7"
 hex = "0.4"
 zeroize = "1"
 rand_core = { version = "0.6", features = ["getrandom"] }
+
+# Portapapeles del escritorio (copiar la semilla y borrarlo a los 60 s).
+[target.'cfg(target_os = "linux")'.dependencies]
+gtk = "0.18"

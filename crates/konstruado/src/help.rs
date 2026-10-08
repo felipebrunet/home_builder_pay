@@ -155,6 +155,7 @@ mod tests {
         assert!(README.contains("job backup → seed → share"));
         assert!(README.contains("Restore from backup"));
         assert!(README.contains("KSTRBAK"));
+        assert!(README.contains("Show the 25 words"));
         let _ = menu();
     }
 }
