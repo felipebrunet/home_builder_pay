@@ -33,7 +33,8 @@ Rendezvous is hardcoded (`konstruado-red-1` plus a baked Tor v3 onion). Each des
 | 2-of-2 box | Built when the job is agreed. Messages go to the other person, not the DHT. Each side keeps `xmr/{obra}.share`. |
 | Stage funding and payout | The buttons build the transaction. Encerrada and Pagada flip only after a local scan sees it in a block. A live publish can still be rejected by the node. |
 | Custom stagenet daemon | Optional URL (LAN / Tailscale) for scan, balance, funding and payout. **Use default** falls back to the public HTTPS daemon. |
-| Backups | Seed (with block height), per-job share, and job profile (obras/ofertas JSON) are three separate files. Reinstall order: job backup → seed → share. |
+| Backups | One encrypted full backup (`.kbak`): seed + restore height, the whole profile (jobs, offers, withdrawals, name/role, theme/language), every FROST share and `daemon.url`. Restore is all-or-nothing and restarts the app. 0.2.7 files (seed / share / job JSON) still import under **Advanced**. See below. |
+| Unlock gate | A stage funding is spendable at *funding block + 10*. Until then **Avisar que terminé** / **Aceptar X% y pagar** are off and both apps show a block countdown (`caja::traba_partida`). |
 | Leaving a job | Archive hides a joint job on this device only (no funds moved, other side not cut off). Leave stage cancels local funding/proposal only. |
 | Removing an offer | The client can withdraw an offer nobody took. A signed withdrawal is gossiped under its own DHT key, so peers drop the offer and gossip cannot bring it back. |
 | Actions per stage | `caja::acciones_partida` decides which buttons a stage shows. Desktop and Android both use it, so a payment in flight never offers **Accept and pay** again. |
@@ -52,11 +53,35 @@ One personal wallet per machine, then one shared box per job, then one transacti
 
 **3. Funding one stage.** **Confirmar y fondear** builds one transaction whose output is `2 × guarantee` to the box. Both personal wallets contribute. Encerrada is set when the scan sees that transaction in a block. If the node rejects the tx, **Empezar el fondeo de nuevo** clears the stuck session and picks fresh outputs.
 
-**4. Paying the stage.** The pot is `2 × guarantee`. The contractor receives the agreed percent of the payment plus their own guarantee. The client receives the rest. The fee comes from the client's remainder first. At 100% the contractor receives the pot minus the fee.
+**4. Paying the stage.** The pot is `2 × guarantee`. The contractor receives the agreed percent of the payment plus their own guarantee. The client receives the rest. The fee comes from the client's remainder first. At 100% the contractor receives the pot minus the fee. The client's output is still there (Monero needs two outputs), but with 0 XMR: up to 0.2.7 it carried 1 piconero of dust. The same applies to personal sends: an exact send or **Usar el máximo** (free balance minus the fee) leaves a 0-amount change output.
+
+**5. Unlock gate.** Monero only spends an output 10 blocks after the block that holds it. The box learns the funding block from its scan; `caja::traba_partida` (funding block + 10 vs the node tip) decides whether **Avisar que terminé** and **Aceptar X% y pagar** are enabled. While locked both apps show “Podés marcarla terminada en ~N bloques (~M min, bloque X)”, or “esperando que el fondeo entre en un bloque” if the funding is not in a block yet. The tip is refreshed every minute, so the gate opens without a restart.
+
+Peers on 0.2.7 still build the old 1-piconero split and cannot co-sign a 0.2.8 payment proposal (they reject the 0-amount split); 0.2.8 still co-signs the old split. Upgrade both sides.
 
 Both shares have to sign. One share is not a transaction. 1 domain unit = 0.00002 XMR, so a guarantee of 2000 is 0.04 XMR per side.
 
 Atomic spending and the multisig/FROST box path stay separate in the code; do not mix them.
+
+## Full backup
+
+**Billetera → Respaldos y recuperación → Exportar respaldo completo** writes one file, `konstruado-respaldo-<YYYY-MM-DD>.kbak`:
+
+| Bytes | Field |
+|---|---|
+| 8 | magic `KSTRBAK\0` |
+| 1 | format version (1) |
+| 1 | KDF id (1 = Argon2id v1.3) |
+| 4 + 4 + 1 | memory KiB, passes, lanes (default 64 MiB, 3, 1) |
+| 16 | salt |
+| 24 | XChaCha20-Poly1305 nonce |
+| rest | ciphertext of a JSON document; the 59-byte header is the AAD |
+
+The JSON holds the full `estado.json` profile, the seed backup text and its height, each job's share (`xmr::ShareBackup`) with the box's scan start, and the node URL. Password: at least 8 characters, nothing stored. Code: `xmr_joint::sobre` (envelope) and `crates/konstruado/src/respaldo.rs` (contents, restore), shared by desktop and Android.
+
+Restore (welcome screen **Restaurar desde respaldo**, or the same section in Billetera): decrypt, check the seed, check every share against its job and role (same checks as a single share import), show a summary. If the device already has an account, seed or shares, an explicit **Reemplazar lo de este equipo** is required. Then everything is written to `restaurar.tmp/`, renamed to `restaurar.listo/`, and the app restarts; at startup the old files move to `previo-<date>/` and the new ones take their place (resumable if cut). The wallet and each box scan from the stored height. Newer deal progress comes back from the other person through the room.
+
+The app shows when the last full backup was made and reminds you to export again after a new job or a new box (`ultimo-respaldo.json`).
 
 ## Withdrawing an offer
 

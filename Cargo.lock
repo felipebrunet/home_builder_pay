@@ -84,6 +84,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "argon2"
+version = "0.5.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3c3610892ee6e0cbce8ae2700349fcf8f98adb0dbfbee85aec3c9179d29cc072"
+dependencies = [
+ "base64ct",
+ "blake2",
+ "cpufeatures",
+ "password-hash",
+ "zeroize",
+]
+
+[[package]]
 name = "arrayvec"
 version = "0.7.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -540,6 +553,19 @@ dependencies = [
  "cfg-if",
  "cipher",
  "cpufeatures",
+]
+
+[[package]]
+name = "chacha20poly1305"
+version = "0.10.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "10cd79432192d1c0f4e1a0fef9527696cc039165d729fb41b3f4f4f354c2dc35"
+dependencies = [
+ "aead",
+ "chacha20",
+ "cipher",
+ "poly1305",
+ "zeroize",
 ]
 
 [[package]]
@@ -2994,7 +3020,7 @@ checksum = "a4933f3f57a8e9d9da04db23fb153356ecaf00cbd14aee46279c33dc80925c37"
 
 [[package]]
 name = "konstruado"
-version = "0.2.7"
+version = "0.2.8"
 dependencies = [
  "chrono",
  "dioxus",
@@ -3008,6 +3034,7 @@ dependencies = [
  "serde_json",
  "tokio",
  "xmr-joint",
+ "zeroize",
 ]
 
 [[package]]
@@ -3025,7 +3052,7 @@ dependencies = [
 
 [[package]]
 name = "konstruado-ffi"
-version = "0.2.7"
+version = "0.2.8"
 dependencies = [
  "chrono",
  "hex",
@@ -3041,6 +3068,7 @@ dependencies = [
  "uniffi",
  "uuid",
  "xmr-joint",
+ "zeroize",
 ]
 
 [[package]]
@@ -4204,6 +4232,17 @@ dependencies = [
  "redox_syscall",
  "smallvec",
  "windows-link 0.2.1",
+]
+
+[[package]]
+name = "password-hash"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "346f04948ba92c43e8469c1ee6736c7563d71012b17d40745260fe106aac2166"
+dependencies = [
+ "base64ct",
+ "rand_core 0.6.4",
+ "subtle",
 ]
 
 [[package]]
@@ -7230,7 +7269,9 @@ checksum = "b9cc00251562a284751c9973bace760d86c0276c471b4be569fe6b068ee97a56"
 name = "xmr-joint"
 version = "0.1.0"
 dependencies = [
+ "argon2",
  "bincode",
+ "chacha20poly1305",
  "curve25519-dalek",
  "dkg-pedpop",
  "hex",

@@ -16,12 +16,12 @@ igual que el escritorio. La lógica es la misma en Rust, expuesta por UniFFI:
 
 | Pantalla | Qué hace |
 |---|---|
-| Bienvenida | nombre + rol (mandante / contratista) |
+| Bienvenida | **Crear cuenta nueva** (nombre + rol) o **Restaurar desde respaldo** (archivo `.kbak` + contraseña) |
 | Tablero | estado de red, **Te toca**, mis obras, ofertas propias/ajenas, Buscar ofertas, Publicar |
 | Oferta | aceptar condiciones o **contra** (otra garantía, ajustar partidas) |
-| Obra | tarjetas **Ahora** (estado + contra / cierre), **Partidas** (chips de estado), extra, **Caja y pagos** (dirección, view key, historia, mirar 200 bloques atrás), **Respaldos** (share, plegable), **Avanzado** (abandonar / archivar, plegable) |
-| Partida | **Ahora** (chips, estado de alto fijo, solo las acciones válidas: Encerrar → Confirmar y fondear / reintentar / no encerrar, Avisar que terminé, Aceptar X% y pagar / contra %), **Caja y pagos** (txids monoespaciados con copiar, recibo), Hilo, **Respaldos**, **Avanzado** (texto, salir en este equipo) |
-| Billetera | **Saldo** (fila de estado fija + saldo que entra), **Entradas**, **Recibir**, **Enviar**; plegables **Respaldos y recuperación** y **Nodo / Avanzado**; cajas de obras |
+| Obra | tarjetas **Ahora** (estado + contra / cierre), **Partidas** (chips de estado), extra, **Caja y pagos** (dirección, view key, historia, mirar 200 bloques atrás), chip «Se libera en ~N bloques», recordatorio de respaldo, **Importar share suelto** (plegable, solo 0.2.7), **Avanzado** (abandonar / archivar, plegable) |
+| Partida | **Ahora** (chips, estado de alto fijo, solo las acciones válidas: Encerrar → Confirmar y fondear / reintentar / no encerrar, Avisar que terminé, Aceptar X% y pagar / contra %; con el fondeo sin 10 bloques el botón queda apagado con la cuenta regresiva), **Caja y pagos** (txids monoespaciados con copiar, recibo), Hilo, **Importar share suelto**, **Avanzado** (texto, salir en este equipo) |
+| Billetera | **Saldo** (fila de estado fija + saldo que entra), **Entradas**, **Recibir**, **Enviar**; plegables **Respaldos y recuperación** (respaldo completo: exportar, restaurar, último respaldo; importación vieja en Avanzado) y **Nodo / Avanzado**; cajas de obras |
 | Cuenta | nombre/rol, **Red** (estado real de Orbot/sala, Aplicar, Probar Orbot), **nodo Monero** (prueba RPC en fila fija), «Cómo funciona» plegados; destinos TCP solo bajo **Avanzado** |
 
 ### Estado de Orbot y la sala
@@ -64,7 +64,10 @@ Orbot en modo VPN por app con Konstruado **sin** marcar sirve: el SOCKS sigue en
 - **Quitar oferta** retira la oferta para todos (lápida firmada en el DHT): no vuelve cuando el contratista se reconecta. Solo el mandante que la publicó, y solo si nadie la tomó.
 - Encerrada / Pagada se marcan **solo cuando el motor ve la transacción en el scan** (`Hecho` con `visto`), igual que el escritorio.
 - Errores del motor (sin saldo, trabadas, sin semilla, el otro no está en línea, sincronizando…) se muestran tal cual, en español.
-- Respaldos (semilla y share) con el selector de Android (SAF): crear documento / abrir documento.
+- **Respaldo completo** con el selector de Android (SAF): `CreateDocument` para exportar el `.kbak`, `OpenDocument` para restaurar. Mismo formato y mismas verificaciones que el escritorio (`respaldo.rs` incluido con `#[path]`). Restaurar deja todo en `restaurar.listo/` y reinicia el proceso (`ReinicioActivity` en `:reinicio`); al arrancar, `KonstruadoApp.nuevo` aplica el cambio y deja lo anterior en `previo-<fecha>/`.
+- Los respaldos sueltos de 0.2.7 (25 palabras, share, obras) se importan en **Billetera → Respaldos y recuperación → Avanzado**; ya no se exportan por separado.
+- Traba de desbloqueo: `caja::traba_partida` (bloque del fondeo + 10 contra la punta del nodo, que se refresca cada minuto). Mientras falta, «Avisar que terminé» / «Aceptar X% y pagar» se ven apagados con «Podés marcarla terminada en ~N bloques (~M min, bloque X)».
+- «Usar el máximo» manda todo el saldo libre menos el fee; los pagos de la caja y los envíos exactos dejan la salida extra en 0 XMR (antes 1 piconero).
 - Datos (`estado.json`, `xmr/` con semilla, shares FROST y libro) en el almacenamiento **privado** de la app (`filesDir/konstruado`), `allowBackup=false`.
 - Un **servicio en primer plano** (notificación "Konstruado sincronizando") mantiene vivo el proceso: el gossip, los mensajes Caja y el scan siguen con la app en segundo plano.
 
@@ -220,6 +223,7 @@ estos tests se saltan.
   sin saldo, el motor lo dice y no arma nada.
 - Un solo perfil por instalación (la carpeta de datos es global al proceso).
 - El share vive en el almacenamiento privado de la app; no usa Android Keystore todavía.
+- Restaurar un respaldo completo y el reinicio del proceso están probados en la JVM y en el escritorio, no en un teléfono real.
 
 ## Saldo personal y fondeo
 
