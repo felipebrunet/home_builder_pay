@@ -9,6 +9,7 @@
 #![forbid(unsafe_code)]
 
 pub mod backup;
+pub mod sobre;
 pub mod chain;
 pub mod coop;
 pub mod dkg;
@@ -17,6 +18,9 @@ pub mod network;
 pub mod personal;
 pub mod spend;
 pub mod wallet;
+
+#[cfg(test)]
+pub(crate) mod prueba_tx;
 
 pub use backup::{ShareBackup, SeedBackup};
 pub use dkg::{DkgParty, JointAccount, Party, ShareOutcome, ViewAnnounce};

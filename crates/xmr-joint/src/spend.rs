@@ -2,7 +2,9 @@
 //!
 //! Con un porcentaje P el contratista cobra P del principal más la garantía entera.
 //! El mandante cobra el resto del principal. El fee sale primero de ese resto.
-//! Si un lado quedaría en cero, se le deja 1 piconero para que la transacción tenga dos salidas.
+//! Si un lado queda en cero, su salida va igual pero con 0 XMR (como la salida dummy de
+//! monero-wallet): la red pide al menos dos salidas y una salida RingCT de monto cero es válida.
+//! Antes de 0.2.8 se le dejaba 1 piconero; `SpendSession::open` todavía acepta ese reparto viejo.
 
 use std::collections::HashMap;
 use std::io::Cursor;
@@ -33,7 +35,35 @@ pub struct Split {
 }
 
 /// `pot` tiene que ser `2 * capital` (las dos salidas del fondeo).
+///
+/// Un lado puede quedar en 0: esa salida igual se arma (monto cero), así el gasto
+/// tiene dos salidas sin regalarle dust a nadie.
 pub fn split_pot(pot: u64, capital: u64, pct: u32, fee: u64) -> Result<Split> {
+    split_base(pot, capital, pct, fee)
+}
+
+/// Reparto de antes de 0.2.8: el lado en cero recibía 1 piconero. Solo para firmar
+/// propuestas que armó un par con la versión vieja.
+pub fn split_pot_legacy(pot: u64, capital: u64, pct: u32, fee: u64) -> Result<Split> {
+    let mut s = split_base(pot, capital, pct, fee)?;
+    if s.mandante == 0 {
+        if s.contratista < 2 {
+            return Err(Error::Spend("no queda dust para el mandante".into()));
+        }
+        s.contratista -= 1;
+        s.mandante = 1;
+    }
+    if s.contratista == 0 {
+        if s.mandante < 2 {
+            return Err(Error::Spend("no queda dust para el contratista".into()));
+        }
+        s.mandante -= 1;
+        s.contratista = 1;
+    }
+    Ok(s)
+}
+
+fn split_base(pot: u64, capital: u64, pct: u32, fee: u64) -> Result<Split> {
     if pct > 100 {
         return Err(Error::Spend("el porcentaje pasa de 100".into()));
     }
@@ -55,20 +85,6 @@ pub fn split_pot(pot: u64, capital: u64, pct: u32, fee: u64) -> Result<Split> {
             return Err(Error::Spend("no alcanza para el fee".into()));
         }
         to_contratista -= short;
-    }
-    if to_mandante == 0 {
-        if to_contratista < 2 {
-            return Err(Error::Spend("no queda dust para el mandante".into()));
-        }
-        to_contratista -= 1;
-        to_mandante = 1;
-    }
-    if to_contratista == 0 {
-        if to_mandante < 2 {
-            return Err(Error::Spend("no queda dust para el contratista".into()));
-        }
-        to_mandante -= 1;
-        to_contratista = 1;
     }
     if to_contratista + to_mandante + fee != pot {
         return Err(Error::Spend("el reparto no cierra".into()));
@@ -202,7 +218,12 @@ impl SpendSession {
         let tx = SignableTransaction::read(&mut Cursor::new(proposal.signable.as_slice()))
             .map_err(|e| Error::Spend(format!("signable: {e}")))?;
         let split = split_pot(tx.input_sum(), proposal.capital, proposal.pct, tx.necessary_fee())?;
-        verify_proposal_tx(&tx, proposal, &split)?;
+        if verify_proposal_tx(&tx, proposal, &split).is_err() {
+            // Par con la versión vieja (1 piconero al lado en cero): mismo pago, se firma.
+            let viejo =
+                split_pot_legacy(tx.input_sum(), proposal.capital, proposal.pct, tx.necessary_fee())?;
+            verify_proposal_tx(&tx, proposal, &viejo)?;
+        }
         let machine = tx
             .multisig(account.keys())
             .map_err(|e| Error::Spend(e.to_string()))?;
@@ -281,14 +302,22 @@ mod tests {
     }
 
     #[test]
-    fn cien_deja_un_piconero_al_mandante() {
+    fn cien_deja_cero_al_mandante_sin_dust() {
         let split = split_pot(20_000, 10_000, 100, 50).unwrap();
-        assert_eq!(split.contratista, 19_949);
-        assert_eq!(split.mandante, 1);
-        assert_eq!(
-            split.contratista + split.mandante + split.fee,
-            20_000
-        );
+        assert_eq!(split.contratista, 19_950);
+        assert_eq!(split.mandante, 0);
+        assert_eq!(split.contratista + split.mandante + split.fee, 20_000);
+        // El reparto viejo se sigue reconociendo para firmar propuestas de 0.2.7.
+        let viejo = split_pot_legacy(20_000, 10_000, 100, 50).unwrap();
+        assert_eq!((viejo.contratista, viejo.mandante), (19_949, 1));
+    }
+
+    #[test]
+    fn fee_mayor_que_el_resto_del_mandante_lo_deja_en_cero() {
+        // 99 %: al mandante le tocan 100, el fee es 150 → mandante 0, el contratista pone 50.
+        let split = split_pot(20_000, 10_000, 99, 150).unwrap();
+        assert_eq!(split.mandante, 0);
+        assert_eq!(split.contratista, 19_850);
     }
 
     #[test]
@@ -296,5 +325,103 @@ mod tests {
         let split = split_pot(20_000, 10_000, 0, 50).unwrap();
         assert_eq!(split.contratista, 10_000);
         assert_eq!(split.mandante, 9_950);
+    }
+}
+
+#[cfg(test)]
+mod pruebas_tx {
+    use super::*;
+    use crate::dkg::{DkgParty, Party};
+    use crate::network::Net;
+    use crate::prueba_tx::{billetera, fee_rate, montos_para, salida_falsa, verificar};
+    use rand_core::OsRng;
+
+    fn cuentas() -> (JointAccount, JointAccount) {
+        let mut rng = OsRng;
+        let (mut m, c1) = DkgParty::start(Party::Mandante, "obra-dust", Net::Stagenet, &mut rng).unwrap();
+        let (mut c, c2) = DkgParty::start(Party::Contratista, "obra-dust", Net::Stagenet, &mut rng).unwrap();
+        let s1 = m.ingest_commit(&c2, &mut rng).unwrap();
+        let s2 = c.ingest_commit(&c1, &mut rng).unwrap();
+        c.ingest_share(&s1, &mut rng).unwrap();
+        let hecho = m.ingest_share(&s2, &mut rng).unwrap();
+        let cuenta_c = c.ingest_view(&hecho.view.unwrap()).unwrap();
+        (hecho.account.unwrap(), cuenta_c)
+    }
+
+    /// Gasto 2-de-2 completo (propuesta, preprocess, shares, firma) sobre un fondeo falso.
+    fn pagar(pct: u32) -> (Split, Vec<u64>, Vec<u64>) {
+        let (cuenta_m, cuenta_c) = cuentas();
+        let capital = 20_000_000_000u64; // 0,02 XMR por lado
+        let grupo = cuenta_m.keys().group_key().0;
+        let fondeo = [salida_falsa(grupo, capital), salida_falsa(grupo, capital)];
+        let anillos: Vec<_> = fondeo.iter().map(|f| f.anillo.clone()).collect();
+        let (_, vista_c) = billetera();
+        let (_, vista_m) = billetera();
+        let dir_c = vista_c.legacy_address(Net::Stagenet.oxide());
+        let dir_m = vista_m.legacy_address(Net::Stagenet.oxide());
+        let inputs = fondeo.iter().map(|f| f.salida.clone()).collect();
+        let (prop, split) =
+            propose(&mut OsRng, "obra-dust", capital, pct, &dir_c, &dir_m, inputs, fee_rate()).unwrap();
+        let (sm, pre_m) = SpendSession::open(&cuenta_m, &prop, &mut OsRng).unwrap();
+        let (sc, pre_c) = SpendSession::open(&cuenta_c, &prop, &mut OsRng).unwrap();
+        let (fm, share_m) = sm.sign(&pre_c).unwrap();
+        let (fc, share_c) = sc.sign(&pre_m).unwrap();
+        let tx = fm.complete(&share_c).unwrap();
+        let tx_c = fc.complete(&share_m).unwrap();
+        assert_eq!(tx.hash(), tx_c.hash(), "los dos llegan a la misma transacción");
+        assert_eq!(verificar(&tx, &anillos), split.fee);
+        (split, montos_para(&vista_c, &tx), montos_para(&vista_m, &tx))
+    }
+
+    #[test]
+    fn pago_cien_por_ciento_deja_salida_de_cero_al_mandante() {
+        let (split, al_c, al_m) = pagar(100);
+        assert_eq!(split.mandante, 0);
+        assert_eq!(al_c, vec![40_000_000_000 - split.fee]);
+        // La salida existe (dos salidas) pero lleva 0 XMR: nada de 1 piconero.
+        assert_eq!(al_m, vec![0]);
+    }
+
+    #[test]
+    fn pago_parcial_reparte_sin_dust() {
+        let (split, al_c, al_m) = pagar(80);
+        assert_eq!(al_c, vec![20_000_000_000 + 16_000_000_000]);
+        assert_eq!(al_m, vec![4_000_000_000 - split.fee]);
+    }
+
+    #[test]
+    fn se_firma_una_propuesta_vieja_con_un_piconero() {
+        // Un par con 0.2.7 arma el reparto con 1 piconero al mandante: 0.2.8 lo firma igual.
+        let (cuenta_m, _) = cuentas();
+        let capital = 20_000_000_000u64;
+        let grupo = cuenta_m.keys().group_key().0;
+        let inputs: Vec<_> = (0..2).map(|_| salida_falsa(grupo, capital).salida).collect();
+        let (_, vc) = billetera();
+        let (_, vm) = billetera();
+        let dir_c = vc.legacy_address(Net::Stagenet.oxide());
+        let dir_m = vm.legacy_address(Net::Stagenet.oxide());
+        // Fee real con el reparto nuevo, después se arma a mano el viejo con ese fee.
+        let (_, nuevo) =
+            propose(&mut OsRng, "obra-dust", capital, 100, &dir_c, &dir_m, inputs.clone(), fee_rate()).unwrap();
+        let viejo = split_pot_legacy(2 * capital, capital, 100, nuevo.fee).unwrap();
+        let tx = SignableTransaction::new(
+            RctType::ClsagBulletproofPlus,
+            zeroize::Zeroizing::new([7u8; 32]),
+            inputs,
+            vec![(dir_c, viejo.contratista), (dir_m, viejo.mandante)],
+            Change::fingerprintable(None),
+            vec![],
+            fee_rate(),
+        )
+        .unwrap();
+        let prop = SpendProposal {
+            obra_id: "obra-dust".into(),
+            capital,
+            pct: 100,
+            contratista: dir_c.to_string(),
+            mandante: dir_m.to_string(),
+            signable: tx.serialize(),
+        };
+        assert!(SpendSession::open(&cuenta_m, &prop, &mut OsRng).is_ok());
     }
 }
