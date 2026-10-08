@@ -32,7 +32,7 @@ use konstruado_core::{
     Aceptacion,
     EstadoObra, Obra, Oferta, PartidaEstado, Persona, Rol, TextoLeido, MAX_NOTA,
 };
-use konstruado_net::{EstadoTor, Nodo, PeerAddr, ORBOT_SOCKS, PUERTO_LOCAL, RED, RENDEZVOUS_ONION, VIRT_PORT};
+use konstruado_net::{DiagSocks, EstadoTor, Nodo, PeerAddr, ORBOT_SOCKS, PUERTO_LOCAL, RED, RENDEZVOUS_ONION, VIRT_PORT};
 
 const L: Idioma = Idioma::Es;
 const ES: bool = true;
@@ -73,6 +73,8 @@ pub struct PerfilVista {
 pub struct RedVista {
     /// Una línea legible: estado de Orbot/sala y quién está.
     pub linea: String,
+    /// Diagnóstico real de Orbot → sala (sin saber si Orbot está instalado).
+    pub sala: SalaEstado,
     pub conectado: bool,
     pub pares: u32,
     pub sesiones_vivas: u32,
@@ -81,6 +83,21 @@ pub struct RedVista {
     pub otros: Vec<String>,
     pub red: String,
     pub onion_sala: String,
+}
+
+/// Estado de la conexión con la sala, medido (no supuesto).
+///
+/// `tipo`: "conectado", "socks_ok" (Orbot responde, llamando a la sala),
+/// "sala_no_responde", "socks_caido", "sin_orbot" (no instalado),
+/// "orbot_apagado_en_app", "probando", "tcp".
+/// `tono`: "ok", "espera", "error", "apagado" (mismos que la billetera).
+#[derive(Clone, Debug, PartialEq, Eq, uniffi::Record)]
+pub struct SalaEstado {
+    pub tipo: String,
+    pub tono: String,
+    pub titulo: String,
+    pub detalle: String,
+    pub socks: Option<String>,
 }
 
 #[derive(Clone, Debug, uniffi::Record)]
@@ -276,6 +293,12 @@ pub struct BilleteraVista {
     pub movs: Vec<MovVista>,
     pub escala: String,
     pub cajas: Vec<CajaFila>,
+    /// Línea de estado de alto fijo (regla compartida `caja::estado_billetera`).
+    pub estado_linea: String,
+    /// "ok", "espera", "error", "apagado".
+    pub estado_tono: String,
+    /// Saldo total en piconeros, para formatear sin perder precisión.
+    pub total_pico: u64,
 }
 
 
@@ -749,7 +772,10 @@ impl KonstruadoApp {
         otros.dedup();
         let tor = n.estado_tor();
         let socks = n.socks().map(|s| s.to_string());
+        let hay_tcp = n.destinos().iter().any(|d| matches!(d, PeerAddr::Tcp { .. }));
+        let sala = sala_de(&n.diag_socks(), socks.as_deref(), vivos, hay_tcp, None);
         let estado = match &tor {
+            _ if socks.is_some() || vivos > 0 => sala.titulo.clone(),
             EstadoTor::Listo { .. } if vivos > 0 => "Conectado a la sala".to_string(),
             EstadoTor::Listo { .. } => "Orbot listo, buscando sala".to_string(),
             EstadoTor::Arrancando { paso } => L.paso_tor(paso),
@@ -768,6 +794,7 @@ impl KonstruadoApp {
         };
         RedVista {
             linea: format!("{estado} · {gente}"),
+            sala,
             conectado: vivos > 0,
             pares: pares as u32,
             sesiones_vivas: vivos as u32,
@@ -780,6 +807,84 @@ impl KonstruadoApp {
     }
 }
 
+
+/// Traduce el diagnóstico medido a un estado para la pantalla.
+/// Solo pide encender Orbot cuando su SOCKS de verdad no contesta.
+fn sala_de(
+    diag: &DiagSocks,
+    socks: Option<&str>,
+    vivos: usize,
+    hay_tcp: bool,
+    orbot_instalado: Option<bool>,
+) -> SalaEstado {
+    let e = |tipo: &str, tono: caja::Tono, titulo: String, detalle: String| SalaEstado {
+        tipo: tipo.into(),
+        tono: tono.codigo().into(),
+        titulo,
+        detalle,
+        socks: socks.map(str::to_string),
+    };
+    let s = socks.unwrap_or("127.0.0.1:9050");
+    if vivos > 0 {
+        return e(
+            "conectado",
+            caja::Tono::Ok,
+            "Conectado a la sala".into(),
+            format!("Sesiones vivas: {vivos}."),
+        );
+    }
+    match diag {
+        DiagSocks::SinSocks if hay_tcp => e(
+            "tcp",
+            caja::Tono::Espera,
+            "Buscando por TCP…".into(),
+            "Sin Orbot: se marca solo el destino TCP de Avanzado.".into(),
+        ),
+        DiagSocks::SinSocks => e(
+            "orbot_apagado_en_app",
+            caja::Tono::Apagado,
+            "Orbot apagado en Konstruado".into(),
+            "Activá «Usar Orbot» en Red para marcar la sala.".into(),
+        ),
+        DiagSocks::SinProbar => e(
+            "probando",
+            caja::Tono::Espera,
+            "Probando Orbot…".into(),
+            format!("Primer intento por el SOCKS {s}."),
+        ),
+        DiagSocks::SocksCaido(_) if orbot_instalado == Some(false) => e(
+            "sin_orbot",
+            caja::Tono::Error,
+            "Orbot no está instalado".into(),
+            "Instalalo desde F-Droid o Google Play y encendelo.".into(),
+        ),
+        DiagSocks::SocksCaido(err) => e(
+            "socks_caido",
+            caja::Tono::Error,
+            format!("Orbot no responde en {s}"),
+            format!("Abrí Orbot y tocá Iniciar, o revisá el puerto SOCKS ({err})."),
+        ),
+        DiagSocks::SocksOk => e(
+            "socks_ok",
+            caja::Tono::Espera,
+            "Orbot responde · llamando a la sala…".into(),
+            "Tor puede tardar hasta un minuto en encontrar la sala.".into(),
+        ),
+        DiagSocks::DestinoNoResponde(err) => e(
+            "sala_no_responde",
+            // Ámbar: Orbot anda; falta el otro lado (PC apagado / sin Konstruado).
+            caja::Tono::Espera,
+            "La sala no responde".into(),
+            format!("Orbot funciona. ¿Está abierto Konstruado en el PC? ({err})"),
+        ),
+        DiagSocks::Conectado => e(
+            "socks_ok",
+            caja::Tono::Espera,
+            "Reconectando con la sala…".into(),
+            "Orbot funciona; se cortó la sesión y se vuelve a marcar.".into(),
+        ),
+    }
+}
 
 fn guardar_prueba(app_prueba: &Mutex<Option<DaemonPrueba>>, p: DaemonPrueba) -> DaemonPrueba {
     if let Ok(mut g) = app_prueba.lock() {
@@ -954,6 +1059,34 @@ impl KonstruadoApp {
         self.red_interna()
     }
 
+    /// Estado de la sala con lo que sabe Android (si Orbot está instalado).
+    pub fn estado_sala(&self, orbot_instalado: bool) -> SalaEstado {
+        let n = &self.nodo;
+        let socks = n.socks().map(|s| s.to_string());
+        let hay_tcp = n.destinos().iter().any(|d| matches!(d, PeerAddr::Tcp { .. }));
+        sala_de(&n.diag_socks(), socks.as_deref(), n.n_vivos(), hay_tcp, Some(orbot_instalado))
+    }
+
+    /// Prueba ya el SOCKS de Orbot (saludo SOCKS5, 3 s) y devuelve el estado.
+    /// No espera a la sala: eso lo mide el intento que corre en segundo plano.
+    pub fn probar_orbot(&self, orbot_instalado: bool) -> SalaEstado {
+        if let Some(addr) = self.nodo.socks() {
+            let r = self
+                .rt
+                .block_on(konstruado_net::probar_socks(addr, std::time::Duration::from_secs(3)));
+            let d = self.nodo.diag_socks();
+            match r {
+                Ok(()) => {
+                    if matches!(d, DiagSocks::SinProbar | DiagSocks::SocksCaido(_)) {
+                        self.nodo.fijar_diag_socks(DiagSocks::SocksOk);
+                    }
+                }
+                Err(e) => self.nodo.fijar_diag_socks(DiagSocks::SocksCaido(e)),
+            }
+        }
+        self.estado_sala(orbot_instalado)
+    }
+
     pub fn configurar_socks(&self, host: String, port: u16) {
         let _e = self.rt.enter();
         self.nodo.configurar_socks(&host, port);
@@ -981,6 +1114,7 @@ impl KonstruadoApp {
                 host: RENDEZVOUS_ONION.into(),
                 port: VIRT_PORT,
             });
+            self.nodo.quitar_socks();
         }
     }
 
@@ -1040,8 +1174,14 @@ impl KonstruadoApp {
             .collect();
         mis_obras.sort_by(|a, b| b.actualizado.cmp(&a.actualizado).then(b.id.cmp(&a.id)));
         let red = self.red_interna();
+        // Antes decía siempre "Encendé Orbot" con cero pares, aunque el SOCKS
+        // anduviera. Ahora usa el diagnóstico medido de Orbot → sala.
         let pista = if red.pares == 0 {
-            "Nadie más todavía. Encendé Orbot (o agregá un destino TCP) y esperá la sala.".to_string()
+            if red.sala.tipo == "conectado" {
+                "Conectado a la sala. Nadie más todavía.".to_string()
+            } else {
+                format!("{}. {}", red.sala.titulo, red.sala.detalle)
+            }
         } else if soy_m {
             "Publicá una obra; el contratista la ve en su tablero.".to_string()
         } else if red.otros.is_empty() {
@@ -1569,6 +1709,7 @@ impl KonstruadoApp {
     pub fn billetera(&self) -> BilleteraVista {
         let v = self.caja.vista();
         let b = &v.billetera;
+        let est = caja::estado_billetera(b, v.personal.is_some(), v.tip, ES);
         let obras = self.nodo.obras();
         let cajas = v
             .cajas
@@ -1621,6 +1762,9 @@ impl KonstruadoApp {
                 .collect(),
             escala: caja::escala(ES),
             cajas,
+            estado_linea: est.1,
+            estado_tono: est.0.codigo().into(),
+            total_pico: b.total,
         }
     }
 
@@ -1916,6 +2060,29 @@ impl KonstruadoApp {
 #[cfg(test)]
 mod ffi_tests {
     use super::*;
+
+    #[test]
+    fn con_socks_vivo_no_se_pide_encender_orbot() {
+        let s = Some("127.0.0.1:9050");
+        // El caso de Felipe: Orbot en VPN por app (Konstruado afuera), SOCKS OK, PC apagado.
+        let e = sala_de(&DiagSocks::DestinoNoResponde("onion sin respuesta".into()), s, 0, false, Some(true));
+        assert_eq!(e.tipo, "sala_no_responde");
+        assert!(e.detalle.contains("¿Está abierto Konstruado en el PC?"));
+        assert!(!e.titulo.contains("Encend") && !e.detalle.contains("Encend"));
+        let e = sala_de(&DiagSocks::SocksOk, s, 0, false, Some(true));
+        assert_eq!(e.tipo, "socks_ok");
+        assert!(!e.detalle.contains("Iniciar"));
+        // Solo con el SOCKS caído se pide abrir Orbot; si no está instalado, se dice eso.
+        let e = sala_de(&DiagSocks::SocksCaido("connection refused".into()), s, 0, false, Some(true));
+        assert_eq!(e.tipo, "socks_caido");
+        assert!(e.detalle.contains("Iniciar"));
+        let e = sala_de(&DiagSocks::SocksCaido("connection refused".into()), s, 0, false, Some(false));
+        assert_eq!(e.tipo, "sin_orbot");
+        // Con sesión viva manda "conectado", diga lo que diga el último intento.
+        assert_eq!(sala_de(&DiagSocks::DestinoNoResponde("x".into()), s, 1, false, None).tipo, "conectado");
+        assert_eq!(sala_de(&DiagSocks::SinSocks, None, 0, false, None).tipo, "orbot_apagado_en_app");
+        assert_eq!(sala_de(&DiagSocks::SinSocks, None, 0, true, None).tipo, "tcp");
+    }
 
     #[test]
     fn destinos_se_leen() {

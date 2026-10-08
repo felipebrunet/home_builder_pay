@@ -840,6 +840,10 @@ internal interface UniffiForeignFutureCompleteVoid : com.sun.jna.Callback {
 
 
 
+
+
+
+
 // For large crates we prevent `MethodTooLargeException` (see #2340)
 // N.B. the name of the extension is very misleading, since it is 
 // rather `InterfaceTooLargeException`, caused by too many methods 
@@ -907,6 +911,8 @@ fun uniffi_konstruado_ffi_checksum_method_konstruadoapp_empezar_fondeo_de_nuevo(
 ): Short
 fun uniffi_konstruado_ffi_checksum_method_konstruadoapp_enviar(
 ): Short
+fun uniffi_konstruado_ffi_checksum_method_konstruadoapp_estado_sala(
+): Short
 fun uniffi_konstruado_ffi_checksum_method_konstruadoapp_exportar_obras(
 ): Short
 fun uniffi_konstruado_ffi_checksum_method_konstruadoapp_exportar_semilla(
@@ -940,6 +946,8 @@ fun uniffi_konstruado_ffi_checksum_method_konstruadoapp_perfil(
 fun uniffi_konstruado_ffi_checksum_method_konstruadoapp_previa_aceptar(
 ): Short
 fun uniffi_konstruado_ffi_checksum_method_konstruadoapp_probar_daemon(
+): Short
+fun uniffi_konstruado_ffi_checksum_method_konstruadoapp_probar_orbot(
 ): Short
 fun uniffi_konstruado_ffi_checksum_method_konstruadoapp_proponer_encerrar(
 ): Short
@@ -1088,6 +1096,8 @@ fun uniffi_konstruado_ffi_fn_method_konstruadoapp_empezar_fondeo_de_nuevo(`ptr`:
 ): Unit
 fun uniffi_konstruado_ffi_fn_method_konstruadoapp_enviar(`ptr`: Pointer,`destino`: RustBuffer.ByValue,`montoXmr`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): Unit
+fun uniffi_konstruado_ffi_fn_method_konstruadoapp_estado_sala(`ptr`: Pointer,`orbotInstalado`: Byte,uniffi_out_err: UniffiRustCallStatus, 
+): RustBuffer.ByValue
 fun uniffi_konstruado_ffi_fn_method_konstruadoapp_exportar_obras(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
 fun uniffi_konstruado_ffi_fn_method_konstruadoapp_exportar_semilla(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
@@ -1121,6 +1131,8 @@ fun uniffi_konstruado_ffi_fn_method_konstruadoapp_perfil(`ptr`: Pointer,uniffi_o
 fun uniffi_konstruado_ffi_fn_method_konstruadoapp_previa_aceptar(`ptr`: Pointer,`ofertaId`: RustBuffer.ByValue,`garantia`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
 fun uniffi_konstruado_ffi_fn_method_konstruadoapp_probar_daemon(`ptr`: Pointer,`vpnCaptura`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+): RustBuffer.ByValue
+fun uniffi_konstruado_ffi_fn_method_konstruadoapp_probar_orbot(`ptr`: Pointer,`orbotInstalado`: Byte,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
 fun uniffi_konstruado_ffi_fn_method_konstruadoapp_proponer_encerrar(`ptr`: Pointer,`obraId`: RustBuffer.ByValue,`indice`: Int,uniffi_out_err: UniffiRustCallStatus, 
 ): Unit
@@ -1364,6 +1376,9 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if (lib.uniffi_konstruado_ffi_checksum_method_konstruadoapp_enviar() != 19560.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if (lib.uniffi_konstruado_ffi_checksum_method_konstruadoapp_estado_sala() != 30765.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if (lib.uniffi_konstruado_ffi_checksum_method_konstruadoapp_exportar_obras() != 65531.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
@@ -1413,6 +1428,9 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_konstruado_ffi_checksum_method_konstruadoapp_probar_daemon() != 20989.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_konstruado_ffi_checksum_method_konstruadoapp_probar_orbot() != 43519.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_konstruado_ffi_checksum_method_konstruadoapp_proponer_encerrar() != 47893.toShort()) {
@@ -1959,6 +1977,11 @@ public interface KonstruadoAppInterface {
     fun `enviar`(`destino`: kotlin.String, `montoXmr`: kotlin.String)
     
     /**
+     * Estado de la sala con lo que sabe Android (si Orbot está instalado).
+     */
+    fun `estadoSala`(`orbotInstalado`: kotlin.Boolean): SalaEstado
+    
+    /**
      * JSON del perfil de obras/ofertas (sin seed ni share). Puede estar desfasado vs el peer.
      */
     fun `exportarObras`(): kotlin.String
@@ -2021,6 +2044,12 @@ public interface KonstruadoAppInterface {
      * de la app es una VPN, p. ej. Orbot en modo VPN). `None` = no se sabe.
      */
     fun `probarDaemon`(`vpnCaptura`: kotlin.Boolean?): DaemonPrueba
+    
+    /**
+     * Prueba ya el SOCKS de Orbot (saludo SOCKS5, 3 s) y devuelve el estado.
+     * No espera a la sala: eso lo mide el intento que corre en segundo plano.
+     */
+    fun `probarOrbot`(`orbotInstalado`: kotlin.Boolean): SalaEstado
     
     fun `proponerEncerrar`(`obraId`: kotlin.String, `indice`: kotlin.UInt)
     
@@ -2522,6 +2551,21 @@ open class KonstruadoApp: Disposable, AutoCloseable, KonstruadoAppInterface
 
     
     /**
+     * Estado de la sala con lo que sabe Android (si Orbot está instalado).
+     */override fun `estadoSala`(`orbotInstalado`: kotlin.Boolean): SalaEstado {
+            return FfiConverterTypeSalaEstado.lift(
+    callWithPointer {
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_konstruado_ffi_fn_method_konstruadoapp_estado_sala(
+        it, FfiConverterBoolean.lower(`orbotInstalado`),_status)
+}
+    }
+    )
+    }
+    
+
+    
+    /**
      * JSON del perfil de obras/ofertas (sin seed ni share). Puede estar desfasado vs el peer.
      */
     @Throws(FfiException::class)override fun `exportarObras`(): kotlin.String {
@@ -2755,6 +2799,22 @@ open class KonstruadoApp: Disposable, AutoCloseable, KonstruadoAppInterface
     uniffiRustCall() { _status ->
     UniffiLib.INSTANCE.uniffi_konstruado_ffi_fn_method_konstruadoapp_probar_daemon(
         it, FfiConverterOptionalBoolean.lower(`vpnCaptura`),_status)
+}
+    }
+    )
+    }
+    
+
+    
+    /**
+     * Prueba ya el SOCKS de Orbot (saludo SOCKS5, 3 s) y devuelve el estado.
+     * No espera a la sala: eso lo mide el intento que corre en segundo plano.
+     */override fun `probarOrbot`(`orbotInstalado`: kotlin.Boolean): SalaEstado {
+            return FfiConverterTypeSalaEstado.lift(
+    callWithPointer {
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_konstruado_ffi_fn_method_konstruadoapp_probar_orbot(
+        it, FfiConverterBoolean.lower(`orbotInstalado`),_status)
 }
     }
     )
@@ -3129,7 +3189,19 @@ data class BilleteraVista (
     var `ultimo`: kotlin.String?, 
     var `movs`: List<MovVista>, 
     var `escala`: kotlin.String, 
-    var `cajas`: List<CajaFila>
+    var `cajas`: List<CajaFila>, 
+    /**
+     * Línea de estado de alto fijo (regla compartida `caja::estado_billetera`).
+     */
+    var `estadoLinea`: kotlin.String, 
+    /**
+     * "ok", "espera", "error", "apagado".
+     */
+    var `estadoTono`: kotlin.String, 
+    /**
+     * Saldo total en piconeros, para formatear sin perder precisión.
+     */
+    var `totalPico`: kotlin.ULong
 ) {
     
     companion object
@@ -3157,6 +3229,9 @@ public object FfiConverterTypeBilleteraVista: FfiConverterRustBuffer<BilleteraVi
             FfiConverterSequenceTypeMovVista.read(buf),
             FfiConverterString.read(buf),
             FfiConverterSequenceTypeCajaFila.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterULong.read(buf),
         )
     }
 
@@ -3176,7 +3251,10 @@ public object FfiConverterTypeBilleteraVista: FfiConverterRustBuffer<BilleteraVi
             FfiConverterOptionalString.allocationSize(value.`ultimo`) +
             FfiConverterSequenceTypeMovVista.allocationSize(value.`movs`) +
             FfiConverterString.allocationSize(value.`escala`) +
-            FfiConverterSequenceTypeCajaFila.allocationSize(value.`cajas`)
+            FfiConverterSequenceTypeCajaFila.allocationSize(value.`cajas`) +
+            FfiConverterString.allocationSize(value.`estadoLinea`) +
+            FfiConverterString.allocationSize(value.`estadoTono`) +
+            FfiConverterULong.allocationSize(value.`totalPico`)
     )
 
     override fun write(value: BilleteraVista, buf: ByteBuffer) {
@@ -3196,6 +3274,9 @@ public object FfiConverterTypeBilleteraVista: FfiConverterRustBuffer<BilleteraVi
             FfiConverterSequenceTypeMovVista.write(value.`movs`, buf)
             FfiConverterString.write(value.`escala`, buf)
             FfiConverterSequenceTypeCajaFila.write(value.`cajas`, buf)
+            FfiConverterString.write(value.`estadoLinea`, buf)
+            FfiConverterString.write(value.`estadoTono`, buf)
+            FfiConverterULong.write(value.`totalPico`, buf)
     }
 }
 
@@ -4070,6 +4151,10 @@ data class RedVista (
      * Una línea legible: estado de Orbot/sala y quién está.
      */
     var `linea`: kotlin.String, 
+    /**
+     * Diagnóstico real de Orbot → sala (sin saber si Orbot está instalado).
+     */
+    var `sala`: SalaEstado, 
     var `conectado`: kotlin.Boolean, 
     var `pares`: kotlin.UInt, 
     var `sesionesVivas`: kotlin.UInt, 
@@ -4090,6 +4175,7 @@ public object FfiConverterTypeRedVista: FfiConverterRustBuffer<RedVista> {
     override fun read(buf: ByteBuffer): RedVista {
         return RedVista(
             FfiConverterString.read(buf),
+            FfiConverterTypeSalaEstado.read(buf),
             FfiConverterBoolean.read(buf),
             FfiConverterUInt.read(buf),
             FfiConverterUInt.read(buf),
@@ -4103,6 +4189,7 @@ public object FfiConverterTypeRedVista: FfiConverterRustBuffer<RedVista> {
 
     override fun allocationSize(value: RedVista) = (
             FfiConverterString.allocationSize(value.`linea`) +
+            FfiConverterTypeSalaEstado.allocationSize(value.`sala`) +
             FfiConverterBoolean.allocationSize(value.`conectado`) +
             FfiConverterUInt.allocationSize(value.`pares`) +
             FfiConverterUInt.allocationSize(value.`sesionesVivas`) +
@@ -4115,6 +4202,7 @@ public object FfiConverterTypeRedVista: FfiConverterRustBuffer<RedVista> {
 
     override fun write(value: RedVista, buf: ByteBuffer) {
             FfiConverterString.write(value.`linea`, buf)
+            FfiConverterTypeSalaEstado.write(value.`sala`, buf)
             FfiConverterBoolean.write(value.`conectado`, buf)
             FfiConverterUInt.write(value.`pares`, buf)
             FfiConverterUInt.write(value.`sesionesVivas`, buf)
@@ -4123,6 +4211,58 @@ public object FfiConverterTypeRedVista: FfiConverterRustBuffer<RedVista> {
             FfiConverterSequenceString.write(value.`otros`, buf)
             FfiConverterString.write(value.`red`, buf)
             FfiConverterString.write(value.`onionSala`, buf)
+    }
+}
+
+
+
+/**
+ * Estado de la conexión con la sala, medido (no supuesto).
+ *
+ * `tipo`: "conectado", "socks_ok" (Orbot responde, llamando a la sala),
+ * "sala_no_responde", "socks_caido", "sin_orbot" (no instalado),
+ * "orbot_apagado_en_app", "probando", "tcp".
+ * `tono`: "ok", "espera", "error", "apagado" (mismos que la billetera).
+ */
+data class SalaEstado (
+    var `tipo`: kotlin.String, 
+    var `tono`: kotlin.String, 
+    var `titulo`: kotlin.String, 
+    var `detalle`: kotlin.String, 
+    var `socks`: kotlin.String?
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeSalaEstado: FfiConverterRustBuffer<SalaEstado> {
+    override fun read(buf: ByteBuffer): SalaEstado {
+        return SalaEstado(
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterOptionalString.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: SalaEstado) = (
+            FfiConverterString.allocationSize(value.`tipo`) +
+            FfiConverterString.allocationSize(value.`tono`) +
+            FfiConverterString.allocationSize(value.`titulo`) +
+            FfiConverterString.allocationSize(value.`detalle`) +
+            FfiConverterOptionalString.allocationSize(value.`socks`)
+    )
+
+    override fun write(value: SalaEstado, buf: ByteBuffer) {
+            FfiConverterString.write(value.`tipo`, buf)
+            FfiConverterString.write(value.`tono`, buf)
+            FfiConverterString.write(value.`titulo`, buf)
+            FfiConverterString.write(value.`detalle`, buf)
+            FfiConverterOptionalString.write(value.`socks`, buf)
     }
 }
 
