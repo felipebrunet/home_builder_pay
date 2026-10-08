@@ -28,7 +28,8 @@ use std::time::Duration;
 
 use i18n::Idioma;
 use konstruado_core::{
-    asegurar_clave, generar_clave, monto, monto_pct, n_partidas, oferta_en_tablero, Aceptacion,
+    asegurar_clave, generar_clave, monto, monto_pct, n_partidas, oferta_en_tablero, retirar_oferta,
+    Aceptacion,
     EstadoObra, Obra, Oferta, PartidaEstado, Persona, Rol, TextoLeido, MAX_NOTA,
 };
 use konstruado_net::{EstadoTor, Nodo, PeerAddr, ORBOT_SOCKS, PUERTO_LOCAL, RED, RENDEZVOUS_ONION, VIRT_PORT};
@@ -232,6 +233,15 @@ pub struct PartidaVista {
     pub mi_turno: bool,
     pub espera_a: Option<String>,
     pub max_nota: u32,
+    /// En trato, me toca y no hay un pago ya andando (regla de `caja::acciones_partida`).
+    pub puede_aceptar_pago: bool,
+    pub puede_contraofertar: bool,
+    /// "Abandonar partida (solo este equipo)": solo cuando hay un fondeo local que limpiar.
+    pub puede_salir_local: bool,
+    /// Texto corto de lo que está en curso ("Pago esperando bloque"…), para un chip.
+    pub en_curso: Option<String>,
+    /// El pago 2-de-2 ya se está firmando o espera bloque.
+    pub pago_en_curso: bool,
 }
 
 #[derive(Clone, Debug, uniffi::Record)]
@@ -605,6 +615,7 @@ impl KonstruadoApp {
             clave_sec: s.clave_sec.clone(),
             spend_sec: s.spend_sec.clone(),
             obras_salidas: self.nodo.obras_salidas(),
+            retiradas: self.nodo.retiradas(),
         });
     }
 
@@ -712,6 +723,7 @@ impl KonstruadoApp {
                     clave_sec: sec,
                     spend_sec: disco.2,
                     obras_salidas: nodo.obras_salidas(),
+                    retiradas: nodo.retiradas(),
                 });
                 tokio::time::sleep(Duration::from_secs(1)).await;
             }
@@ -853,6 +865,7 @@ impl KonstruadoApp {
         {
             let _e = rt.enter();
             nodo.fijar_obras_salidas(g.obras_salidas.clone());
+            nodo.fijar_retiradas(g.retiradas.clone());
             nodo.hidratar(g.ofertas.clone(), obras0, presentes0);
             if let Some(p) = g.yo.clone() {
                 nodo.actualizar_yo(p);
@@ -1083,7 +1096,8 @@ impl KonstruadoApp {
         let m = self.yo()?;
         let t = parse_num(&trabajo);
         let g = parse_num(&garantia);
-        let o = Oferta::publicar(m, nombre, t, g, detalles).map_err(err_core)?;
+        let mut o = Oferta::publicar(m, nombre, t, g, detalles).map_err(err_core)?;
+        o.sellar_retiro(&self.sec());
         let v = oferta_vista(&o, &self.mid());
         let _e = self.rt.enter();
         self.nodo.publicar(o);
@@ -1272,6 +1286,7 @@ impl KonstruadoApp {
         )
         .map_err(err_core)?;
         oferta.id = obra.id.clone();
+        oferta.sellar_retiro(&self.sec());
         let _e = self.rt.enter();
         self.publicar_trato(obra, &q)?;
         self.nodo.publicar(oferta);
@@ -1334,13 +1349,6 @@ impl KonstruadoApp {
         let v = self.caja.vista();
         let soy_m = obra.mandante.id == mid;
         let soy_c = obra.contratista.id == mid;
-        let mi_turno = p
-            .turno
-            .map(|r| match r {
-                Rol::Mandante => soy_m,
-                Rol::Contratista => soy_c,
-            })
-            .unwrap_or(false);
         let espera_a = match p.turno {
             Some(Rol::Mandante) if !soy_m => Some(obra.mandante.nombre.clone()),
             Some(Rol::Contratista) if !soy_c => Some(obra.contratista.nombre.clone()),
@@ -1355,7 +1363,11 @@ impl KonstruadoApp {
         );
         let soy_prop_enc = p.encerrado_por.as_ref().is_some_and(|q| q.id == mid);
         let fondeo_curso = v.linea(&obra.id, i).cloned();
-        let frenado = fondeo_curso.as_ref().is_some_and(caja::es_freno);
+        // Una sola regla para Dioxus y Compose: qué botones existen en cada estado.
+        let acc = caja::acciones_partida(&obra, i, &mid, &v.lineas_de(&obra.id, i));
+        let frenado = acc.frenado;
+        let nada_en_curso = acc.en_curso == caja::EnCurso::Nada;
+        let pagando = matches!(acc.en_curso, caja::EnCurso::PagoFirmando | caja::EnCurso::PagoEnRed);
         let saldo = caja::saldo_partida(
             ES,
             p.estado,
@@ -1397,10 +1409,17 @@ impl KonstruadoApp {
             Some("Todavía no toca. Cerrá la partida que está en curso.".to_string())
         } else if pendiente {
             Some("Los dos tienen que confirmar el encierre. El otro tiene que estar en línea.".to_string())
-        } else if encerrando && soy_prop_enc && !frenado && fondeo_curso.is_none() {
+        } else if encerrando && soy_prop_enc && !frenado && nada_en_curso {
             Some("Esperando que el otro confirme el encierre.".to_string())
-        } else if encerrando && !soy_prop_enc && !frenado && fondeo_curso.is_none() {
+        } else if encerrando && acc.confirmar_fondeo {
             Some("El otro quiere encerrar esta partida. Confirmar arma una sola transacción con los dos.".to_string())
+        } else if encerrando && acc.en_curso == caja::EnCurso::FondeoEnRed {
+            Some("El fondeo ya está en la red. No se puede cancelar; se encierra solo cuando entra en un bloque.".to_string())
+        } else if !cortada && p.estado == PartidaEstado::EnTrato && pagando {
+            Some(format!(
+                "Pago del {}% en curso. No hace falta volver a aceptar; se cierra cuando la transacción entra en un bloque.",
+                p.propuesto.unwrap_or(0)
+            ))
         } else if !cortada && p.estado == PartidaEstado::Encerrada && soy_m {
             Some("El contratista avisa cuando termina y propone cuánto se paga.".to_string())
         } else {
@@ -1432,7 +1451,7 @@ impl KonstruadoApp {
             sincronizando: !cortada && self.sincronizando(&obra),
             cortada,
             detalle: p.detalle.clone(),
-            puede_editar: pendiente && (soy_m || soy_c),
+            puede_editar: acc.editar_texto,
             recibo: if p.estado == PartidaEstado::Pagada {
                 p.recibo.as_ref().map(|r| {
                     format!(
@@ -1460,15 +1479,15 @@ impl KonstruadoApp {
                 .map(|q| format!("Encerró {} · {}", q.nombre, L.fmt_cuando(p.encerrado_cuando))),
             notas,
             pista,
-            puede_proponer_encerrar: pendiente && !contra && activa,
-            puede_cancelar_propuesta: encerrando && soy_prop_enc && !frenado,
-            // Misma regla que el escritorio (`caja::puede_empezar_fondeo_de_nuevo`).
+            // Todo sale de `caja::acciones_partida`, igual que en el escritorio.
             // `puede_reintentar_fondeo` queda como alias de UI (Android ORs ambos).
-            puede_reintentar_fondeo: caja::puede_empezar_fondeo_de_nuevo(encerrando, frenado),
-            puede_empezar_fondeo_de_nuevo: caja::puede_empezar_fondeo_de_nuevo(encerrando, frenado),
-            puede_confirmar_fondear: encerrando && !soy_prop_enc && !frenado && fondeo_curso.is_none(),
-            puede_no_encerrar: encerrando && !(soy_prop_enc && !frenado),
-            puede_avisar_termino: !cortada && p.estado == PartidaEstado::Encerrada && soy_c,
+            puede_proponer_encerrar: acc.proponer_encierre,
+            puede_cancelar_propuesta: acc.cancelar_propuesta,
+            puede_reintentar_fondeo: acc.empezar_fondeo_de_nuevo,
+            puede_empezar_fondeo_de_nuevo: acc.empezar_fondeo_de_nuevo,
+            puede_confirmar_fondear: acc.confirmar_fondeo,
+            puede_no_encerrar: acc.no_encerrar,
+            puede_avisar_termino: acc.avisar_termino,
             en_trato,
             propuesto: if en_trato { p.propuesto } else { None },
             propuesto_texto: if en_trato {
@@ -1477,9 +1496,14 @@ impl KonstruadoApp {
             } else {
                 None
             },
-            mi_turno: en_trato && mi_turno,
+            mi_turno: en_trato && acc.me_toca,
             espera_a: if en_trato { espera_a } else { None },
             max_nota: MAX_NOTA as u32,
+            puede_aceptar_pago: acc.aceptar_pago,
+            puede_contraofertar: acc.contraofertar,
+            puede_salir_local: acc.salir_local,
+            en_curso: caja::en_curso_corto(acc.en_curso, ES).map(str::to_string),
+            pago_en_curso: pagando,
         })
     }
 
@@ -1683,7 +1707,9 @@ impl KonstruadoApp {
         )
     }
 
-    /// Quita una oferta propia del tablero (sin contratista todavía).
+    /// Retira una oferta propia que ningún contratista tomó. Deja una lápida que
+    /// se replica: la oferta no vuelve con el gossip del otro y desaparece de su
+    /// tablero también. Misma regla que el escritorio (`retirar_oferta` del core).
     pub fn quitar_mi_oferta(&self, oferta_id: String) -> Result<String, FfiError> {
         let yo = self.yo()?;
         let oferta = self
@@ -1692,20 +1718,13 @@ impl KonstruadoApp {
             .into_iter()
             .find(|o| o.id == oferta_id)
             .ok_or_else(|| fallo("Esa oferta ya no está en el tablero."))?;
-        if oferta.mandante.id != yo.id {
-            return Err(fallo("Solo podés quitar tus propias ofertas."));
-        }
-        let todas = self.nodo.obras_todas();
-        if !oferta_en_tablero(&oferta_id, &todas) {
-            return Err(fallo(
-                "Esa oferta ya tiene obra conjunta. Archivá la obra; no la quites como oferta.",
-            ));
-        }
+        let retiro = retirar_oferta(&oferta, &yo.id, &self.sec(), &self.nodo.obras_todas())
+            .map_err(err_core)?;
         let _e = self.rt.enter();
-        self.nodo.quitar(&oferta_id);
+        self.nodo.retirar(retiro);
         drop(_e);
         self.persistir();
-        Ok("Quité la oferta del tablero.".into())
+        Ok("Quité la oferta. Tampoco va a aparecer en el tablero del contratista.".into())
     }
 
     /// Cancela fondeo/propuesta de encierre de una partida solo en este equipo. No mueve fondos en cadena.

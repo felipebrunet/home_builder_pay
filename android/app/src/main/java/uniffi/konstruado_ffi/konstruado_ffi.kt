@@ -1427,7 +1427,7 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if (lib.uniffi_konstruado_ffi_checksum_method_konstruadoapp_quitar_destino() != 6074.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_konstruado_ffi_checksum_method_konstruadoapp_quitar_mi_oferta() != 8670.toShort()) {
+    if (lib.uniffi_konstruado_ffi_checksum_method_konstruadoapp_quitar_mi_oferta() != 14638.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_konstruado_ffi_checksum_method_konstruadoapp_rechazar_cierre() != 30182.toShort()) {
@@ -2031,7 +2031,9 @@ public interface KonstruadoAppInterface {
     fun `quitarDestino`(`destino`: kotlin.String)
     
     /**
-     * Quita una oferta propia del tablero (sin contratista todavía).
+     * Retira una oferta propia que ningún contratista tomó. Deja una lápida que
+     * se replica: la oferta no vuelve con el gossip del otro y desaparece de su
+     * tablero también. Misma regla que el escritorio (`retirar_oferta` del core).
      */
     fun `quitarMiOferta`(`ofertaId`: kotlin.String): kotlin.String
     
@@ -2809,7 +2811,9 @@ open class KonstruadoApp: Disposable, AutoCloseable, KonstruadoAppInterface
 
     
     /**
-     * Quita una oferta propia del tablero (sin contratista todavía).
+     * Retira una oferta propia que ningún contratista tomó. Deja una lápida que
+     * se replica: la oferta no vuelve con el gossip del otro y desaparece de su
+     * tablero también. Misma regla que el escritorio (`retirar_oferta` del core).
      */
     @Throws(FfiException::class)override fun `quitarMiOferta`(`ofertaId`: kotlin.String): kotlin.String {
             return FfiConverterString.lift(
@@ -3800,7 +3804,24 @@ data class PartidaVista (
     var `propuestoTexto`: kotlin.String?, 
     var `miTurno`: kotlin.Boolean, 
     var `esperaA`: kotlin.String?, 
-    var `maxNota`: kotlin.UInt
+    var `maxNota`: kotlin.UInt, 
+    /**
+     * En trato, me toca y no hay un pago ya andando (regla de `caja::acciones_partida`).
+     */
+    var `puedeAceptarPago`: kotlin.Boolean, 
+    var `puedeContraofertar`: kotlin.Boolean, 
+    /**
+     * "Abandonar partida (solo este equipo)": solo cuando hay un fondeo local que limpiar.
+     */
+    var `puedeSalirLocal`: kotlin.Boolean, 
+    /**
+     * Texto corto de lo que está en curso ("Pago esperando bloque"…), para un chip.
+     */
+    var `enCurso`: kotlin.String?, 
+    /**
+     * El pago 2-de-2 ya se está firmando o espera bloque.
+     */
+    var `pagoEnCurso`: kotlin.Boolean
 ) {
     
     companion object
@@ -3850,6 +3871,11 @@ public object FfiConverterTypePartidaVista: FfiConverterRustBuffer<PartidaVista>
             FfiConverterBoolean.read(buf),
             FfiConverterOptionalString.read(buf),
             FfiConverterUInt.read(buf),
+            FfiConverterBoolean.read(buf),
+            FfiConverterBoolean.read(buf),
+            FfiConverterBoolean.read(buf),
+            FfiConverterOptionalString.read(buf),
+            FfiConverterBoolean.read(buf),
         )
     }
 
@@ -3891,7 +3917,12 @@ public object FfiConverterTypePartidaVista: FfiConverterRustBuffer<PartidaVista>
             FfiConverterOptionalString.allocationSize(value.`propuestoTexto`) +
             FfiConverterBoolean.allocationSize(value.`miTurno`) +
             FfiConverterOptionalString.allocationSize(value.`esperaA`) +
-            FfiConverterUInt.allocationSize(value.`maxNota`)
+            FfiConverterUInt.allocationSize(value.`maxNota`) +
+            FfiConverterBoolean.allocationSize(value.`puedeAceptarPago`) +
+            FfiConverterBoolean.allocationSize(value.`puedeContraofertar`) +
+            FfiConverterBoolean.allocationSize(value.`puedeSalirLocal`) +
+            FfiConverterOptionalString.allocationSize(value.`enCurso`) +
+            FfiConverterBoolean.allocationSize(value.`pagoEnCurso`)
     )
 
     override fun write(value: PartidaVista, buf: ByteBuffer) {
@@ -3933,6 +3964,11 @@ public object FfiConverterTypePartidaVista: FfiConverterRustBuffer<PartidaVista>
             FfiConverterBoolean.write(value.`miTurno`, buf)
             FfiConverterOptionalString.write(value.`esperaA`, buf)
             FfiConverterUInt.write(value.`maxNota`, buf)
+            FfiConverterBoolean.write(value.`puedeAceptarPago`, buf)
+            FfiConverterBoolean.write(value.`puedeContraofertar`, buf)
+            FfiConverterBoolean.write(value.`puedeSalirLocal`, buf)
+            FfiConverterOptionalString.write(value.`enCurso`, buf)
+            FfiConverterBoolean.write(value.`pagoEnCurso`, buf)
     }
 }
 

@@ -46,6 +46,8 @@ fun PartidaScreen(obraId: String, indice: UInt, banner: Banner) {
     Pista(p.obraNombre)
     Titulo("${indice + 1u}  ${p.titulo}")
     AssistChip(onClick = {}, label = { Text(p.label) })
+    // Lo que está en curso (p. ej. "Pago esperando bloque"): misma regla que el escritorio.
+    p.enCurso?.let { AssistChip(onClick = {}, label = { Text(it) }) }
     Lead(p.lead)
     // Una sola línea de estado de caja/fondeo (sin repetir "Encerrando").
     val estadoCaja = p.saldoEstado ?: p.linea?.takeIf { !p.lineaFreno }
@@ -134,11 +136,14 @@ fun PartidaScreen(obraId: String, indice: UInt, banner: Banner) {
     }
     if (p.enTrato) {
         p.propuestoTexto?.let { Lead(it) }
-        p.esperaA?.let { Pista("Esperando a $it.") }
-        if (p.miTurno) {
+        if (!p.pagoEnCurso) p.esperaA?.let { Pista("Esperando a $it.") }
+        // Con el pago ya andando no se ofrece aceptar ni contraofertar otra vez.
+        if (p.puedeAceptarPago) {
             Primario("Aceptar ${p.propuesto ?: 0u}% y pagar") {
                 acciones.correr("Firmando el pago 2-de-2 con el otro…", yaEnPantalla = yaVisible) { app.aceptarYPagar(obraId, indice) }
             }
+        }
+        if (p.puedeContraofertar) {
             OutlinedTextField(pct, { pct = it }, label = { Text("Otro porcentaje") },
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number), modifier = Modifier.fillMaxWidth())
             OutlinedTextField(nota, { if (it.length <= p.maxNota.toInt()) nota = it },
@@ -149,7 +154,7 @@ fun PartidaScreen(obraId: String, indice: UInt, banner: Banner) {
             }
         }
     }
-    if (!p.cortada) {
+    if (p.puedeSalirLocal) {
         Secundario("Abandonar partida (solo este equipo)") {
             acciones.correr(
                 "Cancelé fondeo/propuesta locales. Fondos en cadena intactos.",
