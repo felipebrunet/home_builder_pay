@@ -1,27 +1,19 @@
 [package]
-name = "konstruado"
+name = "konstruado-motor"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Peer-to-peer construction escrow"
+description = "Motor compartido de Konstruado (caja, respaldo, persistencia, i18n) para escritorio y Android"
 
 [dependencies]
 xmr-joint.workspace = true
 konstruado-core.workspace = true
 konstruado-net.workspace = true
-konstruado-motor.workspace = true
-dioxus = { version = "0.7", features = ["desktop"] }
-tokio = { version = "1", features = ["time", "rt", "rt-multi-thread"] }
+tokio = { version = "1", features = ["time", "rt", "sync"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
-rfd = "0.17"
-printpdf = "0.7"
 hex = "0.4"
 zeroize = "1"
 rand_core = { version = "0.6", features = ["getrandom"] }
-
-# Portapapeles del escritorio (copiar la semilla y borrarlo a los 60 s).
-[target.'cfg(target_os = "linux")'.dependencies]
-gtk = "0.18"

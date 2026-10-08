@@ -3027,6 +3027,7 @@ dependencies = [
  "gtk",
  "hex",
  "konstruado-core",
+ "konstruado-motor",
  "konstruado-net",
  "printpdf",
  "rand_core 0.6.4",
@@ -3058,6 +3059,7 @@ dependencies = [
  "chrono",
  "hex",
  "konstruado-core",
+ "konstruado-motor",
  "konstruado-net",
  "once_cell",
  "parking_lot",
@@ -3068,6 +3070,22 @@ dependencies = [
  "tokio",
  "uniffi",
  "uuid",
+ "xmr-joint",
+ "zeroize",
+]
+
+[[package]]
+name = "konstruado-motor"
+version = "0.2.9"
+dependencies = [
+ "chrono",
+ "hex",
+ "konstruado-core",
+ "konstruado-net",
+ "rand_core 0.6.4",
+ "serde",
+ "serde_json",
+ "tokio",
  "xmr-joint",
  "zeroize",
 ]

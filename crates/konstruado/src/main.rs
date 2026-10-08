@@ -1,10 +1,7 @@
-mod caja;
+use konstruado_motor::{caja, i18n, persist, respaldo};
 mod export;
 mod help;
-mod i18n;
-mod persist;
 mod portapapeles;
-mod respaldo;
 
 use std::time::Duration;
 

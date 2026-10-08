@@ -22,6 +22,7 @@ path = "src/bin/konstruado-par.rs"
 uniffi = { version = "0.29.4", features = ["cli"] }
 konstruado-core = { path = "../konstruado-core" }
 konstruado-net = { path = "../konstruado-net" }
+konstruado-motor = { path = "../konstruado-motor" }
 xmr-joint = { path = "../xmr-joint" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

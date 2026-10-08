@@ -10,21 +10,7 @@
 
 uniffi::setup_scaffolding!();
 
-#[allow(dead_code)]
-#[path = "../../konstruado/src/persist.rs"]
-mod persist;
-
-#[allow(dead_code, clippy::all)]
-#[path = "../../konstruado/src/caja.rs"]
-mod caja;
-
-#[allow(dead_code)]
-#[path = "../../konstruado/src/i18n.rs"]
-mod i18n;
-
-#[allow(dead_code)]
-#[path = "../../konstruado/src/respaldo.rs"]
-mod respaldo;
+use konstruado_motor::{caja, i18n, persist, respaldo};
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};

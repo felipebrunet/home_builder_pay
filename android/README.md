@@ -3,10 +3,10 @@
 App nativa en **Jetpack Compose (español)** que corre el flujo completo de obra
 igual que el escritorio. La lógica es la misma en Rust, expuesta por UniFFI:
 
-- `crates/konstruado-ffi` incluye **tal cual** `crates/konstruado/src/caja.rs`
-  (motor de Monero: DKG FROST, fondeo CLSAG cooperativo, gasto FROST, scan,
-  envío, respaldos), `persist.rs` e `i18n.rs` (con `#[path]`), más
-  `konstruado-core` y `konstruado-net`.
+- `crates/konstruado-ffi` usa la lib compartida `crates/konstruado-motor`
+  (`caja.rs`: motor de Monero, DKG FROST, fondeo CLSAG cooperativo, gasto FROST,
+  scan, envío, respaldos; `respaldo.rs`, `persist.rs`, `i18n.rs`), la misma que
+  usa el escritorio, más `konstruado-core` y `konstruado-net`.
 - Tor = **Orbot externo** (SOCKS 127.0.0.1:9050). No hay tor/Arti dentro del APK.
 - Solo **Monero stagenet**. Por defecto `https://stagenet.xmr.kernal.eu:38089` (público). En **Cuenta → Nodo Monero** podés poner el tuyo (p. ej. `http://100.x.y.z:38081` por Tailscale) y queda en `filesDir/konstruado/daemon.url`; vacío / «Usar por defecto» vuelve al público.
 
@@ -65,7 +65,7 @@ Orbot en modo VPN por app con Konstruado **sin** marcar sirve: el SOCKS sigue en
 - Encerrada / Pagada se marcan **solo cuando el motor ve la transacción en el scan** (`Hecho` con `visto`), igual que el escritorio.
 - Errores del motor (sin saldo, trabadas, sin semilla, el otro no está en línea, sincronizando…) se muestran tal cual, en español.
 - **Ver las 25 palabras** (billetera personal): advertencia, grilla, altura de restauración, copiar con `ClipDescription.EXTRA_IS_SENSITIVE` (API 33+) y borrado del portapapeles a los 60 s; `FLAG_SECURE` mientras se ven. Dirección y view key privadas aparte (solo lectura).
-- **Respaldo completo** con el selector de Android (SAF): `CreateDocument` para exportar el `.kbak`, `OpenDocument` para restaurar. Mismo formato y mismas verificaciones que el escritorio (`respaldo.rs` incluido con `#[path]`). Restaurar deja todo en `restaurar.listo/` y reinicia el proceso (`ReinicioActivity` en `:reinicio`); al arrancar, `KonstruadoApp.nuevo` aplica el cambio y deja lo anterior en `previo-<fecha>/`.
+- **Respaldo completo** con el selector de Android (SAF): `CreateDocument` para exportar el `.kbak`, `OpenDocument` para restaurar. Mismo formato y mismas verificaciones que el escritorio (`konstruado-motor/src/respaldo.rs`, el mismo código). Restaurar deja todo en `restaurar.listo/` y reinicia el proceso (`ReinicioActivity` en `:reinicio`); al arrancar, `KonstruadoApp.nuevo` aplica el cambio y deja lo anterior en `previo-<fecha>/`.
 - Los respaldos sueltos de 0.2.7 (25 palabras, share, obras) se importan en **Billetera → Respaldos y recuperación → Avanzado**; ya no se exportan por separado.
 - Traba de desbloqueo: `caja::traba_partida` (bloque del fondeo + 10 contra la punta del nodo, que se refresca cada minuto). Mientras falta, «Avisar que terminé» / «Aceptar X% y pagar» se ven apagados con «Podés marcarla terminada en ~N bloques (~M min, bloque X)».
 - «Usar el máximo» manda todo el saldo libre menos el fee; los pagos de la caja y los envíos exactos dejan la salida extra en 0 XMR (antes 1 piconero).

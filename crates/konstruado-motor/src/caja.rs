@@ -1554,18 +1554,6 @@ impl Caja {
         self.inner.lock().unwrap().pedir_fondeo(obra, partida, yo)
     }
 
-    /// Vuelve a armar el fondeo sin borrar el pedido a mitad de una transacción ya publicada.
-    pub fn reintentar_fondeo(
-        &self,
-        obra: &Obra,
-        partida: usize,
-        yo: &Persona,
-        nodo: &Nodo,
-    ) -> Result<(), String> {
-        // Mismo camino que «Empezar de nuevo»: decoys frescos en los dos lados.
-        self.empezar_fondeo_de_nuevo(obra, partida, yo, nodo)
-    }
-
     /// Borra decoys/propuesta locales, avisa al peer con `fund-abort` y pide fondeo fresco.
     pub fn empezar_fondeo_de_nuevo(
         &self,
@@ -1622,7 +1610,6 @@ struct Motor {
     podar_en: Option<Instant>,
     vista: CajaVista,
     ocupado: Option<Pendiente>,
-    generacion: u64,
     libro: Libro,
     pedido_envio: Option<PedidoEnvio>,
     retro: usize,
@@ -1642,7 +1629,6 @@ struct Motor {
 }
 
 struct Pendiente {
-    gen: u64,
     celda: Arc<Mutex<Option<Listo>>>,
 }
 
@@ -1815,7 +1801,6 @@ impl Motor {
             podar_en: None,
             vista: CajaVista::vacia(),
             ocupado: None,
-            generacion: 0,
             libro: Libro::vacio(),
             pedido_envio: None,
             retro: 0,
@@ -1969,73 +1954,6 @@ impl Motor {
             },
         );
         Ok(())
-    }
-
-    fn reintentar_fondeo(&mut self, obra: &Obra, partida: usize, yo: &Persona) -> Result<(), String> {
-        let key = (obra.id.clone(), partida);
-        let ya_pidio = self.fondeos.get(&key).is_some_and(|f| f.avise_pedir);
-        let sigue_publicado = self
-            .fondeos
-            .get(&key)
-            .is_some_and(|f| f.txid.is_some() && f.error.is_none());
-        if sigue_publicado {
-            return Ok(());
-        }
-        if self
-            .fondeos
-            .get(&key)
-            .is_some_and(|f| f.solo_aviso && f.txid.is_none())
-        {
-            self.fondeos.remove(&key);
-            return self.pedir_fondeo(obra, partida, yo);
-        }
-        if self.fondeos.contains_key(&key) {
-            let peer = self
-                .fondeos
-                .get(&key)
-                .map(|f| f.peer.clone())
-                .unwrap_or_default();
-            let soy_mandante = self.fondeos.get(&key).is_some_and(|f| f.soy_mandante);
-            let capital = self.fondeos.get(&key).map(|f| f.capital).unwrap_or(0);
-            let viene = self.fondeos.get(&key).is_some_and(|f| f.viene_del_par);
-            let minimo = if soy_mandante {
-                capital.saturating_add(FEE_CUSHION)
-            } else {
-                capital
-            };
-            let (aviso, espera) = self.clasificar_fondeo(&obra.id, minimo);
-            let hay_aviso = aviso.is_some();
-            self.fondeos.insert(
-                key,
-                Fondeo {
-                    peer,
-                    capital,
-                    soy_mandante,
-                    propuesta: None,
-                    outputs: None,
-                    esqueleto: None,
-                    sobre: None,
-                    blob: None,
-                    txid: None,
-                    visto: false,
-                    error: None,
-                    aviso,
-                    aviso_enviado: !hay_aviso,
-                    ultimo: None,
-                    avisar: !ya_pidio && !viene && !hay_aviso && !espera,
-                    avise_pedir: false,
-                    espera_moneda: espera,
-                    dije_busqueda: !espera,
-                    viene_del_par: viene,
-                    solo_aviso: false,
-                    par_buscando: false,
-                    abortar: ya_pidio,
-                    gastadas: None,
-                },
-            );
-            return Ok(());
-        }
-        self.pedir_fondeo(obra, partida, yo)
     }
 
     fn cancelar_fondeo(&mut self, obra: &str, partida: usize) {
@@ -2851,11 +2769,8 @@ impl Motor {
         if self.ocupado.is_some() {
             return;
         }
-        self.generacion = self.generacion.wrapping_add(1);
-        let gen = self.generacion;
         let celda = Arc::new(Mutex::new(None));
         self.ocupado = Some(Pendiente {
-            gen,
             celda: celda.clone(),
         });
         tokio::spawn(async move {
@@ -3433,10 +3348,8 @@ impl Motor {
     }
 
     fn ocupar(&mut self) -> Arc<Mutex<Option<Listo>>> {
-        self.generacion = self.generacion.wrapping_add(1);
         let celda = Arc::new(Mutex::new(None));
         self.ocupado = Some(Pendiente {
-            gen: self.generacion,
             celda: celda.clone(),
         });
         celda

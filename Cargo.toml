@@ -4,6 +4,7 @@ members = [
     "crates/xmr-joint",
     "crates/konstruado-core",
     "crates/konstruado-net",
+    "crates/konstruado-motor",
     "crates/konstruado",
     "crates/konstruado-ffi",
 ]
@@ -70,4 +71,5 @@ monero-oxide = { opt-level = 3 }
 xmr-joint = { path = "crates/xmr-joint" }
 konstruado-core = { path = "crates/konstruado-core" }
 konstruado-net = { path = "crates/konstruado-net" }
+konstruado-motor = { path = "crates/konstruado-motor" }
 konstruado-ffi = { path = "crates/konstruado-ffi" }

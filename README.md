@@ -11,7 +11,7 @@ Peer-to-peer construction escrow on Monero **stagenet**. One monorepo:
 | `android/` | Jetpack Compose APK (Spanish UI). Tor via **Orbot** (SOCKS), not bundled. |
 | `crates/konstruado-core`, `konstruado-net`, `xmr-joint` | Shared deal logic, Tor rendezvous, stagenet wallet / 2-of-2 box. |
 
-The deal, the meeting room, and a stagenet wallet live in the desktop window (and the same flow on the phone). Deal and money logic is shared Rust (`konstruado-core`, `konstruado-net`, `xmr-joint`, `crates/konstruado/src/caja.rs`); desktop and Android differ only in UI, Tor (bundled `tor` vs Orbot) and who hosts the room.
+The deal, the meeting room, and a stagenet wallet live in the desktop window (and the same flow on the phone). Deal and money logic is shared Rust (`konstruado-core`, `konstruado-net`, `xmr-joint`, `crates/konstruado-motor`); desktop and Android differ only in UI, Tor (bundled `tor` vs Orbot) and who hosts the room.
 
 The two people do not see each other like a chat. Roles:
 
@@ -81,7 +81,7 @@ Atomic spending and the multisig/FROST box path stay separate in the code; do no
 | 24 | XChaCha20-Poly1305 nonce |
 | rest | ciphertext of a JSON document; the 59-byte header is the AAD |
 
-The JSON holds the full `estado.json` profile, the seed backup text and its height, each job's share (`xmr::ShareBackup`) with the box's scan start, and the node URL. Password: at least 8 characters, nothing stored. Code: `xmr_joint::sobre` (envelope) and `crates/konstruado/src/respaldo.rs` (contents, restore), shared by desktop and Android.
+The JSON holds the full `estado.json` profile, the seed backup text and its height, each job's share (`xmr::ShareBackup`) with the box's scan start, and the node URL. Password: at least 8 characters, nothing stored. Code: `xmr_joint::sobre` (envelope) and `crates/konstruado-motor/src/respaldo.rs` (contents, restore), shared by desktop and Android.
 
 Restore (welcome screen **Restaurar desde respaldo**, or the same section in Billetera): decrypt, check the seed, check every share against its job and role (same checks as a single share import), show a summary. If the device already has an account, seed or shares, an explicit **Reemplazar lo de este equipo** is required. Then everything is written to `restaurar.tmp/`, renamed to `restaurar.listo/`, and the app restarts; at startup the old files move to `previo-<date>/` and the new ones take their place (resumable if cut). The wallet and each box scan from the stored height. Newer deal progress comes back from the other person through the room.
 
