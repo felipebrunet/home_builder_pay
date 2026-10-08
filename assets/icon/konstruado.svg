@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Ícono de Konstruado: pala y picota cruzadas. Diseño original, plano, 3 colores
+     de la paleta de la app (rojo #b8321f, beige #f4e4cc, tinta #1c120c).
+     Fuente única: los PNG, el ícono de ventana y el adaptive icon de Android salen de acá
+     (ver assets/icon/build-icons.sh). -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <title>Konstruado</title>
+  <rect width="512" height="512" rx="112" fill="#b8321f"/>
+  <g id="arte" transform="translate(256 270) scale(0.84) translate(-256 -256)">
+    <!-- Picota: cabeza arriba a la derecha -->
+    <g transform="rotate(42 256 256)">
+      <rect x="236" y="110" width="40" height="342" rx="20" fill="#1c120c"/>
+      <path d="M98 146 Q176 80 256 72 Q336 80 414 146 Q332 124 256 128 Q180 124 98 146 Z" fill="#f4e4cc"/>
+      <rect x="226" y="60" width="60" height="78" rx="14" fill="#f4e4cc"/>
+    </g>
+    <!-- Pala: hoja arriba a la izquierda; va encima, con un borde rojo que la separa -->
+    <g transform="rotate(-42 256 256)">
+      <g fill="#b8321f" stroke="#b8321f" stroke-width="16" stroke-linejoin="round">
+        <rect x="236" y="150" width="40" height="290" rx="20"/>
+        <rect x="204" y="420" width="104" height="34" rx="17"/>
+        <path d="M201 160 V96 Q201 60 256 30 Q311 60 311 96 V160 Q256 182 201 160 Z"/>
+      </g>
+      <rect x="236" y="150" width="40" height="290" rx="20" fill="#1c120c"/>
+      <rect x="204" y="420" width="104" height="34" rx="17" fill="#1c120c"/>
+      <path d="M201 160 V96 Q201 60 256 30 Q311 60 311 96 V160 Q256 182 201 160 Z" fill="#f4e4cc"/>
+    </g>
+  </g>
+</svg>

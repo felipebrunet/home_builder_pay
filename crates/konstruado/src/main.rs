@@ -55,9 +55,14 @@ fn main() {
         .with_title(concat!("Konstruado ", env!("CARGO_PKG_VERSION")))
         .with_inner_size(dioxus::desktop::LogicalSize::new(1240.0, 800.0))
         .with_min_inner_size(dioxus::desktop::LogicalSize::new(420.0, 560.0));
-    let cfg = dioxus::desktop::Config::new()
+    let mut cfg = dioxus::desktop::Config::new()
         .with_window(window)
         .with_menu(help::menu());
+    // Ícono de ventana: pala y picota (assets/icon/konstruado.svg → generar.py).
+    match dioxus::desktop::icon_from_memory(include_bytes!("../assets/konstruado-256.png")) {
+        Ok(icono) => cfg = cfg.with_icon(icono),
+        Err(e) => eprintln!("ícono: {e}"),
+    }
     dioxus::LaunchBuilder::desktop().with_cfg(cfg).launch(App);
 }
 

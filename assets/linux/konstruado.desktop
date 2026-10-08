@@ -1,0 +1,14 @@
+[Desktop Entry]
+Type=Application
+Version=1.5
+Name=Konstruado
+GenericName=Obras con garantía en Monero
+GenericName[en]=Building works with Monero escrow
+Comment=Pagos por partida entre mandante y contratista, con multisig 2-de-2
+Comment[en]=Stage payments between client and contractor, with 2-of-2 multisig
+Exec=konstruado
+Icon=konstruado
+Terminal=false
+Categories=Office;Finance;
+Keywords=monero;obra;construcción;construction;escrow;
+StartupWMClass=konstruado

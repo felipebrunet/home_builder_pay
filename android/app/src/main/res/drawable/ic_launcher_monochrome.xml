@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Generado por assets/icon/generar.py desde assets/icon/konstruado.svg. No editar. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp" android:height="108dp"
+    android:viewportWidth="512" android:viewportHeight="512">
+  <group android:pivotX="256" android:pivotY="256" android:scaleX="0.64" android:scaleY="0.64" android:translateY="10.6667">
+    <group android:pivotX="256" android:pivotY="256" android:rotation="42">
+      <path android:pathData="M256,110H256A20,20 0 0 1 276,130V432A20,20 0 0 1 256,452H256A20,20 0 0 1 236,432V130A20,20 0 0 1 256,110Z" android:fillColor="#FFFFFFFF"/>
+      <path android:pathData="M98 146 Q176 80 256 72 Q336 80 414 146 Q332 124 256 128 Q180 124 98 146 Z" android:fillColor="#FFFFFFFF"/>
+      <path android:pathData="M240,60H272A14,14 0 0 1 286,74V124A14,14 0 0 1 272,138H240A14,14 0 0 1 226,124V74A14,14 0 0 1 240,60Z" android:fillColor="#FFFFFFFF"/>
+    </group>
+    <group android:pivotX="256" android:pivotY="256" android:rotation="-42">
+      <path android:pathData="M256,150H256A20,20 0 0 1 276,170V420A20,20 0 0 1 256,440H256A20,20 0 0 1 236,420V170A20,20 0 0 1 256,150Z" android:fillColor="#FFFFFFFF"/>
+      <path android:pathData="M221,420H291A17,17 0 0 1 308,437V437A17,17 0 0 1 291,454H221A17,17 0 0 1 204,437V437A17,17 0 0 1 221,420Z" android:fillColor="#FFFFFFFF"/>
+      <path android:pathData="M201 160 V96 Q201 60 256 30 Q311 60 311 96 V160 Q256 182 201 160 Z" android:fillColor="#FFFFFFFF"/>
+    </group>
+  </group>
+</vector>
