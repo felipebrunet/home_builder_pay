@@ -160,31 +160,6 @@ fun Lead(t: String) = Text(t, style = MaterialTheme.typography.bodyLarge)
 @Composable
 fun ErrorTexto(t: String) = Text(t, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.error)
 
-/** Texto largo (dirección, txid, view key) seleccionable con botón Copiar. */
-@Composable
-fun Copiable(etiqueta: String, valor: String) {
-    val clip = LocalClipboardManager.current
-    val ctx = LocalContext.current
-    Column(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
-        Text(etiqueta, style = MaterialTheme.typography.labelMedium)
-        SelectionContainer {
-            Text(valor, fontFamily = FontFamily.Monospace, fontSize = 12.sp)
-        }
-        androidx.compose.material3.TextButton(onClick = {
-            clip.setText(AnnotatedString(valor))
-            Toast.makeText(ctx, "Copiado", Toast.LENGTH_SHORT).show()
-        }) { Text("Copiar") }
-    }
-}
-
-@Composable
-fun Primario(t: String, enabled: Boolean = true, onClick: () -> Unit) =
-    Button(onClick = onClick, enabled = enabled, modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)) { Text(t) }
-
-@Composable
-fun Secundario(t: String, enabled: Boolean = true, onClick: () -> Unit) =
-    OutlinedButton(onClick = onClick, enabled = enabled, modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)) { Text(t) }
-
 fun escribirUri(c: Context, uri: Uri, texto: String) {
     c.contentResolver.openOutputStream(uri, "wt")?.use { it.write(texto.toByteArray()) }
         ?: error("No pude abrir el archivo elegido")

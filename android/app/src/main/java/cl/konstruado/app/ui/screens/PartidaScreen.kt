@@ -1,11 +1,10 @@
 package cl.konstruado.app.ui.screens
 
-import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
@@ -19,18 +18,52 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import cl.konstruado.app.AppHolder
+import cl.konstruado.app.ui.Ayuda
 import cl.konstruado.app.ui.Banner
+import cl.konstruado.app.ui.Chip
+import cl.konstruado.app.ui.Chips
+import cl.konstruado.app.ui.ComoFunciona
 import cl.konstruado.app.ui.Copiable
+import cl.konstruado.app.ui.Divisor
 import cl.konstruado.app.ui.ErrorTexto
+import cl.konstruado.app.ui.EstadoTarjeta
 import cl.konstruado.app.ui.Lead
+import cl.konstruado.app.ui.Peligro
 import cl.konstruado.app.ui.Pista
+import cl.konstruado.app.ui.Plegable
 import cl.konstruado.app.ui.Primario
 import cl.konstruado.app.ui.Secundario
-import cl.konstruado.app.ui.Seccion
-import cl.konstruado.app.ui.Titulo
+import cl.konstruado.app.ui.Tarjeta
+import cl.konstruado.app.ui.TextoBoton
+import cl.konstruado.app.ui.Tono
 import cl.konstruado.app.ui.humano
 import cl.konstruado.app.ui.rememberAcciones
 import cl.konstruado.app.ui.sondear
+import uniffi.konstruado_ffi.PartidaVista
+
+private const val SINCRONIZANDO = "Sincronizando el trato… las acciones esperan a bajar el estado del otro."
+
+/** Estado de la partida: tono, título de una línea y detalle (2 líneas reservadas). */
+private data class EstadoPartida(val tono: Tono, val titulo: String, val detalle: String, val enCurso: Boolean)
+
+private fun estadoPartida(p: PartidaVista): EstadoPartida {
+    // Una sola línea de estado de caja/fondeo (sin repetir "Encerrando"); misma regla que el escritorio.
+    val estadoCaja = p.saldoEstado ?: p.linea?.takeIf { !p.lineaFreno }
+    if (p.lineaFreno) return EstadoPartida(Tono.Error, "Frenado", p.linea ?: "", false)
+    val enCurso = p.enCurso != null || p.pagoEnCurso || p.sincronizando
+    val titulo = p.enCurso ?: estadoCaja ?: p.label
+    val detalle = listOfNotNull(
+        p.saldoDetalle,
+        p.linea?.takeIf { it != titulo && it != estadoCaja },
+        if (p.sincronizando) SINCRONIZANDO else null,
+        estadoCaja?.takeIf { it != titulo },
+    ).firstOrNull() ?: p.lead
+    val tono = when {
+        enCurso -> Tono.Espera
+        else -> tonoPartida(p.estado)
+    }
+    return EstadoPartida(tono, titulo, detalle, enCurso)
+}
 
 @Composable
 fun PartidaScreen(obraId: String, indice: UInt, banner: Banner) {
@@ -42,126 +75,152 @@ fun PartidaScreen(obraId: String, indice: UInt, banner: Banner) {
     var nota by remember(obraId, indice) { mutableStateOf("") }
     var detalle by remember(obraId, indice) { mutableStateOf(p.detalle) }
     var confirmaEncerrar by remember(obraId, indice) { mutableStateOf(false) }
-
-    Pista(p.obraNombre)
-    Titulo("${indice + 1u}  ${p.titulo}")
-    AssistChip(onClick = {}, label = { Text(p.label) })
-    // Lo que está en curso (p. ej. "Pago esperando bloque"): misma regla que el escritorio.
-    p.enCurso?.let { AssistChip(onClick = {}, label = { Text(it) }) }
-    Lead(p.lead)
-    // Una sola línea de estado de caja/fondeo (sin repetir "Encerrando").
-    val estadoCaja = p.saldoEstado ?: p.linea?.takeIf { !p.lineaFreno }
-    estadoCaja?.let { Lead(it) }
-    p.saldoDetalle?.let { Pista(it) }
-    p.candado?.let { Pista(it) }
-    p.xmrPorLado?.let { Pista(it) }
-    p.cajaDireccion?.let { Copiable("Caja stagenet", it) }
-    p.fondeoTxid?.let { Copiable("Fondeo (txid)", it) }
-    p.pagoTxid?.let { Copiable("Pago (txid)", it) }
-    // Freno del motor: solo en el cuerpo (rojo). El banner no lo repite.
-    if (p.lineaFreno) p.linea?.let { ErrorTexto(it) }
-    else if (p.linea != null && p.linea != estadoCaja) Pista(p.linea!!)
-    if (p.sincronizando) Pista("Sincronizando el trato… las acciones esperan a bajar el estado del otro.")
-    p.recibo?.let { Card(Modifier.fillMaxWidth().padding(vertical = 4.dp)) { Text(it, Modifier.padding(12.dp)) } }
-    p.cerradoTexto?.let { Pista(it) }
-    p.encerro?.let { Pista(it) }
     val yaVisible = {
         listOfNotNull(
-            p.linea,
-            p.pista,
-            p.saldoEstado,
-            p.saldoDetalle,
+            p.linea, p.pista, p.saldoEstado, p.saldoDetalle,
             if (p.sincronizando) "Sincronizando el trato" else null,
             if (p.sincronizando) "El otro no está en línea" else null,
         )
     }
+    val e = estadoPartida(p)
 
-    if (p.puedeEditar) {
-        OutlinedTextField(detalle, { detalle = it }, label = { Text("Texto") }, modifier = Modifier.fillMaxWidth())
-        Secundario("Guardar texto") { acciones.correr("Texto guardado.", yaEnPantalla = yaVisible) { app.editarDetalle(obraId, indice, detalle) } }
-    }
-    if (p.notas.isNotEmpty()) {
-        Seccion("Hilo")
-        p.notas.forEach { n ->
-            Card(Modifier.fillMaxWidth().padding(vertical = 2.dp)) {
-                Column(Modifier.padding(10.dp)) {
-                    Text(n.cabeza, fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.bodySmall)
-                    if (n.cifrada) Pista(n.cuerpo) else if (n.cuerpo.isNotEmpty()) Text(n.cuerpo)
+    Tarjeta("Ahora") {
+        Ayuda(p.obraNombre, maxLines = 1)
+        Text("${indice + 1u}  ${p.titulo}", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
+        Chips {
+            // Lo que está en curso va en la tarjeta de estado de abajo (sin repetirlo acá).
+            Chip(p.label, tonoPartida(p.estado))
+            if (p.lineaFreno) Chip("frenado", Tono.Error)
+            if (p.miTurno && !p.lineaFreno && !p.pagoEnCurso && p.enCurso == null) Chip("te toca", Tono.Ok)
+            if (!p.miTurno && !p.pagoEnCurso) p.esperaA?.let { Chip("esperando a $it", Tono.Espera) }
+        }
+        if (e.detalle != p.lead) Ayuda(p.lead)
+        EstadoTarjeta(e.tono, e.titulo, e.detalle, e.enCurso, maxLineas = if (p.lineaFreno) 8 else 3)
+        p.pista?.let { Ayuda(it) }
+
+        // Solo las acciones válidas ahora (flags de `acciones_partida`, compartidas con el escritorio).
+        if (p.puedeProponerEncerrar) {
+            if (confirmaEncerrar) {
+                Primario("Proponer encerrar") {
+                    acciones.correr("Propuesta enviada. Falta que el otro confirme y fondee.", alTerminar = { confirmaEncerrar = false }, yaEnPantalla = yaVisible) {
+                        app.proponerEncerrar(obraId, indice)
+                    }
+                }
+                TextoBoton("No") { confirmaEncerrar = false }
+            } else {
+                Primario("Encerrar esta partida") { confirmaEncerrar = true }
+            }
+        }
+        if (p.puedeConfirmarFondear) {
+            Primario("Confirmar y fondear") {
+                acciones.correr("Armando el fondeo con las dos billeteras…", yaEnPantalla = yaVisible) { app.confirmarYFondear(obraId, indice) }
+            }
+        }
+        if (p.puedeEmpezarFondeoDeNuevo || p.puedeReintentarFondeo) {
+            Primario("Empezar el fondeo de nuevo") {
+                acciones.correr("Reinicié el fondeo. Se arman anillos frescos con el otro…", yaEnPantalla = yaVisible) {
+                    app.empezarFondeoDeNuevo(obraId, indice)
                 }
             }
-        }
-    }
-    p.pista?.let { Pista(it) }
-    if (p.puedeProponerEncerrar) {
-        if (confirmaEncerrar) {
-            Primario("Proponer encerrar") {
-                acciones.correr("Propuesta enviada. Falta que el otro confirme y fondee.", alTerminar = { confirmaEncerrar = false }, yaEnPantalla = yaVisible) {
-                    app.proponerEncerrar(obraId, indice)
-                }
-            }
-            Secundario("No") { confirmaEncerrar = false }
-        } else {
-            Primario("Encerrar esta partida") { confirmaEncerrar = true }
-        }
-    }
-    if (p.puedeConfirmarFondear) {
-        Primario("Confirmar y fondear") {
-            acciones.correr("Armando el fondeo con las dos billeteras…", yaEnPantalla = yaVisible) { app.confirmarYFondear(obraId, indice) }
-        }
-    }
-    if (p.puedeEmpezarFondeoDeNuevo || p.puedeReintentarFondeo) {
-        Primario("Empezar el fondeo de nuevo") {
-            acciones.correr(
-                "Reinicié el fondeo. Se arman anillos frescos con el otro…",
-                yaEnPantalla = yaVisible,
-            ) { app.empezarFondeoDeNuevo(obraId, indice) }
-        }
-        Pista("Sirve si el nodo rechazó la tx (decoys viejos). La obra y el encierre siguen; solo se arma de nuevo el fondeo.")
-    }
-    if (p.puedeCancelarPropuesta) {
-        Secundario("Cancelar propuesta") { acciones.correr(yaEnPantalla = yaVisible) { app.cancelarEncerrar(obraId, indice) } }
-    } else if (p.puedeNoEncerrar) {
-        Secundario("No encerrar") { acciones.correr(yaEnPantalla = yaVisible) { app.cancelarEncerrar(obraId, indice) } }
-    }
-    if (p.puedeAvisarTermino) {
-        Seccion("Avisar que terminé")
-        OutlinedTextField(pct, { pct = it }, label = { Text("Porcentaje a cobrar") },
-            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number), modifier = Modifier.fillMaxWidth())
-        OutlinedTextField(nota, { if (it.length <= p.maxNota.toInt()) nota = it },
-            label = { Text("Nota (${nota.length}/${p.maxNota})") }, placeholder = { Text("Terminé las fundaciones") },
-            modifier = Modifier.fillMaxWidth())
-        Primario("Avisar que terminé") {
-            acciones.correr("Aviso enviado.", alTerminar = { nota = "" }, yaEnPantalla = yaVisible) { app.avisarTermino(obraId, indice, pct, nota) }
-        }
-    }
-    if (p.enTrato) {
-        p.propuestoTexto?.let { Lead(it) }
-        if (!p.pagoEnCurso) p.esperaA?.let { Pista("Esperando a $it.") }
-        // Con el pago ya andando no se ofrece aceptar ni contraofertar otra vez.
-        if (p.puedeAceptarPago) {
-            Primario("Aceptar ${p.propuesto ?: 0u}% y pagar") {
-                acciones.correr("Firmando el pago 2-de-2 con el otro…", yaEnPantalla = yaVisible) { app.aceptarYPagar(obraId, indice) }
+            ComoFunciona("¿Cuándo sirve?") {
+                Ayuda("Si el nodo rechazó la tx (decoys viejos). La obra y el encierre siguen; solo se arma de nuevo el fondeo.")
             }
         }
-        if (p.puedeContraofertar) {
-            OutlinedTextField(pct, { pct = it }, label = { Text("Otro porcentaje") },
+        if (p.puedeCancelarPropuesta) {
+            Secundario("Cancelar propuesta") { acciones.correr(yaEnPantalla = yaVisible) { app.cancelarEncerrar(obraId, indice) } }
+        } else if (p.puedeNoEncerrar) {
+            Secundario("No encerrar") { acciones.correr(yaEnPantalla = yaVisible) { app.cancelarEncerrar(obraId, indice) } }
+        }
+        if (p.puedeAvisarTermino) {
+            Divisor()
+            Text("Avisar que terminé", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+            OutlinedTextField(pct, { pct = it }, label = { Text("Porcentaje a cobrar") },
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number), modifier = Modifier.fillMaxWidth())
             OutlinedTextField(nota, { if (it.length <= p.maxNota.toInt()) nota = it },
-                label = { Text("Nota (${nota.length}/${p.maxNota})") }, placeholder = { Text("Falta la entrada de auto") },
+                label = { Text("Nota (${nota.length}/${p.maxNota})") }, placeholder = { Text("Terminé las fundaciones") },
                 modifier = Modifier.fillMaxWidth())
-            Secundario("Proponer este porcentaje") {
-                acciones.correr("Contra enviada.", alTerminar = { nota = "" }, yaEnPantalla = yaVisible) { app.contraPago(obraId, indice, pct, nota) }
+            Primario("Avisar que terminé") {
+                acciones.correr("Aviso enviado.", alTerminar = { nota = "" }, yaEnPantalla = yaVisible) { app.avisarTermino(obraId, indice, pct, nota) }
+            }
+        }
+        if (p.enTrato) {
+            p.propuestoTexto?.let { Lead(it) }
+            // Con el pago ya andando no se ofrece aceptar ni contraofertar otra vez.
+            if (p.puedeAceptarPago) {
+                Primario("Aceptar ${p.propuesto ?: 0u}% y pagar") {
+                    acciones.correr("Firmando el pago 2-de-2 con el otro…", yaEnPantalla = yaVisible) { app.aceptarYPagar(obraId, indice) }
+                }
+            }
+            if (p.puedeContraofertar) {
+                OutlinedTextField(pct, { pct = it }, label = { Text("Otro porcentaje") },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number), modifier = Modifier.fillMaxWidth())
+                OutlinedTextField(nota, { if (it.length <= p.maxNota.toInt()) nota = it },
+                    label = { Text("Nota (${nota.length}/${p.maxNota})") }, placeholder = { Text("Falta la entrada de auto") },
+                    modifier = Modifier.fillMaxWidth())
+                Secundario("Proponer este porcentaje") {
+                    acciones.correr("Contra enviada.", alTerminar = { nota = "" }, yaEnPantalla = yaVisible) { app.contraPago(obraId, indice, pct, nota) }
+                }
             }
         }
     }
-    if (p.puedeSalirLocal) {
-        Secundario("Abandonar partida (solo este equipo)") {
-            acciones.correr(
-                "Cancelé fondeo/propuesta locales. Fondos en cadena intactos.",
-                yaEnPantalla = yaVisible,
-            ) { app.salirPartidaLocal(obraId, indice) }
+
+    val hayCaja = listOf(p.candado, p.xmrPorLado, p.cajaDireccion, p.fondeoTxid, p.pagoTxid, p.recibo, p.cerradoTexto, p.encerro)
+        .any { it != null }
+    if (hayCaja) {
+        Tarjeta("Caja y pagos") {
+            p.xmrPorLado?.let { Ayuda(it) }
+            p.candado?.let { Ayuda(it) }
+            p.encerro?.let { Ayuda(it) }
+            p.cajaDireccion?.let { Copiable("Caja stagenet", it) }
+            p.fondeoTxid?.let { Copiable("Fondeo (txid)", it) }
+            p.pagoTxid?.let { Copiable("Pago (txid)", it) }
+            p.recibo?.let {
+                Card(
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                    modifier = Modifier.fillMaxWidth(),
+                ) { Text(it, Modifier.padding(12.dp), style = MaterialTheme.typography.bodyMedium) }
+            }
+            p.cerradoTexto?.let { Ayuda(it) }
+            ComoFunciona {
+                Ayuda("Encerrada y Pagada se marcan solo cuando el motor ve la transacción en la cadena.")
+                Ayuda("La caja es 2-de-2: ninguna de las dos personas puede mover el dinero sola.")
+            }
         }
-        Pista("Cancela fondeo o propuesta locales. No mueve monedas ni firma por el otro.")
     }
-    Pista("Encerrada y Pagada se marcan solo cuando el motor ve la transacción en la cadena.")
+
+    if (p.notas.isNotEmpty()) {
+        Tarjeta("Hilo") {
+            p.notas.forEachIndexed { i, n ->
+                if (i > 0) Divisor()
+                Text(n.cabeza, fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.bodySmall)
+                if (n.cifrada) Ayuda(n.cuerpo) else if (n.cuerpo.isNotEmpty()) Text(n.cuerpo, style = MaterialTheme.typography.bodyMedium)
+            }
+        }
+    }
+
+    if (p.cajaDireccion != null) {
+        Plegable("Respaldos", "Share de la caja de esta obra") {
+            CajaRespaldo(obraId, true, acciones, banner)
+        }
+    }
+
+    if (p.puedeEditar || p.puedeSalirLocal) {
+        Plegable("Avanzado", listOfNotNull(
+            if (p.puedeEditar) "Texto" else null,
+            if (p.puedeSalirLocal) "salir en este equipo" else null,
+        ).joinToString(" · ")) {
+            if (p.puedeEditar) {
+                OutlinedTextField(detalle, { detalle = it }, label = { Text("Texto de la partida") }, modifier = Modifier.fillMaxWidth())
+                Secundario("Guardar texto") { acciones.correr("Texto guardado.", yaEnPantalla = yaVisible) { app.editarDetalle(obraId, indice, detalle) } }
+            }
+            if (p.puedeSalirLocal) {
+                Peligro("Abandonar partida (solo este equipo)") {
+                    acciones.correr("Cancelé fondeo/propuesta locales. Fondos en cadena intactos.", yaEnPantalla = yaVisible) {
+                        app.salirPartidaLocal(obraId, indice)
+                    }
+                }
+                Ayuda("Cancela fondeo o propuesta locales. No mueve monedas ni firma por el otro.")
+            }
+        }
+    }
 }

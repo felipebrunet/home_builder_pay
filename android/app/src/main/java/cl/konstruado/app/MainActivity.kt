@@ -99,8 +99,20 @@ object AppHolder {
     }
 }
 
+const val ORBOT_PAQUETE = "org.torproject.android"
+
+/** ¿Está Orbot instalado? (el manifest declara el paquete en <queries>). */
+fun orbotInstalado(c: Context): Boolean = try {
+    c.packageManager.getPackageInfo(ORBOT_PAQUETE, 0)
+    true
+} catch (_: PackageManager.NameNotFoundException) {
+    false
+} catch (_: Throwable) {
+    false
+}
+
 fun abrirOrbot(c: Context): Boolean {
-    val i = c.packageManager.getLaunchIntentForPackage("org.torproject.android") ?: return false
+    val i = c.packageManager.getLaunchIntentForPackage(ORBOT_PAQUETE) ?: return false
     i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
     c.startActivity(i)
     return true
