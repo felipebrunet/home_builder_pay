@@ -877,6 +877,179 @@ pub fn puede_empezar_fondeo_de_nuevo(encerrando: bool, frenado: bool) -> bool {
     encerrando && frenado
 }
 
+/// Qué está haciendo el motor con una partida, en una palabra. Sale de las
+/// líneas de la vista y de los txid que ya vio el dominio.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EnCurso {
+    Nada,
+    /// Pedido de fondeo andando: se arma o se firma, todavía no está en la red.
+    FondeoArmando,
+    /// La tx de fondeo ya se publicó y espera bloque. No se cancela.
+    FondeoEnRed,
+    /// Aceptaron el porcentaje y se está firmando el pago 2-de-2.
+    PagoFirmando,
+    /// La tx de pago ya se publicó y espera bloque.
+    PagoEnRed,
+}
+
+impl Texto {
+    /// Clasifica la línea del motor. Los frenos no cuentan como "en curso".
+    pub fn en_curso(&self) -> EnCurso {
+        match self {
+            Texto::EsperandoPago(_) => EnCurso::PagoEnRed,
+            Texto::Gastando | Texto::BuscandoCaja => EnCurso::PagoFirmando,
+            Texto::EsperandoFondeo(_) => EnCurso::FondeoEnRed,
+            Texto::Fondeando
+            | Texto::BuscandoMonedas
+            | Texto::EsperandoPropuesta
+            | Texto::EsperandoContratista
+            | Texto::BuscandoOtro => EnCurso::FondeoArmando,
+            _ => EnCurso::Nada,
+        }
+    }
+}
+
+impl CajaVista {
+    /// Todas las líneas de una partida (puede haber una de fondeo y otra de pago).
+    pub fn lineas_de(&self, obra: &str, partida: usize) -> Vec<Texto> {
+        self.lineas
+            .iter()
+            .filter(|l| l.obra == obra && l.partida == Some(partida))
+            .map(|l| l.texto.clone())
+            .collect()
+    }
+}
+
+/// Botones válidos para una partida. Una sola regla para Dioxus y Compose:
+/// la pantalla muestra solo lo que está en `true`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AccionesPartida {
+    pub en_curso: EnCurso,
+    /// El motor paró con un error conocido (sin saldo, rechazo del nodo…).
+    pub frenado: bool,
+    pub editar_texto: bool,
+    pub proponer_encierre: bool,
+    pub cancelar_propuesta: bool,
+    pub confirmar_fondeo: bool,
+    pub empezar_fondeo_de_nuevo: bool,
+    pub no_encerrar: bool,
+    pub avisar_termino: bool,
+    /// En trato, me toca responder y no hay un pago ya andando.
+    pub aceptar_pago: bool,
+    pub contraofertar: bool,
+    /// "Abandonar partida (solo este equipo)": limpia un fondeo local.
+    pub salir_local: bool,
+    /// Me toca responder el porcentaje (aunque el pago ya esté en curso, para textos).
+    pub me_toca: bool,
+}
+
+pub fn acciones_partida(obra: &Obra, i: usize, mid: &str, lineas: &[Texto]) -> AccionesPartida {
+    let mut a = AccionesPartida {
+        en_curso: EnCurso::Nada,
+        frenado: false,
+        editar_texto: false,
+        proponer_encierre: false,
+        cancelar_propuesta: false,
+        confirmar_fondeo: false,
+        empezar_fondeo_de_nuevo: false,
+        no_encerrar: false,
+        avisar_termino: false,
+        aceptar_pago: false,
+        contraofertar: false,
+        salir_local: false,
+        me_toca: false,
+    };
+    let Some(p) = obra.partidas.get(i) else {
+        return a;
+    };
+    let soy_m = obra.mandante.id == mid;
+    let soy_c = obra.contratista.id == mid;
+    if !soy_m && !soy_c {
+        return a;
+    }
+    a.frenado = lineas.iter().any(es_freno);
+    // Lo más avanzado gana: un pago en la red tapa cualquier otra línea.
+    let rango = |e: EnCurso| match e {
+        EnCurso::Nada => 0,
+        EnCurso::FondeoArmando => 1,
+        EnCurso::FondeoEnRed => 2,
+        EnCurso::PagoFirmando => 3,
+        EnCurso::PagoEnRed => 4,
+    };
+    for l in lineas {
+        let e = l.en_curso();
+        if rango(e) > rango(a.en_curso) {
+            a.en_curso = e;
+        }
+    }
+    if p.pago_txid.is_some() && p.estado != PartidaEstado::Pagada {
+        a.en_curso = EnCurso::PagoEnRed;
+    }
+    let cortada = matches!(
+        obra.estado,
+        EstadoObra::Abandonada | EstadoObra::Cerrada | EstadoObra::Rechazada
+    );
+    if cortada {
+        return a;
+    }
+    let activa = obra.activa() == Some(i);
+    let contra = obra.estado == EstadoObra::Contra;
+    let en_red = matches!(a.en_curso, EnCurso::FondeoEnRed | EnCurso::PagoEnRed);
+    let hay_motor = a.en_curso != EnCurso::Nada;
+    match p.estado {
+        PartidaEstado::Pendiente => {
+            a.editar_texto = true;
+            a.proponer_encierre = !contra && activa;
+            a.salir_local = a.frenado;
+        }
+        PartidaEstado::Encerrando => {
+            let soy_prop = p.encerrado_por.as_ref().is_some_and(|q| q.id == mid);
+            if soy_prop && !a.frenado {
+                a.cancelar_propuesta = !en_red;
+            } else if puede_empezar_fondeo_de_nuevo(true, a.frenado) {
+                a.empezar_fondeo_de_nuevo = true;
+                a.no_encerrar = true;
+            } else if !hay_motor {
+                a.confirmar_fondeo = true;
+                a.no_encerrar = true;
+            } else {
+                a.no_encerrar = !en_red;
+            }
+            a.salir_local = !en_red;
+        }
+        PartidaEstado::Encerrada => {
+            a.avisar_termino = soy_c;
+        }
+        PartidaEstado::EnTrato => {
+            a.me_toca = match p.turno {
+                Some(Rol::Mandante) => soy_m,
+                Some(Rol::Contratista) => soy_c,
+                None => false,
+            };
+            let pagando = matches!(a.en_curso, EnCurso::PagoFirmando | EnCurso::PagoEnRed);
+            a.aceptar_pago = a.me_toca && !pagando;
+            a.contraofertar = a.me_toca && !pagando;
+        }
+        PartidaEstado::Pagada => {}
+    }
+    a
+}
+
+/// Texto corto del estado en curso, para la lista de partidas y el encabezado.
+pub fn en_curso_corto(e: EnCurso, es: bool) -> Option<&'static str> {
+    Some(match (e, es) {
+        (EnCurso::Nada, _) => return None,
+        (EnCurso::FondeoArmando, true) => "Fondeando…",
+        (EnCurso::FondeoArmando, false) => "Funding…",
+        (EnCurso::FondeoEnRed, true) => "Fondeo esperando bloque",
+        (EnCurso::FondeoEnRed, false) => "Funding waiting for a block",
+        (EnCurso::PagoFirmando, true) => "Firmando el pago…",
+        (EnCurso::PagoFirmando, false) => "Signing the payment…",
+        (EnCurso::PagoEnRed, true) => "Pago esperando bloque",
+        (EnCurso::PagoEnRed, false) => "Payment waiting for a block",
+    })
+}
+
 fn otro_id_obra(obra: &Obra, yo: &str) -> String {
     if yo == obra.mandante.id {
         obra.contratista.id.clone()
@@ -5296,6 +5469,101 @@ async fn ver_txid(view: xmr_joint::ViewPair, txid: &str) -> Result<bool, String>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn obra_en_trato() -> (Obra, Persona, Persona) {
+        use konstruado_core::{Aceptacion, Oferta};
+        let m = Persona::nueva("felipe").unwrap();
+        let c = Persona::nueva("caco").unwrap();
+        let o = Oferta::publicar(m.clone(), "Super casa", 1_000, 500, vec![]).unwrap();
+        let a = Aceptacion::de(&o, c.clone(), 500).unwrap();
+        let mut obra = Obra::desde_oferta(o, a).unwrap();
+        obra.estado = EstadoObra::EnMarcha;
+        let p = &mut obra.partidas[0];
+        p.estado = PartidaEstado::EnTrato;
+        p.propuesto = Some(100);
+        p.turno = Some(Rol::Mandante);
+        p.encerrado_por = Some(m.clone());
+        p.fondeo_txid = Some("4b2c".into());
+        (obra, m, c)
+    }
+
+    /// La captura de 0.2.5: el pago ya salió y esperaba bloque, pero la ficha
+    /// seguía ofreciendo "Aceptar 100% y pagar" y "Otro porcentaje".
+    #[test]
+    fn con_pago_en_curso_no_se_ofrece_aceptar_de_nuevo() {
+        let (obra, m, c) = obra_en_trato();
+        let libre = acciones_partida(&obra, 0, &m.id, &[]);
+        assert!(libre.me_toca && libre.aceptar_pago && libre.contraofertar);
+        assert!(!libre.salir_local);
+        for linea in [Texto::Gastando, Texto::EsperandoPago("f15f".into()), Texto::BuscandoCaja] {
+            let a = acciones_partida(&obra, 0, &m.id, &[linea.clone()]);
+            assert!(a.me_toca, "{linea:?}");
+            assert!(!a.aceptar_pago && !a.contraofertar, "{linea:?}");
+        }
+        let a = acciones_partida(&obra, 0, &m.id, &[Texto::EsperandoPago("f15f".into())]);
+        assert_eq!(a.en_curso, EnCurso::PagoEnRed);
+        // Si el pago se frenó, se puede volver a intentar.
+        let a = acciones_partida(&obra, 0, &m.id, &[Texto::TrabadasCaja]);
+        assert!(a.frenado && a.aceptar_pago);
+        // Al contratista nunca le toca mientras el turno es del mandante.
+        let a = acciones_partida(&obra, 0, &c.id, &[]);
+        assert!(!a.me_toca && !a.aceptar_pago);
+        // Un txid de pago visto sin Pagada todavía también cuenta como en curso.
+        let mut o2 = obra.clone();
+        o2.partidas[0].pago_txid = Some("f15f".into());
+        let a = acciones_partida(&o2, 0, &m.id, &[]);
+        assert_eq!(a.en_curso, EnCurso::PagoEnRed);
+        assert!(!a.aceptar_pago);
+    }
+
+    #[test]
+    fn fondeo_publicado_no_se_cancela() {
+        let (mut obra, m, c) = obra_en_trato();
+        let p = &mut obra.partidas[0];
+        p.estado = PartidaEstado::Encerrando;
+        p.turno = None;
+        p.propuesto = None;
+        p.fondeo_txid = None;
+        // Propuso m; c confirma.
+        let a = acciones_partida(&obra, 0, &c.id, &[]);
+        assert!(a.confirmar_fondeo && a.no_encerrar && a.salir_local);
+        let a = acciones_partida(&obra, 0, &c.id, &[Texto::Fondeando]);
+        assert!(!a.confirmar_fondeo && a.no_encerrar);
+        let a = acciones_partida(&obra, 0, &c.id, &[Texto::EsperandoFondeo("4b2c".into())]);
+        assert!(!a.confirmar_fondeo && !a.no_encerrar && !a.salir_local);
+        let a = acciones_partida(&obra, 0, &m.id, &[]);
+        assert!(a.cancelar_propuesta && !a.confirmar_fondeo);
+        let a = acciones_partida(&obra, 0, &m.id, &[Texto::EsperandoFondeo("4b2c".into())]);
+        assert!(!a.cancelar_propuesta);
+        let a = acciones_partida(&obra, 0, &m.id, &[Texto::Falla("rejected".into())]);
+        assert!(a.empezar_fondeo_de_nuevo && a.no_encerrar);
+    }
+
+    #[test]
+    fn pagada_o_cortada_no_tiene_acciones() {
+        let (mut obra, m, _c) = obra_en_trato();
+        obra.partidas[0].estado = PartidaEstado::Pagada;
+        let a = acciones_partida(&obra, 0, &m.id, &[]);
+        assert!(!a.aceptar_pago && !a.salir_local && !a.editar_texto);
+        let (mut obra, m, _c) = obra_en_trato();
+        obra.estado = EstadoObra::Abandonada;
+        let a = acciones_partida(&obra, 0, &m.id, &[]);
+        assert!(!a.aceptar_pago && !a.contraofertar && !a.salir_local);
+        let extraño = Persona::nueva("otro").unwrap();
+        let (obra, _m, _c) = obra_en_trato();
+        assert!(!acciones_partida(&obra, 0, &extraño.id, &[]).me_toca);
+    }
+
+    #[test]
+    fn pendiente_solo_la_activa_se_encierra() {
+        let (mut obra, m, _c) = obra_en_trato();
+        obra.partidas[0].estado = PartidaEstado::Pendiente;
+        obra.partidas[0].fondeo_txid = None;
+        let a0 = acciones_partida(&obra, 0, &m.id, &[]);
+        assert!(a0.editar_texto && a0.proponer_encierre);
+        let a1 = acciones_partida(&obra, 1, &m.id, &[]);
+        assert!(a1.editar_texto && !a1.proponer_encierre);
+    }
 
 
     #[test]
