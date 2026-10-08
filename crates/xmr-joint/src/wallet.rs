@@ -139,3 +139,45 @@ mod tests {
         assert_ne!(a.address(), b.address());
     }
 }
+
+    /// Vector publicado en moneroexamples (coincide con monero-wallet-cli / Feather):
+    /// mismas 25 palabras inglesas → misma spend, view y dirección mainnet.
+    #[test]
+    fn semilla_inglesa_coincide_con_vector_conocido_de_monero() {
+        // https://moneroexamples.github.io/spendkey/  (ejemplo 1)
+        let words = "spout midst duckling tepid odds glass enhanced avatar ocean rarest eavesdrop egotistic oxygen trying future airport session nanny tedious guru asylum superior cement cunning eavesdrop";
+        let spend_hex = "af6082af29108abda69cc385dfed2102b892a871695367cb22a4b9b6df8b3206";
+        let view_hex = "157874dc4e2961c872f87aaf4346146d0f596e2f116a51fbac01b693a8e3020a";
+        let mainnet = "46HSxE7KoiDaxWFWR1wmJfcrunNj4TLiPJqiCJkQn345A4JJzgBNhUvbkrYWJX4EVJZS4kJGfGj7CTW8GEUHsbEZCEupMt6";
+        let w = SingleWallet::restore(Net::Mainnet, words).unwrap();
+        assert_eq!(hex::encode(<[u8; 32]>::from(**w.spend_key())), spend_hex);
+        assert_eq!(hex::encode(w.view_private_bytes()), view_hex);
+        assert_eq!(w.address(), mainnet);
+        // Stagenet cambia solo el prefijo; las llaves son las mismas.
+        let s = SingleWallet::restore(Net::Stagenet, words).unwrap();
+        assert_eq!(s.view_private_bytes(), w.view_private_bytes());
+        assert_eq!(<[u8; 32]>::from(**s.spend_key()), <[u8; 32]>::from(**w.spend_key()));
+        assert!(s.address().starts_with('5'));
+        assert_ne!(s.address(), w.address());
+        // Y al revés: la spend vuelve a las mismas 25 palabras (checksum incluido).
+        let otra = Seed::from_entropy(Language::English, Zeroizing::new(<[u8; 32]>::from(**w.spend_key()))).unwrap();
+        assert_eq!(otra.to_string().as_str(), words);
+        // Otro vector del mismo sitio (ejemplo 3) por si el primero es casual.
+        let w2 = SingleWallet::restore(
+            Net::Mainnet,
+            "essential future brunt cajun upper ammo incur smelting usual tyrant tattoo virtual long hectare idols guarded blender usage ghost sample eagle shelter does dozen usage",
+        )
+        .unwrap();
+        assert_eq!(
+            hex::encode(<[u8; 32]>::from(**w2.spend_key())),
+            "0a0214cf7716292246d277214830411b20d3cd08cd119dcd9e149d7bd1151e02"
+        );
+        assert_eq!(
+            hex::encode(w2.view_private_bytes()),
+            "bd613fbad795df25b8218a7e4f80f4e3158db0646d1cb7d22d84f0b603a0f60b"
+        );
+        assert_eq!(
+            w2.address(),
+            "46RRCV68frZSqzBsh9TWf9iNDrYhPkABUUd16zFLoPECJPjd3AtuTyeh9RhSWAqiCLULKGf9SC1UHWPra64ykRiTSg3RPmW"
+        );
+    }

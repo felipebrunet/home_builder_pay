@@ -1510,6 +1510,22 @@ impl Caja {
         self.inner.lock().unwrap().material_respaldo()
     }
 
+    /// Las 25 palabras de la billetera personal, solo cuando el usuario las pide
+    /// (tras la advertencia). No se guardan en la vista ni en ningún otro lado.
+    pub fn ver_semilla(&self) -> Result<SemillaVista, String> {
+        self.inner.lock().unwrap().ver_semilla()
+    }
+
+    /// Dirección y view key privada de la billetera personal: ven el saldo, no gastan.
+    pub fn llaves_billetera(&self) -> Option<LlavesBilletera> {
+        let m = self.inner.lock().unwrap();
+        let w = m.wallet.as_ref()?;
+        Some(LlavesBilletera {
+            direccion: w.address().to_string(),
+            view_key: hex::encode(w.view_private_bytes()),
+        })
+    }
+
     /// Recupera la billetera personal. No trae la caja. No pisa una semilla distinta.
     pub fn restaurar_semilla(&self, path: &Path) -> Result<&'static str, String> {
         let mut m = self.inner.lock().unwrap();
@@ -4621,6 +4637,28 @@ impl Motor {
         }
     }
 
+    /// Altura de restauración de la semilla: lo más bajo que ya miramos (o pedimos
+    /// mirar). Nada de lo que vio esta billetera está por debajo.
+    fn altura_restauracion(&self, direccion: &str, guardada: Option<u64>) -> Option<u64> {
+        let mut h = guardada.map(|h| h as usize);
+        if self.libro.direccion == direccion && self.libro.listo {
+            let mut d = self.libro.desde.saturating_sub(self.retro);
+            if let Some(m) = self.libro.entradas.iter().map(|e| e.altura).min() {
+                d = d.min(m);
+            }
+            h = Some(h.map_or(d, |x| x.min(d)));
+        }
+        h.or(self.tip).map(|x| x as u64)
+    }
+
+    fn ver_semilla(&self) -> Result<SemillaVista, String> {
+        let w = self.wallet.as_ref().ok_or_else(|| "codigo:sin-semilla".to_string())?;
+        let texto = backup::read_secret_file(&semilla_path()).map_err(|_| "codigo:semilla-rota".to_string())?;
+        let guardada = SeedBackup::parse(&texto).ok().and_then(|b| b.height);
+        let altura = self.altura_restauracion(w.address(), guardada);
+        semilla_para_ver(&texto, w.address(), altura)
+    }
+
     fn material_respaldo(&self) -> MaterialCaja {
         let mut semilla = None;
         let mut altura = None;
@@ -4630,18 +4668,7 @@ impl Motor {
                 .and_then(|t| SeedBackup::parse(&t).ok())
                 .filter(|b| b.address == w.address())
             {
-                // Altura de restauración: lo más bajo que ya miramos (o pedimos mirar).
-                // Nada de lo que vio esta billetera está por debajo.
-                let mut h = b.height.map(|h| h as usize);
-                if self.libro.direccion == w.address() && self.libro.listo {
-                    let mut d = self.libro.desde.saturating_sub(self.retro);
-                    if let Some(m) = self.libro.entradas.iter().map(|e| e.altura).min() {
-                        d = d.min(m);
-                    }
-                    h = Some(h.map_or(d, |x| x.min(d)));
-                }
-                let h = h.or(self.tip);
-                b.height = h.map(|x| x as u64);
+                b.height = self.altura_restauracion(w.address(), b.height);
                 altura = b.height;
                 semilla = Some(b.to_text());
             }
@@ -5555,6 +5582,87 @@ fn escribir_0600(path: &Path, text: &str) -> Result<(), String> {
 
 // ---------------------------------------------------------------- respaldo completo
 
+/// Lo que se muestra en «Ver las 25 palabras». Las palabras se borran de memoria
+/// al soltar el valor; la UI no las guarda en ningún estado persistente.
+#[derive(Clone)]
+pub struct SemillaVista {
+    pub palabras: zeroize::Zeroizing<String>,
+    /// Bloque desde donde restaurar en otra billetera (Feather, monero-wallet-cli).
+    pub altura: Option<u64>,
+    pub direccion: String,
+}
+
+impl SemillaVista {
+    /// Las palabras en orden, numeradas desde 1, para la grilla.
+    pub fn numeradas(&self) -> Vec<(usize, String)> {
+        self.palabras.split_whitespace().enumerate().map(|(i, w)| (i + 1, w.to_string())).collect()
+    }
+}
+
+/// Dirección + view key privada de la billetera personal (solo lectura).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LlavesBilletera {
+    pub direccion: String,
+    pub view_key: String,
+}
+
+/// Segundos tras los que se borra el portapapeles si todavía tiene la semilla.
+pub const SEMILLA_PORTAPAPELES_SEG: u64 = 60;
+
+/// Valida el archivo de semilla contra la billetera cargada antes de mostrar nada:
+/// red stagenet, 25 palabras inglesas de Monero y la misma dirección.
+pub fn semilla_para_ver(texto: &str, direccion: &str, altura: Option<u64>) -> Result<SemillaVista, String> {
+    let b = SeedBackup::parse(texto).map_err(|_| "codigo:semilla-rota".to_string())?;
+    if b.net != Net::Stagenet {
+        return Err("codigo:semilla-red".into());
+    }
+    let w = SingleWallet::restore(Net::Stagenet, b.words.as_str()).map_err(|_| "codigo:semilla-rota".to_string())?;
+    if w.address() != direccion || b.address != direccion {
+        return Err("codigo:semilla-direccion".into());
+    }
+    Ok(SemillaVista {
+        palabras: zeroize::Zeroizing::new(b.words.as_str().to_string()),
+        altura,
+        direccion: direccion.to_string(),
+    })
+}
+
+/// Advertencia antes de mostrar las 25 palabras (escritorio y Android).
+pub fn aviso_ver_semilla(es: bool) -> Vec<String> {
+    if es {
+        vec![
+            "Quien tenga estas 25 palabras puede gastar todo tu saldo personal. No las mandes por chat ni las fotografíes; anotalas en papel.".into(),
+            "No recuperan las cajas de las obras: para eso hacen falta los shares, que están en el respaldo completo.".into(),
+            "Son la semilla estándar de Monero (inglés): sirven en Feather o monero-wallet-cli en stagenet, con la altura de restauración que se muestra.".into(),
+        ]
+    } else {
+        vec![
+            "Anyone with these 25 words can spend your whole personal balance. Do not send them by chat or take photos; write them on paper.".into(),
+            "They do not recover job boxes: those need the shares, which are in the full backup.".into(),
+            "This is the standard Monero seed (English): it works in Feather or monero-wallet-cli on stagenet, with the restore height shown.".into(),
+        ]
+    }
+}
+
+/// Ayuda junto a la view key de la billetera personal.
+pub fn ayuda_view_key_billetera(es: bool) -> &'static str {
+    if es {
+        "Con la dirección y esta view key, otra billetera de solo lectura ve tu saldo y lo que entra. No alcanza para gastar (los envíos no se ven completos sin las key images)."
+    } else {
+        "With the address and this view key, a view-only wallet sees your balance and incoming funds. It cannot spend (outgoing transfers are not fully visible without key images)."
+    }
+}
+
+/// Aviso tras copiar la semilla.
+pub fn aviso_copia_semilla(es: bool) -> String {
+    let n = SEMILLA_PORTAPAPELES_SEG;
+    if es {
+        format!("Copiadas. El portapapeles se borra en {n} s si todavía las tiene.")
+    } else {
+        format!("Copied. The clipboard is cleared in {n} s if it still holds them.")
+    }
+}
+
 /// Lo de Monero que va en el respaldo completo (ver `respaldo.rs`).
 #[derive(Clone, Debug, Default)]
 pub struct MaterialCaja {
@@ -5916,6 +6024,36 @@ async fn ver_txid(view: xmr_joint::ViewPair, txid: &str) -> Result<bool, String>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ver_semilla_solo_si_coincide_con_la_billetera() {
+        let (w, words) = SingleWallet::generate(&mut rand_core::OsRng, Net::Stagenet).unwrap();
+        let b = SeedBackup {
+            net: Net::Stagenet,
+            address: w.address().to_string(),
+            height: Some(2_000_000),
+            words: words.clone(),
+        };
+        let v = semilla_para_ver(&b.to_text(), w.address(), Some(1_999_000)).unwrap();
+        assert_eq!(v.palabras.as_str(), words.as_str());
+        assert_eq!(v.altura, Some(1_999_000));
+        let n = v.numeradas();
+        assert_eq!(n.len(), 25);
+        assert_eq!(n[0].0, 1);
+        assert_eq!(n[24].0, 25);
+        // Las palabras mostradas restauran la misma dirección (lo que haría Feather).
+        assert_eq!(SingleWallet::restore(Net::Stagenet, &n.iter().map(|x| x.1.clone()).collect::<Vec<_>>().join(" ")).unwrap().address(), w.address());
+        // Otra dirección cargada: no se muestra nada.
+        let (otra, _) = SingleWallet::generate(&mut rand_core::OsRng, Net::Stagenet).unwrap();
+        assert_eq!(semilla_para_ver(&b.to_text(), otra.address(), None).err().unwrap(), "codigo:semilla-direccion");
+        assert_eq!(semilla_para_ver("basura", w.address(), None).err().unwrap(), "codigo:semilla-rota");
+        // Textos en los dos idiomas, con lo esencial.
+        let es = aviso_ver_semilla(true).join(" ");
+        assert!(es.contains("gastar") && es.contains("shares") && es.contains("Feather"));
+        let en = aviso_ver_semilla(false).join(" ");
+        assert!(en.contains("spend") && en.contains("shares") && en.contains("Feather"));
+        assert!(aviso_copia_semilla(true).contains("60"));
+    }
 
     fn obra_en_trato() -> (Obra, Persona, Persona) {
         use konstruado_core::{Aceptacion, Oferta};
