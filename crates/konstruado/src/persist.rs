@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
-use konstruado_core::{Obra, Oferta, Persona, Rol};
+use konstruado_core::{Obra, Oferta, Persona, RetiroOferta, Rol};
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct EstadoDisco {
@@ -27,6 +27,10 @@ pub struct EstadoDisco {
     /// Obras archivadas solo en este equipo (ocultas del tablero; el almacén las conserva).
     #[serde(default)]
     pub obras_salidas: Vec<String>,
+    /// Lápidas de ofertas retiradas (propias y de otros). Sin esto, una oferta
+    /// quitada vuelve con el gossip del otro par.
+    #[serde(default)]
+    pub retiradas: Vec<RetiroOferta>,
 }
 
 /// Respaldo portable de obras/ofertas (sin seed, share ni claves).
@@ -143,6 +147,12 @@ mod tests {
             clave_sec: String::new(),
             spend_sec: String::new(),
             obras_salidas: vec![],
+            retiradas: vec![RetiroOferta {
+                oferta_id: "o1".into(),
+                autor_id: yo.id.clone(),
+                cuando: 7,
+                prueba: "ab".into(),
+            }],
         };
         guardar(&e);
         let b = cargar();
@@ -150,11 +160,21 @@ mod tests {
         assert_eq!(b.rol, Some(Rol::Mandante));
         assert_eq!(b.tema, "vivo");
         assert_eq!(b.idioma, "en");
+        assert_eq!(b.retiradas.len(), 1);
+        assert_eq!(b.retiradas[0].oferta_id, "o1");
         match prev {
             Some(v) => unsafe { std::env::set_var("KONSTRUADO_DATOS", v) },
             None => unsafe { std::env::remove_var("KONSTRUADO_DATOS") },
         }
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Un estado.json de 0.2.5 (sin `retiradas`) se sigue leyendo.
+    #[test]
+    fn estado_viejo_sin_retiradas_se_lee() {
+        let raw = r#"{"yo":null,"rol":null,"ofertas":[],"obras":[],"presentes":[],"tema":"vivo","idioma":"es","clave_sec":"","spend_sec":"","obras_salidas":[]}"#;
+        let e: EstadoDisco = serde_json::from_str(raw).unwrap();
+        assert!(e.retiradas.is_empty());
     }
 
     #[test]

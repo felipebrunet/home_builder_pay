@@ -52,3 +52,13 @@ pub fn clave_presentes() -> [u8; 32] {
     h.update(b"presentes");
     h.finalize().into()
 }
+
+/// Lápidas de ofertas retiradas por su autor. Un par viejo guarda el valor
+/// tal cual y lo reenvía; uno nuevo lo une y lo aplica al tablero.
+pub fn clave_retiradas() -> [u8; 32] {
+    use sha2::{Digest, Sha256};
+    let mut h = Sha256::new();
+    h.update(swarm_id());
+    h.update(b"retiradas");
+    h.finalize().into()
+}

@@ -10,5 +10,9 @@ description = "Construction escrow domain: offers, equal-capital installments"
 base64 = "0.22"
 crypto_box = { version = "0.9", features = ["chacha20"] }
 serde = { version = "1", features = ["derive"] }
+sha2 = "0.10"
 uuid = { version = "1", features = ["v4", "serde"] }
 xmr-joint.workspace = true
+
+[dev-dependencies]
+serde_json = "1"

@@ -8,15 +8,15 @@ use tokio::sync::mpsc::UnboundedSender;
 use tokio::time::timeout;
 use uuid::Uuid;
 
-use konstruado_core::{ahora, Oferta, Obra, Persona};
+use konstruado_core::{ahora, sin_retiradas, Oferta, Obra, Persona, RetiroOferta};
 
 use crate::proto::{
-    decode_obras, decode_presentes, decode_tablero, encode_obras, encode_presentes, encode_tablero,
-    key_hex, CajaMsg, Msg, PeerAddr,
+    decode_obras, decode_presentes, decode_retiradas, decode_tablero, encode_obras,
+    encode_presentes, encode_retiradas, encode_tablero, key_hex, CajaMsg, Msg, PeerAddr,
 };
 use crate::rendezvous::{RENDEZVOUS_ONION, VIRT_PORT};
 use crate::tor::{EstadoTor, Tor};
-use crate::{clave_obras, clave_presentes, clave_tablero, PUERTO_LOCAL, RED};
+use crate::{clave_obras, clave_presentes, clave_retiradas, clave_tablero, PUERTO_LOCAL, RED};
 
 /// Keepalive de una sesión que abrimos nosotros.
 const PING: Duration = Duration::from_secs(20);
@@ -28,6 +28,8 @@ const EMPUJE: Duration = Duration::from_secs(2);
 const MAX_BUZON: usize = 64;
 /// Tope de saltos de relay para la caja.
 const MAX_SALTOS: u8 = 3;
+/// Tope de lápidas de ofertas que se guardan y se reenvían (las más nuevas).
+const MAX_RETIRADAS: usize = 512;
 
 /// Una sesión abierta con otro nodo. Se le puede escribir sin marcar.
 struct Vivo {
@@ -601,15 +603,44 @@ impl Nodo {
         self.spawn_gossip();
     }
 
+    /// Ofertas vivas: sin las que su autor retiró.
     pub fn tablero(&self) -> Vec<Oferta> {
-        let key = key_hex(&clave_tablero());
         let g = self.inner.lock().unwrap();
-        g.store
-            .get(&key)
+        let tab = g
+            .store
+            .get(&key_hex(&clave_tablero()))
             .map(|b| decode_tablero(b))
-            .unwrap_or_default()
+            .unwrap_or_default();
+        sin_retiradas(tab, &retiradas_de(&g.store))
     }
 
+    /// Retira una oferta propia: deja la lápida (que se replica) y la saca del
+    /// tablero local. Las copias que lleguen después por gossip se descartan.
+    pub fn retirar(&self, retiro: RetiroOferta) {
+        {
+            let mut g = self.inner.lock().unwrap();
+            let key = key_hex(&clave_retiradas());
+            merge_store(&mut g.store, key, encode_retiradas(&[retiro]));
+        }
+        self.spawn_gossip();
+    }
+
+    /// Lápidas conocidas (propias y de otros), para persistir.
+    pub fn retiradas(&self) -> Vec<RetiroOferta> {
+        retiradas_de(&self.inner.lock().unwrap().store)
+    }
+
+    /// Carga las lápidas guardadas al arrancar. Van antes de `hidratar`.
+    pub fn fijar_retiradas(&self, retiros: Vec<RetiroOferta>) {
+        if retiros.is_empty() {
+            return;
+        }
+        let mut g = self.inner.lock().unwrap();
+        merge_store(&mut g.store, key_hex(&clave_retiradas()), encode_retiradas(&retiros));
+    }
+
+    /// Saca la oferta solo del almacén local. No la retira de la red: el próximo
+    /// anuncio de un par la vuelve a traer. Para eso está [`Nodo::retirar`].
     pub fn quitar(&self, oferta_id: &str) {
         let key = key_hex(&clave_tablero());
         {
@@ -756,6 +787,7 @@ impl Nodo {
         {
             let mut g = self.inner.lock().unwrap();
             if !ofertas.is_empty() {
+                let ofertas = sin_retiradas(ofertas, &retiradas_de(&g.store));
                 g.store
                     .insert(key_hex(&clave_tablero()), encode_tablero(&ofertas));
             }
@@ -1225,6 +1257,13 @@ fn valor_para_red(key: &str, val: &[u8]) -> Vec<u8> {
     val.to_vec()
 }
 
+fn retiradas_de(store: &HashMap<String, Vec<u8>>) -> Vec<RetiroOferta> {
+    store
+        .get(&key_hex(&clave_retiradas()))
+        .map(|b| decode_retiradas(b))
+        .unwrap_or_default()
+}
+
 fn merge_store(store: &mut HashMap<String, Vec<u8>>, key: String, val: Vec<u8>) {
     if key == key_hex(&crate::clave_tablero()) {
         let mut a = store
@@ -1233,11 +1272,43 @@ fn merge_store(store: &mut HashMap<String, Vec<u8>>, key: String, val: Vec<u8>) 
             .unwrap_or_default();
         let b = decode_tablero(&val);
         for o in b {
-            if !a.iter().any(|x| x.id == o.id) {
-                a.push(o);
+            match a.iter_mut().find(|x| x.id == o.id) {
+                Some(ex) => {
+                    if o.mejor_que(ex) {
+                        *ex = o;
+                    }
+                }
+                None => a.push(o),
             }
         }
+        // Una oferta retirada no vuelve aunque otro par la siga anunciando.
+        let a = sin_retiradas(a, &retiradas_de(store));
         store.insert(key, encode_tablero(&a));
+    } else if key == key_hex(&crate::clave_retiradas()) {
+        let mut a = retiradas_de(store);
+        for r in decode_retiradas(&val) {
+            if r.oferta_id.is_empty() || r.autor_id.is_empty() {
+                continue;
+            }
+            let igual = |x: &RetiroOferta| {
+                x.oferta_id == r.oferta_id && x.autor_id == r.autor_id && x.prueba == r.prueba
+            };
+            if !a.iter().any(igual) {
+                a.push(r);
+            }
+        }
+        a.sort_by(|x, y| y.cuando.cmp(&x.cuando));
+        a.truncate(MAX_RETIRADAS);
+        store.insert(key, encode_retiradas(&a));
+        // Aplicar a lo que ya estaba en el tablero.
+        let kt = key_hex(&crate::clave_tablero());
+        if let Some(tab) = store.get(&kt).map(|b| decode_tablero(b)) {
+            let antes = tab.len();
+            let tab = sin_retiradas(tab, &a);
+            if tab.len() != antes {
+                store.insert(kt, encode_tablero(&tab));
+            }
+        }
     } else if key == key_hex(&crate::clave_obras()) {
         let mut a = store.get(&key).map(|b| decode_obras(b)).unwrap_or_default();
         let b = decode_obras(&val);
@@ -1351,6 +1422,96 @@ mod tests {
         let tab = decode_tablero(store.get(&key).unwrap());
         assert_eq!(tab[0].id, id);
         assert_eq!(tab[0].n_partidas_sugeridas, 5);
+    }
+
+    fn oferta_sellada(nombre: &str) -> (Persona, String, Oferta) {
+        let mut m = Persona::nueva(nombre).unwrap();
+        let (sec, pubk) = konstruado_core::generar_clave();
+        m.clave_pub = pubk;
+        let mut o = Oferta::publicar(m.clone(), "Casa", 10_000, 2_000, vec![]).unwrap();
+        o.sellar_retiro(&sec);
+        (m, sec, o)
+    }
+
+    #[test]
+    fn la_oferta_retirada_no_revive_con_el_gossip() {
+        let (m, sec, o) = oferta_sellada("Felipe");
+        let kt = key_hex(&crate::clave_tablero());
+        let kr = key_hex(&crate::clave_retiradas());
+        let mut store = HashMap::new();
+        merge_store(&mut store, kt.clone(), encode_tablero(&[o.clone()]));
+        let r = konstruado_core::retirar_oferta(&o, &m.id, &sec, &[]).unwrap();
+        merge_store(&mut store, kr.clone(), encode_retiradas(&[r.clone()]));
+        assert!(decode_tablero(store.get(&kt).unwrap()).is_empty());
+        // Un par (viejo o que todavía no vio la lápida) la vuelve a anunciar.
+        merge_store(&mut store, kt.clone(), encode_tablero(&[o.clone()]));
+        assert!(decode_tablero(store.get(&kt).unwrap()).is_empty());
+        // La lápida repetida no se duplica.
+        merge_store(&mut store, kr.clone(), encode_retiradas(&[r]));
+        assert_eq!(decode_retiradas(store.get(&kr).unwrap()).len(), 1);
+    }
+
+    #[test]
+    fn una_lapida_falsa_no_borra_la_oferta() {
+        let (m, _sec, o) = oferta_sellada("Felipe");
+        let (otro_sec, _) = konstruado_core::generar_clave();
+        let kt = key_hex(&crate::clave_tablero());
+        let kr = key_hex(&crate::clave_retiradas());
+        let mut store = HashMap::new();
+        merge_store(&mut store, kt.clone(), encode_tablero(&[o.clone()]));
+        let mut falsa = konstruado_core::retirar_oferta(&o, &m.id, &otro_sec, &[]);
+        // Con otra clave el core ni siquiera la arma.
+        assert!(falsa.is_err());
+        falsa = Ok(RetiroOferta {
+            oferta_id: o.id.clone(),
+            autor_id: m.id.clone(),
+            cuando: 1,
+            prueba: "00".repeat(32),
+        });
+        merge_store(&mut store, kr, encode_retiradas(&[falsa.unwrap()]));
+        assert_eq!(decode_tablero(store.get(&kt).unwrap()).len(), 1);
+    }
+
+    #[test]
+    fn la_copia_con_hash_gana_a_la_de_un_par_viejo() {
+        let (_m, _sec, o) = oferta_sellada("Felipe");
+        let mut vieja = o.clone();
+        vieja.retiro_hash.clear();
+        let kt = key_hex(&crate::clave_tablero());
+        let mut store = HashMap::new();
+        merge_store(&mut store, kt.clone(), encode_tablero(&[vieja]));
+        merge_store(&mut store, kt.clone(), encode_tablero(&[o.clone()]));
+        assert_eq!(decode_tablero(store.get(&kt).unwrap())[0].retiro_hash, o.retiro_hash);
+    }
+
+    /// Mandante publica, el contratista la ve, el mandante la retira: desaparece
+    /// en los dos y no vuelve aunque el contratista siga empujando su almacén.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn retirar_oferta_llega_al_otro_y_no_vuelve() {
+        let bootstrap = puerto_libre();
+        let a = Nodo::arrancar_en(bootstrap).await.unwrap();
+        tokio::time::sleep(Duration::from_millis(80)).await;
+        let b = Nodo::arrancar_en(bootstrap).await.unwrap();
+        let (m, sec, o) = oferta_sellada("Felipe");
+        let id = o.id.clone();
+        a.publicar(o.clone());
+        hasta(6, "oferta en b", || b.tablero().iter().any(|x| x.id == id)).await;
+        let r = konstruado_core::retirar_oferta(&o, &m.id, &sec, &[]).unwrap();
+        a.retirar(r);
+        hasta(6, "retiro en b", || !b.tablero().iter().any(|x| x.id == id)).await;
+        assert!(!a.tablero().iter().any(|x| x.id == id));
+        // Varias rondas de gossip después, sigue sin estar.
+        tokio::time::sleep(Duration::from_secs(3)).await;
+        assert!(!a.tablero().iter().any(|x| x.id == id));
+        assert!(!b.tablero().iter().any(|x| x.id == id));
+        assert_eq!(b.retiradas().len(), 1);
+        // Un nodo que arranca con la oferta guardada (hidratar) tampoco la revive.
+        b.hidratar(vec![o], vec![], vec![]);
+        tokio::time::sleep(Duration::from_millis(1500)).await;
+        assert!(!a.tablero().iter().any(|x| x.id == id));
+        assert!(!b.tablero().iter().any(|x| x.id == id));
+        a.parar();
+        b.parar();
     }
 
     fn puerto_libre() -> u16 {

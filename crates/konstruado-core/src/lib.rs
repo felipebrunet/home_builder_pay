@@ -4,6 +4,7 @@ mod acuerdo;
 mod caja;
 mod error;
 mod partida;
+mod retiro;
 
 pub use acuerdo::{
     oferta_en_tablero, Aceptacion, EstadoObra, ExtraPartida, NotaPartida, Oferta, Obra, Partida,
@@ -11,6 +12,7 @@ pub use acuerdo::{
 };
 pub use caja::{asegurar_clave, generar_clave};
 pub use error::Error;
+pub use retiro::{retirar_oferta, sin_retiradas, RetiroOferta};
 pub use partida::{
     ahora, ajusta_detalles, capital_por_lado, monto, monto_pct, n_partidas, titulo_partida, MAX_NOTA,
 };

@@ -12,6 +12,10 @@ pub enum Error {
     Detalle,
     Desconectado,
     SinClave,
+    /// Solo quien publicó la oferta la puede retirar.
+    NoEsTuya,
+    /// La oferta ya la tomó un contratista: hay obra conjunta.
+    OfertaTomada,
 }
 
 impl std::fmt::Display for Error {
@@ -37,6 +41,11 @@ impl std::fmt::Display for Error {
             Error::SinClave => write!(
                 f,
                 "Falta la clave del otro para cifrar la nota. Esperá a que entre."
+            ),
+            Error::NoEsTuya => write!(f, "Solo podés quitar tus propias ofertas."),
+            Error::OfertaTomada => write!(
+                f,
+                "Esa oferta ya la tomó un contratista. Abrí la obra para seguir o abandonarla."
             ),
         }
     }

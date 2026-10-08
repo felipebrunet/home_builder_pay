@@ -316,6 +316,10 @@ pub struct Oferta {
     pub detalles: Vec<String>,
     #[serde(default)]
     pub actualizado: i64,
+    /// SHA-256 (hex) del secreto que permite retirar la oferta. Vacío en ofertas
+    /// publicadas antes de 0.2.6. Ver `retiro.rs`.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub retiro_hash: String,
 }
 
 impl Oferta {
@@ -337,6 +341,7 @@ impl Oferta {
             mandante,
             detalles: ajusta_detalles(n, detalles),
             actualizado: ahora(),
+            retiro_hash: String::new(),
         })
     }
 }

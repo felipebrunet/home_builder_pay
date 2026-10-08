@@ -136,6 +136,10 @@ impl Idioma {
             (Self::En, Error::SinClave) => {
                 "The other person's key is missing, so the note cannot be sealed. Wait until they come online.".into()
             }
+            (Self::En, Error::NoEsTuya) => "You can only remove your own offers.".into(),
+            (Self::En, Error::OfertaTomada) => {
+                "A contractor already took that offer. Open the job to continue or abandon it.".into()
+            }
         }
     }
 
