@@ -37,6 +37,13 @@ use konstruado_net::{CajaMsg, Nodo};
 pub const PICONERO_POR_UNIDAD: u64 = 20_000_000;
 
 const LOOKBACK: usize = 40;
+
+/// Bloques que una salida tiene que esperar antes de poder gastarse. Es la regla
+/// que usa todo este módulo: una salida del bloque `h` se gasta con `tip >= h + 10`.
+pub const DESBLOQUEO: usize = 10;
+
+/// Minutos por bloque en Monero (para los avisos «~M min»).
+pub const MIN_POR_BLOQUE: usize = 2;
 /// Hasta dónde camina solo el fondeo si la billetera todavía no vio la salida. ~4 semanas en stagenet.
 const MAX_HISTORIA: usize = 20_000;
 /// Lo que suma un click de "mirar más atrás" en la caja. No se escanea de una sola vez.
@@ -195,15 +202,27 @@ pub fn escala(es: bool) -> String {
     }
 }
 
-/// Lo máximo que se puede tipear en Enviar: el saldo libre menos el margen del fee.
+/// «Usar el máximo»: todo el saldo libre. Pedir justo ese monto manda todo menos
+/// el fee (el fee se descuenta del monto y el cambio queda en una salida de 0 XMR).
 pub fn maximo_envio(libre: u64) -> Option<String> {
-    let piso = libre.checked_sub(FEE_CUSHION)?;
-    if piso == 0 {
-        None
+    (libre > 0).then(|| fmt_xmr(libre))
+}
+
+/// Ayuda corta de Enviar (escritorio y Android).
+pub fn ayuda_envio(es: bool) -> &'static str {
+    if es {
+        "El cambio vuelve a esta billetera. «Usar el máximo» manda todo el saldo libre: el fee se descuenta del monto."
     } else {
-        Some(fmt_xmr(piso))
+        "Change comes back to this wallet. «Use the maximum» sends the whole unlocked balance: the fee comes out of the amount."
     }
 }
+
+/// Máximo de salidas que junta un «enviar todo» en una transacción.
+pub const MAX_ENTRADAS_TODO: usize = 16;
+
+/// Salidas más chicas que esto cuestan más fee que lo que valen: «enviar todo» las deja
+/// (p. ej. los 1 piconero que dejaban los pagos de caja antes de 0.2.8).
+pub const POLVO: u64 = 20_000_000;
 
 #[derive(Clone, Debug)]
 pub struct CajaVista {
@@ -216,6 +235,8 @@ pub struct CajaVista {
     pub billetera: BilleteraVista,
     /// Qué tan atrás mira cada caja. `retro` es lo que todavía falta caminar.
     pub miradas: Vec<MiradaCaja>,
+    /// (obra, partida, bloque del fondeo) para las partidas fondeadas que la caja ya vio.
+    pub fondeos_vistos: Vec<(String, usize, usize)>,
 }
 
 /// Ventana de scan de una caja. No incluye llaves.
@@ -264,6 +285,7 @@ impl CajaVista {
             lineas: Vec::new(),
             billetera: BilleteraVista::vacia(),
             miradas: Vec::new(),
+            fondeos_vistos: Vec::new(),
         }
     }
 
@@ -272,6 +294,22 @@ impl CajaVista {
             .iter()
             .find(|l| l.obra == obra && l.partida == Some(partida))
             .map(|l| &l.texto)
+    }
+
+    /// Bloque donde la caja vio el fondeo de esta partida.
+    pub fn altura_fondeo(&self, obra: &str, partida: usize) -> Option<usize> {
+        self.fondeos_vistos
+            .iter()
+            .find(|(o, i, _)| o == obra && *i == partida)
+            .map(|(_, _, h)| *h)
+    }
+
+    /// La traba de desbloqueo de una partida, con el tip de esta vista.
+    pub fn traba(&self, obra: &Obra, partida: usize) -> Traba {
+        match obra.partidas.get(partida) {
+            Some(p) => traba_partida(p, self.altura_fondeo(&obra.id, partida), self.tip),
+            None => Traba::Libre,
+        }
     }
 
     pub fn caja_de(&self, obra: &str) -> Option<&str> {
@@ -681,6 +719,14 @@ pub fn aviso_humano(aviso: &str, es: bool) -> String {
             "The destination address is missing.",
         ),
         "codigo:monto-cero" | "el monto es cero" => ("El monto es cero.", "The amount is zero."),
+        "codigo:demasiadas-salidas" => (
+            "Hay demasiadas salidas libres para mandar todo de una vez. Mandá una parte primero.",
+            "Too many unlocked outputs to send everything at once. Send part of it first.",
+        ),
+        "el saldo no alcanza para el fee" => (
+            "El saldo libre no alcanza para el fee.",
+            "The unlocked balance does not cover the fee.",
+        ),
         "monto inválido" => ("El monto no es válido.", "The amount is not valid."),
         "demasiados decimales" => (
             "El monto tiene demasiados decimales.",
@@ -941,9 +987,98 @@ pub struct AccionesPartida {
     pub salir_local: bool,
     /// Me toca responder el porcentaje (aunque el pago ya esté en curso, para textos).
     pub me_toca: bool,
+    /// El fondeo todavía no se puede gastar: en vez de «Terminé» / «Aceptar y pagar»
+    /// la pantalla muestra [`texto_traba`].
+    pub traba: Traba,
 }
 
+/// Si el fondeo de una partida ya se puede gastar. Mientras no, nadie puede
+/// avisar término ni aceptar el pago: la caja todavía no podría pagar.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Traba {
+    /// Nada que esperar (o la partida no está fondeada).
+    Libre,
+    /// El fondeo todavía no aparece en un bloque de la caja.
+    SinBloque,
+    /// Fondeo en el bloque `altura`; se libera en `libre` = altura + 10.
+    /// `faltan` es `None` si todavía no sé el bloque actual.
+    Faltan { faltan: Option<usize>, libre: usize },
+}
+
+impl Traba {
+    pub fn trabada(self) -> bool {
+        self != Traba::Libre
+    }
+}
+
+/// Regla única de desbloqueo: `altura_fondeo` es el bloque más bajo donde la caja
+/// vio el fondeo de esta partida; `tip`, el último bloque conocido.
+pub fn traba_partida(p: &konstruado_core::Partida, altura_fondeo: Option<usize>, tip: Option<usize>) -> Traba {
+    if !matches!(p.estado, PartidaEstado::Encerrada | PartidaEstado::EnTrato) {
+        return Traba::Libre;
+    }
+    // Sin txid (perfiles viejos) no hay nada que mirar: no se traba.
+    if p.fondeo_txid.is_none() || p.pago_txid.is_some() {
+        return Traba::Libre;
+    }
+    let Some(h) = altura_fondeo else {
+        return Traba::SinBloque;
+    };
+    let libre = h.saturating_add(DESBLOQUEO);
+    match tip {
+        Some(t) if t >= libre => Traba::Libre,
+        Some(t) => Traba::Faltan { faltan: Some(libre - t), libre },
+        None => Traba::Faltan { faltan: None, libre },
+    }
+}
+
+/// Aviso de la traba. `soy_c`: lo ve el contratista (que es quien marca terminada).
+pub fn texto_traba(t: Traba, soy_c: bool, es: bool) -> Option<String> {
+    Some(match t {
+        Traba::Libre => return None,
+        Traba::SinBloque => if es {
+            "Esperando que el fondeo entre en un bloque.".into()
+        } else {
+            "Waiting for the funding to land in a block.".into()
+        },
+        Traba::Faltan { faltan: Some(n), libre } => {
+            let m = n * MIN_POR_BLOQUE;
+            match (soy_c, es) {
+                (true, true) => format!("Podés marcarla terminada en ~{n} bloques (~{m} min, bloque {libre})."),
+                (true, false) => format!("You can mark it finished in ~{n} blocks (~{m} min, block {libre})."),
+                (false, true) => format!("Se puede marcar terminada y pagar en ~{n} bloques (~{m} min, bloque {libre})."),
+                (false, false) => format!("It can be marked finished and paid in ~{n} blocks (~{m} min, block {libre})."),
+            }
+        }
+        Traba::Faltan { faltan: None, libre } => match (soy_c, es) {
+            (true, true) => format!("Podés marcarla terminada desde el bloque {libre}."),
+            (true, false) => format!("You can mark it finished from block {libre}."),
+            (false, true) => format!("Se puede marcar terminada y pagar desde el bloque {libre}."),
+            (false, false) => format!("It can be marked finished and paid from block {libre}."),
+        },
+    })
+}
+
+/// Texto corto para la lista de partidas: «Libre en ~N bloques».
+pub fn traba_corta(t: Traba, es: bool) -> Option<String> {
+    Some(match (t, es) {
+        (Traba::Libre, _) => return None,
+        (Traba::SinBloque, true) => "Fondeo sin bloque aún".into(),
+        (Traba::SinBloque, false) => "Funding not in a block yet".into(),
+        (Traba::Faltan { faltan: Some(n), .. }, true) => format!("Se libera en ~{n} bloques"),
+        (Traba::Faltan { faltan: Some(n), .. }, false) => format!("Unlocks in ~{n} blocks"),
+        (Traba::Faltan { libre, .. }, true) => format!("Se libera en el bloque {libre}"),
+        (Traba::Faltan { libre, .. }, false) => format!("Unlocks at block {libre}"),
+    })
+}
+
+#[cfg(test)]
 pub fn acciones_partida(obra: &Obra, i: usize, mid: &str, lineas: &[Texto]) -> AccionesPartida {
+    acciones_partida_con(obra, i, mid, lineas, Traba::Libre)
+}
+
+/// Igual que [`acciones_partida`], con la traba de desbloqueo del fondeo.
+pub fn acciones_partida_con(obra: &Obra, i: usize, mid: &str, lineas: &[Texto], traba: Traba) -> AccionesPartida {
     let mut a = AccionesPartida {
         en_curso: EnCurso::Nada,
         frenado: false,
@@ -958,6 +1093,7 @@ pub fn acciones_partida(obra: &Obra, i: usize, mid: &str, lineas: &[Texto]) -> A
         contraofertar: false,
         salir_local: false,
         me_toca: false,
+        traba: Traba::Libre,
     };
     let Some(p) = obra.partidas.get(i) else {
         return a;
@@ -1018,7 +1154,8 @@ pub fn acciones_partida(obra: &Obra, i: usize, mid: &str, lineas: &[Texto]) -> A
             a.salir_local = !en_red;
         }
         PartidaEstado::Encerrada => {
-            a.avisar_termino = soy_c;
+            a.traba = traba;
+            a.avisar_termino = soy_c && !traba.trabada();
         }
         PartidaEstado::EnTrato => {
             a.me_toca = match p.turno {
@@ -1027,7 +1164,10 @@ pub fn acciones_partida(obra: &Obra, i: usize, mid: &str, lineas: &[Texto]) -> A
                 None => false,
             };
             let pagando = matches!(a.en_curso, EnCurso::PagoFirmando | EnCurso::PagoEnRed);
-            a.aceptar_pago = a.me_toca && !pagando;
+            if !pagando {
+                a.traba = traba;
+            }
+            a.aceptar_pago = a.me_toca && !pagando && !traba.trabada();
             a.contraofertar = a.me_toca && !pagando;
         }
         PartidaEstado::Pagada => {}
@@ -1332,10 +1472,6 @@ impl Caja {
         Ok(addr)
     }
 
-    pub fn guardar_palabras(&self, path: &Path) -> Result<(), String> {
-        self.inner.lock().unwrap().exportar_semilla(path)
-    }
-
     /// Pide un envío desde la billetera personal. `monto` está en XMR (`0.04` o `0,04`).
     pub fn pedir_envio(&self, destino: &str, monto: &str) -> Result<(), String> {
         self.inner.lock().unwrap().pedir_envio(destino, monto)
@@ -1359,9 +1495,19 @@ impl Caja {
         m.guardar_libro();
     }
 
-    /// Copia el share de esta obra a la ruta que eligió el usuario. No pisa el archivo interno.
-    pub fn guardar_share(&self, obra: &str, path: &Path) -> Result<(), String> {
-        self.inner.lock().unwrap().exportar_share(obra, path)
+    /// Dirección de la semilla y obras con caja armada (sin leer secretos):
+    /// para saber si el último respaldo quedó viejo.
+    pub fn claves_respaldo(&self) -> (Option<String>, Vec<String>) {
+        let m = self.inner.lock().unwrap();
+        (
+            m.wallet.as_ref().map(|w| w.address().to_string()),
+            m.cuentas.keys().cloned().collect(),
+        )
+    }
+
+    /// Semilla (con altura de restauración) y shares para el respaldo completo.
+    pub fn material_respaldo(&self) -> MaterialCaja {
+        self.inner.lock().unwrap().material_respaldo()
     }
 
     /// Recupera la billetera personal. No trae la caja. No pisa una semilla distinta.
@@ -1729,31 +1875,23 @@ impl Motor {
             self.envio_aviso = Some(code.into());
             return Err(code.into());
         }
-        if let Some(code) = self.corte_envio(monto) {
-            self.envio_aviso = Some(code.into());
-            return Err(code.into());
+        // Justo el saldo libre entero = «enviar todo»: el fee sale del monto.
+        let todo = self.libre_total() == Some(monto);
+        if !todo {
+            if let Some(code) = self.corte_envio(monto) {
+                self.envio_aviso = Some(code.into());
+                return Err(code.into());
+            }
         }
         self.envio_aviso = None;
         self.pedido_envio = Some(PedidoEnvio {
             destino: destino.to_string(),
             monto,
+            todo,
         });
         Ok(())
     }
 
-    fn exportar_semilla(&self, path: &Path) -> Result<(), String> {
-        let text = backup::read_secret_file(&semilla_path()).map_err(|e| e.to_string())?;
-        let mut parsed = SeedBackup::parse(&text).map_err(|e| e.to_string())?;
-        // Al exportar, grabamos la punta actual para que el restore no arranque desde génesis.
-        if let Some(tip) = self.tip {
-            parsed.height = Some(tip as u64);
-        }
-        let body = parsed.to_text();
-        // Actualiza también el archivo interno, así el height no se pierde.
-        let _ = std::fs::remove_file(semilla_path());
-        let _ = backup::write_secret_file(&semilla_path(), &body);
-        backup::write_secret_file(path, &body).map_err(|e| e.to_string())
-    }
 
     fn pedir_fondeo(&mut self, obra: &Obra, partida: usize, yo: &Persona) -> Result<(), String> {
         self.insertar_fondeo(obra, partida, yo, false)
@@ -2820,7 +2958,8 @@ impl Motor {
             return true;
         }
         if let Some(pedido) = &self.pedido_envio {
-            if let Some(code) = self.corte_envio(pedido.monto) {
+            let corte = if pedido.todo { None } else { self.corte_envio(pedido.monto) };
+            if let Some(code) = corte {
                 self.pedido_envio = None;
                 self.envio_aviso = Some(code.into());
                 return true;
@@ -2871,11 +3010,24 @@ impl Motor {
             .libro
             .entradas
             .iter()
-            .filter(|e| tip >= e.altura.saturating_add(10))
+            .filter(|e| tip >= e.altura.saturating_add(DESBLOQUEO))
             .collect();
         let montos: Vec<u64> = libres.iter().map(|e| e.monto).collect();
         let necesita = pedido.monto.saturating_add(FEE_CUSHION);
-        let idxs = match elegir_montos(&montos, necesita) {
+        let idxs = if pedido.todo {
+            // Enviar todo: todas las salidas libres; el fee sale del monto.
+            let idxs: Vec<usize> = (0..libres.len()).filter(|&i| montos[i] >= POLVO).collect();
+            if idxs.is_empty() {
+                return Err("codigo:sin-saldo".into());
+            }
+            if idxs.len() > MAX_ENTRADAS_TODO {
+                return Err("codigo:demasiadas-salidas".into());
+            }
+            Ok(idxs)
+        } else {
+            elegir_montos(&montos, necesita).map_err(|e| e.to_string())
+        };
+        let idxs = match idxs {
             Ok(idxs) => idxs,
             Err(_) => {
                 let todos: Vec<u64> = self.libro.entradas.iter().map(|e| e.monto).collect();
@@ -2896,7 +3048,11 @@ impl Motor {
             crudas,
             usadas,
             destino: pedido.destino.clone(),
-            monto: pedido.monto,
+            monto: if pedido.todo {
+                personal::Monto::Todo
+            } else {
+                personal::Monto::Exacto(pedido.monto)
+            },
         })
     }
 
@@ -3455,6 +3611,11 @@ impl Motor {
 
     fn fundir_entradas(&mut self, entradas: Vec<EntradaNueva>) {
         for nueva in entradas {
+            // Salidas de 0 XMR (cambio vacío de un envío, lado en cero de un pago de caja):
+            // no son plata, no se listan ni se gastan.
+            if nueva.monto == 0 {
+                continue;
+            }
             if self.libro.ya_gastada(&nueva.tx, nueva.indice) {
                 continue;
             }
@@ -3756,6 +3917,18 @@ impl Motor {
     }
 
     /// Frena el envío personal cuando el libro ya está al día y no alcanza.
+    /// Suma de las salidas libres (10 bloques), si ya llegó la punta.
+    fn libre_total(&self) -> Option<u64> {
+        let tip = self.tip?;
+        Some(
+            self.libro
+                .entradas
+                .iter()
+                .filter(|e| tip >= e.altura.saturating_add(DESBLOQUEO))
+                .fold(0u64, |acc, e| acc.saturating_add(e.monto)),
+        )
+    }
+
     fn corte_envio(&self, monto: u64) -> Option<&'static str> {
         let Some(tip) = self.tip else {
             return None;
@@ -3768,7 +3941,7 @@ impl Motor {
             .libro
             .entradas
             .iter()
-            .filter(|e| tip >= e.altura.saturating_add(10))
+            .filter(|e| tip >= e.altura.saturating_add(DESBLOQUEO))
             .map(|e| e.monto)
             .collect();
         let todos: Vec<u64> = self.libro.entradas.iter().map(|e| e.monto).collect();
@@ -4133,6 +4306,23 @@ impl Motor {
                 }
             }
         }
+        if obras.is_empty() {
+            // Algunos llamados arman la vista sin obras: no perder lo ya visto.
+            v.fondeos_vistos = self.vista.fondeos_vistos.clone();
+        }
+        for obra in obras {
+            let Some(libro) = self.cajas_libros.get(&obra.id) else {
+                continue;
+            };
+            for (i, p) in obra.partidas.iter().enumerate() {
+                let Some(txid) = p.fondeo_txid.as_deref() else {
+                    continue;
+                };
+                if let Some(h) = libro.entradas.iter().filter(|e| e.tx == txid).map(|e| e.altura).min() {
+                    v.fondeos_vistos.push((obra.id.clone(), i, h));
+                }
+            }
+        }
         v.billetera = self.vista_billetera();
         v.miradas = self.miradas();
         self.vista = v;
@@ -4166,7 +4356,7 @@ impl Motor {
         let mut movs = Vec::new();
         for e in &self.libro.entradas {
             total = total.saturating_add(e.monto);
-            let suelta = self.tip.is_some() && tip >= e.altura.saturating_add(10);
+            let suelta = self.tip.is_some() && tip >= e.altura.saturating_add(DESBLOQUEO);
             if suelta {
                 libre = libre.saturating_add(e.monto);
             }
@@ -4431,24 +4621,64 @@ impl Motor {
         }
     }
 
-    fn exportar_share(&self, obra: &str, path: &Path) -> Result<(), String> {
-        let cuenta = self.cuentas.get(obra).ok_or("codigo:share-no")?;
-        let mut text = cuenta
-            .backup()
-            .map_err(|_| "codigo:share-archivo".to_string())?
-            .to_text();
-        if let Ok(disk) = backup::read_secret_file(&share_path(obra)) {
-            if let Ok(parsed) = ShareBackup::parse(&disk) {
-                if parsed.obra_id == obra {
-                    text = disk;
+    fn material_respaldo(&self) -> MaterialCaja {
+        let mut semilla = None;
+        let mut altura = None;
+        if let Some(w) = &self.wallet {
+            if let Some(mut b) = backup::read_secret_file(&semilla_path())
+                .ok()
+                .and_then(|t| SeedBackup::parse(&t).ok())
+                .filter(|b| b.address == w.address())
+            {
+                // Altura de restauración: lo más bajo que ya miramos (o pedimos mirar).
+                // Nada de lo que vio esta billetera está por debajo.
+                let mut h = b.height.map(|h| h as usize);
+                if self.libro.direccion == w.address() && self.libro.listo {
+                    let mut d = self.libro.desde.saturating_sub(self.retro);
+                    if let Some(m) = self.libro.entradas.iter().map(|e| e.altura).min() {
+                        d = d.min(m);
+                    }
+                    h = Some(h.map_or(d, |x| x.min(d)));
                 }
+                let h = h.or(self.tip);
+                b.height = h.map(|x| x as u64);
+                altura = b.height;
+                semilla = Some(b.to_text());
             }
         }
-        if path.exists() {
-            return Err("codigo:archivo-existe".into());
+        let mut shares = Vec::new();
+        let mut ids: Vec<&String> = self.cuentas.keys().collect();
+        ids.sort();
+        for id in ids {
+            let cuenta = &self.cuentas[id];
+            let Ok(b) = cuenta.backup() else { continue };
+            let mut texto = b.to_text();
+            if let Ok(disk) = backup::read_secret_file(&share_path(id)) {
+                if ShareBackup::parse(&disk).is_ok_and(|d| &d.obra_id == id) {
+                    texto = disk;
+                }
+            }
+            let desde = self
+                .cajas_libros
+                .get(id)
+                .filter(|l| l.listo && l.direccion == cuenta.address())
+                .map(|l| {
+                    let d = l.desde.saturating_sub(l.retro);
+                    l.entradas.iter().map(|e| e.altura).min().map_or(d, |m| d.min(m)) as u64
+                });
+            shares.push(ShareRespaldo {
+                obra_id: id.clone(),
+                texto,
+                desde,
+            });
         }
-        backup::write_secret_file(path, &text).map_err(|e| e.to_string())
+        MaterialCaja {
+            semilla,
+            altura,
+            shares,
+        }
     }
+
 
     fn restaurar_semilla(&mut self, path: &Path) -> Result<&'static str, String> {
         let text = backup::read_secret_file(path).map_err(|_| "codigo:semilla-archivo".to_string())?;
@@ -4729,7 +4959,7 @@ impl Motor {
         let Some(nuevas) = exactas.get(exactas.len().saturating_sub(2)..) else {
             return Vec::new();
         };
-        if nuevas.len() != 2 || nuevas.iter().any(|e| tip < e.altura.saturating_add(10)) {
+        if nuevas.len() != 2 || nuevas.iter().any(|e| tip < e.altura.saturating_add(DESBLOQUEO)) {
             return Vec::new();
         }
         nuevas.iter().map(|e| e.raw.clone()).collect()
@@ -4740,6 +4970,9 @@ impl Motor {
             return;
         };
         for nueva in entradas {
+            if nueva.monto == 0 {
+                continue;
+            }
             let ya = libro
                 .entradas
                 .iter()
@@ -4858,7 +5091,7 @@ fn estado_monedas(
     }
     if entradas
         .iter()
-        .any(|&(monto, altura)| monto >= minimo && tip < altura.saturating_add(10))
+        .any(|&(monto, altura)| monto >= minimo && tip < altura.saturating_add(DESBLOQUEO))
     {
         return EstadoMonedas::Trabadas;
     }
@@ -5048,7 +5281,7 @@ async fn podar_gastadas_en_cadena(
 fn indice_salida_libre(entradas: &[(u64, usize)], tip: usize, minimo: u64) -> Option<usize> {
     let mut mejor: Option<(usize, u64)> = None;
     for (i, &(monto, altura)) in entradas.iter().enumerate() {
-        if monto < minimo || tip < altura.saturating_add(10) {
+        if monto < minimo || tip < altura.saturating_add(DESBLOQUEO) {
             continue;
         }
         if mejor.is_none_or(|(_, otra)| monto < otra) {
@@ -5124,6 +5357,8 @@ fn xmr_dir() -> PathBuf {
 struct PedidoEnvio {
     destino: String,
     monto: u64,
+    /// Pidió justo el saldo libre entero: se manda todo menos el fee.
+    todo: bool,
 }
 
 struct EnvioHecho {
@@ -5138,7 +5373,7 @@ struct EnvioJob {
     crudas: Vec<Vec<u8>>,
     usadas: Vec<(String, u64)>,
     destino: String,
-    monto: u64,
+    monto: personal::Monto,
 }
 
 struct EntradaNueva {
@@ -5318,6 +5553,143 @@ fn escribir_0600(path: &Path, text: &str) -> Result<(), String> {
     Ok(())
 }
 
+// ---------------------------------------------------------------- respaldo completo
+
+/// Lo de Monero que va en el respaldo completo (ver `respaldo.rs`).
+#[derive(Clone, Debug, Default)]
+pub struct MaterialCaja {
+    /// Texto `SeedBackup` con `height` = altura de restauración.
+    pub semilla: Option<String>,
+    pub altura: Option<u64>,
+    pub shares: Vec<ShareRespaldo>,
+}
+
+/// Un share FROST dentro del respaldo completo.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ShareRespaldo {
+    pub obra_id: String,
+    /// Texto `ShareBackup` (el mismo formato que el respaldo suelto de antes).
+    pub texto: String,
+    /// Primer bloque que miró esta caja. Al restaurar, la caja se mira desde ahí.
+    #[serde(default)]
+    pub desde: Option<u64>,
+}
+
+/// Lo que el respaldo trae de Monero, ya comprobado.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ResumenCaja {
+    pub direccion: Option<String>,
+    pub altura: Option<u64>,
+    pub n_shares: usize,
+}
+
+/// Valida semilla y shares contra el perfil del respaldo, sin escribir nada.
+/// Cada share pasa las mismas pruebas que «Restaurar share»: la obra está en el
+/// perfil, mi rol en esa obra es el del archivo, es de stagenet y la cuenta se arma.
+pub fn validar_material(
+    yo: &Persona,
+    obras: &[Obra],
+    semilla: Option<&str>,
+    shares: &[ShareRespaldo],
+) -> Result<ResumenCaja, String> {
+    let mut direccion = None;
+    let mut altura = None;
+    if let Some(text) = semilla {
+        let b = SeedBackup::parse(text).map_err(|_| "codigo:semilla-archivo".to_string())?;
+        if b.net != Net::Stagenet {
+            return Err("codigo:semilla-red".into());
+        }
+        let w = SingleWallet::restore(Net::Stagenet, b.words.as_str())
+            .map_err(|_| "codigo:semilla-archivo".to_string())?;
+        if w.address() != b.address {
+            return Err("codigo:semilla-direccion".into());
+        }
+        direccion = Some(b.address.clone());
+        altura = b.height;
+    }
+    let mut vistos = HashSet::new();
+    for s in shares {
+        let share = ShareBackup::parse(&s.texto).map_err(|_| "codigo:share-archivo".to_string())?;
+        if share.obra_id != s.obra_id || !id_sano(&share.obra_id) {
+            return Err("codigo:share-obra".into());
+        }
+        if !vistos.insert(share.obra_id.clone()) {
+            return Err("codigo:share-duplicado".into());
+        }
+        let obra = obras.iter().find(|o| o.id == share.obra_id);
+        let rol_mio = obra.and_then(|o| rol_en(o, &yo.id)).map(|p| p.label());
+        validar_share_meta(obra.is_some(), rol_mio, &share.role, share.net == Net::Stagenet)
+            .map_err(|e| e.to_string())?;
+        let account = JointAccount::from_backup(&share).map_err(|_| "codigo:share-archivo".to_string())?;
+        if account.obra_id() != share.obra_id || account.address() != share.address {
+            return Err("codigo:share-archivo".into());
+        }
+    }
+    Ok(ResumenCaja {
+        direccion,
+        altura,
+        n_shares: shares.len(),
+    })
+}
+
+/// Archivos de `xmr/` que deja un respaldo validado (rutas relativas a la carpeta
+/// de datos). Los libros arrancan vacíos en la altura de restauración: el scan
+/// vuelve a encontrar las entradas desde ahí.
+pub fn archivos_restauracion(
+    semilla: Option<&str>,
+    altura: Option<u64>,
+    shares: &[ShareRespaldo],
+) -> Result<Vec<(PathBuf, String)>, String> {
+    let mut out = Vec::new();
+    if let Some(text) = semilla {
+        let mut b = SeedBackup::parse(text).map_err(|_| "codigo:semilla-archivo".to_string())?;
+        b.height = altura.or(b.height);
+        out.push((PathBuf::from("xmr/semilla.txt"), b.to_text()));
+        if let Some(h) = b.height {
+            let l = Libro::desde_altura(&b.address, h as usize);
+            let disco = LibroDisco {
+                direccion: l.direccion.clone(),
+                desde: l.desde as u64,
+                hasta: l.hasta as u64,
+                listo: l.listo,
+                retro: 0,
+                entradas: Vec::new(),
+                gastadas: Vec::new(),
+            };
+            out.push((
+                PathBuf::from("xmr/libro.json"),
+                serde_json::to_string(&disco).map_err(|e| e.to_string())?,
+            ));
+        }
+    }
+    for s in shares {
+        let share = ShareBackup::parse(&s.texto).map_err(|_| "codigo:share-archivo".to_string())?;
+        let account = JointAccount::from_backup(&share).map_err(|_| "codigo:share-archivo".to_string())?;
+        let id = account.obra_id().to_string();
+        if !id_sano(&id) {
+            return Err("codigo:share-obra".into());
+        }
+        let body = account.backup().map_err(|_| "codigo:share-archivo".to_string())?.to_text();
+        out.push((PathBuf::from(format!("xmr/{id}.share")), body));
+        if let Some(h) = s.desde.or(altura) {
+            let h = h as usize;
+            let disco = LibroCajaDisco {
+                direccion: account.address().to_string(),
+                desde: h as u64,
+                hasta: h.saturating_sub(1) as u64,
+                listo: true,
+                retro: 0,
+                entradas: Vec::new(),
+            };
+            out.push((
+                PathBuf::from(format!("xmr/caja-{id}.json")),
+                serde_json::to_string(&disco).map_err(|e| e.to_string())?,
+            ));
+        }
+    }
+    Ok(out)
+}
+
 fn semilla_path() -> PathBuf {
     xmr_dir().join("semilla.txt")
 }
@@ -5433,7 +5805,7 @@ fn cobertura_caja(
     alturas.sort_unstable();
     if alturas.len() >= cuantos {
         let nuevas = &alturas[alturas.len() - cuantos..];
-        let sueltas = nuevas.iter().all(|altura| tip >= altura.saturating_add(10));
+        let sueltas = nuevas.iter().all(|altura| tip >= altura.saturating_add(DESBLOQUEO));
         return if sueltas {
             CoberturaCaja::Libre
         } else {
@@ -5583,6 +5955,84 @@ mod tests {
         assert_eq!(estado_billetera(&b, true, Some(100), true).0, Tono::Error);
         b.enviando = true;
         assert_eq!(estado_billetera(&b, true, Some(100), true).0, Tono::Espera);
+    }
+
+    #[test]
+    fn traba_de_desbloqueo_sigue_la_regla_de_diez_bloques() {
+        let (mut obra, _m, _c) = obra_en_trato();
+        obra.partidas[0].estado = PartidaEstado::Encerrada;
+        let p = &obra.partidas[0];
+        assert_eq!(traba_partida(p, None, Some(500)), Traba::SinBloque);
+        assert_eq!(traba_partida(p, Some(100), Some(100)), Traba::Faltan { faltan: Some(10), libre: 110 });
+        assert_eq!(traba_partida(p, Some(100), Some(107)), Traba::Faltan { faltan: Some(3), libre: 110 });
+        // Misma frontera que las salidas libres de la billetera: tip >= altura + 10.
+        assert_eq!(traba_partida(p, Some(100), Some(109)), Traba::Faltan { faltan: Some(1), libre: 110 });
+        assert_eq!(traba_partida(p, Some(100), Some(110)), Traba::Libre);
+        assert_eq!(traba_partida(p, Some(100), None), Traba::Faltan { faltan: None, libre: 110 });
+        // Sin txid de fondeo (perfil viejo) o fuera de Encerrada/EnTrato: nada que esperar.
+        let mut q = p.clone();
+        q.fondeo_txid = None;
+        assert_eq!(traba_partida(&q, None, Some(1)), Traba::Libre);
+        q = p.clone();
+        q.estado = PartidaEstado::Pagada;
+        assert_eq!(traba_partida(&q, Some(100), Some(101)), Traba::Libre);
+    }
+
+    #[test]
+    fn traba_apaga_termine_y_aceptar_pago() {
+        let (mut obra, m, c) = obra_en_trato();
+        let t = Traba::Faltan { faltan: Some(4), libre: 1210 };
+        // En trato: al mandante le toca, pero no puede aceptar todavía. Contraofertar sí.
+        let a = acciones_partida_con(&obra, 0, &m.id, &[], t);
+        assert!(a.me_toca && !a.aceptar_pago && a.contraofertar);
+        assert_eq!(a.traba, t);
+        let a = acciones_partida_con(&obra, 0, &m.id, &[], Traba::Libre);
+        assert!(a.aceptar_pago && !a.traba.trabada());
+        // Encerrada: el contratista no puede avisar término.
+        obra.partidas[0].estado = PartidaEstado::Encerrada;
+        let a = acciones_partida_con(&obra, 0, &c.id, &[], t);
+        assert!(!a.avisar_termino && a.traba.trabada());
+        let a = acciones_partida_con(&obra, 0, &c.id, &[], Traba::SinBloque);
+        assert!(!a.avisar_termino);
+        assert!(acciones_partida_con(&obra, 0, &c.id, &[], Traba::Libre).avisar_termino);
+        // El mandante ve la misma traba (para el aviso) y nunca un botón de término.
+        let a = acciones_partida_con(&obra, 0, &m.id, &[], t);
+        assert!(!a.avisar_termino && a.traba == t);
+    }
+
+    #[test]
+    fn textos_de_traba() {
+        let t = Traba::Faltan { faltan: Some(4), libre: 1210 };
+        assert_eq!(
+            texto_traba(t, true, true).unwrap(),
+            "Podés marcarla terminada en ~4 bloques (~8 min, bloque 1210)."
+        );
+        assert_eq!(
+            texto_traba(t, true, false).unwrap(),
+            "You can mark it finished in ~4 blocks (~8 min, block 1210)."
+        );
+        assert!(texto_traba(t, false, true).unwrap().contains("~4 bloques (~8 min, bloque 1210)"));
+        assert_eq!(
+            texto_traba(Traba::SinBloque, true, true).unwrap(),
+            "Esperando que el fondeo entre en un bloque."
+        );
+        assert!(texto_traba(Traba::Libre, true, true).is_none());
+        assert_eq!(traba_corta(t, true).unwrap(), "Se libera en ~4 bloques");
+    }
+
+    #[test]
+    fn vista_encuentra_el_bloque_del_fondeo() {
+        let (mut obra, _m, _c) = obra_en_trato();
+        obra.partidas[0].estado = PartidaEstado::Encerrada;
+        let mut v = CajaVista::vacia();
+        v.tip = Some(1205);
+        assert_eq!(v.traba(&obra, 0), Traba::SinBloque);
+        v.fondeos_vistos.push((obra.id.clone(), 0, 1200));
+        assert_eq!(v.traba(&obra, 0), Traba::Faltan { faltan: Some(5), libre: 1210 });
+        // El tip avanza solo (se refresca cada minuto): la traba se suelta sin reiniciar.
+        v.tip = Some(1210);
+        assert_eq!(v.traba(&obra, 0), Traba::Libre);
+        assert_eq!(v.traba(&obra, 1), Traba::Libre);
     }
 
     #[test]
@@ -5746,8 +6196,9 @@ mod tests {
         assert_eq!(pico, 40_000_000_000);
         assert_eq!(fmt_xmr(pico), "0.0400");
         assert!(a_piconero(u64::MAX).is_none());
-        assert_eq!(maximo_envio(pico).as_deref(), Some("0.0390"));
-        assert!(maximo_envio(FEE_CUSHION).is_none());
+        // «Usar el máximo» pone todo el saldo libre (el fee se descuenta al enviar).
+        assert_eq!(maximo_envio(pico).as_deref(), Some("0.0400"));
+        assert!(maximo_envio(0).is_none());
     }
 
     #[test]

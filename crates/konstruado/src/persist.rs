@@ -46,6 +46,8 @@ pub struct RespaldoPerfil {
 
 pub const FORMATO_RESPALDO_OBRAS: &str = "konstruado-obras-v1";
 
+/// Formato viejo (0.2.7): ya no se exporta; queda para pruebas de la importación.
+#[allow(dead_code)]
 pub fn exportar_perfil_obras(obras: &[Obra], ofertas: &[Oferta]) -> Result<String, String> {
     let r = RespaldoPerfil {
         formato: FORMATO_RESPALDO_OBRAS.into(),
