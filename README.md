@@ -1,181 +1,71 @@
+<img src="assets/icon/png/konstruado-128.png" width="72" align="right" alt="Konstruado icon">
+
 # Konstruado
 
-For a new Grok session, read `CONTEXTO.md` first.
+**Pay a construction job stage by stage from a 2-of-2 FROST Monero box, peer to peer over Tor.**
 
-Peer-to-peer construction escrow on Monero **stagenet**. One monorepo:
+> **Proof of concept. STAGENET ONLY. Not audited. Do not use real funds.**
 
-| Path | What it is |
-|---|---|
-| `crates/konstruado` | Desktop app (Dioxus). Clone and `cargo run`. |
-| `crates/konstruado-ffi` | UniFFI facade: same caja/persist/i18n motor for Android. |
-| `android/` | Jetpack Compose APK (Spanish UI). Tor via **Orbot** (SOCKS), not bundled. |
-| `crates/konstruado-core`, `konstruado-net`, `xmr-joint` | Shared deal logic, Tor rendezvous, stagenet wallet / 2-of-2 box. |
+> **Built with AI assistance.** Most of the code in this repository was written by an AI assistant under the direction of Felipe Brunet, who specified, reviewed and tested it. Treat it accordingly and review before trusting it.
 
-The deal, the meeting room, and a stagenet wallet live in the desktop window (and the same flow on the phone). Deal and money logic is shared Rust (`konstruado-core`, `konstruado-net`, `xmr-joint`, `crates/konstruado-motor`); desktop and Android differ only in UI, Tor (bundled `tor` vs Orbot) and who hosts the room.
+## The problem
 
-The two people do not see each other like a chat. Roles:
+A client hires a contractor for a job paid in milestones. Today one side has to trust the other: the client pays up front, or the contractor works on credit. Konstruado puts each milestone (stage) into a Monero box that neither side can spend alone. For every stage both put in the same guarantee; when the work is done they agree on a percent, both co-sign, and the box pays out. No escrow agent, no server, no account.
 
-1. **Mandante** (pays) publishes a job: name, work amount, suggested guarantee.
-2. **Contratista** (builds) sees that offer on the board and accepts, or proposes another guarantee.
+![Desktop app: a funded stage](docs/img/desktop-stage-funded.png)
 
-Guarantee must divide the job amount exactly: 10 000 / 2 000 → 5 stages. In each stage both sides lock the same amount.
+## How it works
 
-Rendezvous is hardcoded (`konstruado-red-1` plus a baked Tor v3 onion). Each desktop node starts its own `tor` process, publishes a personal hidden service, and also hosts/dials that shared onion so two machines meet without exchanging addresses. Two copies on one PC still find each other on port 17432 without waiting for Tor. A phone joins in *celular* mode: outbound live session to the room through Orbot; it does not host the onion.
+- **Rust core.** Deal state machine, merge rules and the box logic are shared Rust crates (`konstruado-core`, `konstruado-net`, `konstruado-motor`, `xmr-joint`, on top of a patched vendored [monero-oxide](third_party/monero-oxide)).
+- **Desktop app** in [Dioxus](https://dioxuslabs.com/) (Linux). It bundles `tor` and hosts the meeting room.
+- **Android app** in Jetpack Compose, calling the same Rust through [UniFFI](https://mozilla.github.io/uniffi-rs/). Tor comes from Orbot.
+- **Peers meet over Tor.** A hardcoded onion acts as the rendezvous ("sala"), so the two sides never exchange addresses; offers and deal state are gossiped and merged, notes are sealed for the two parties.
+- **One 2-of-2 FROST box per job.** A DKG between the two apps yields an ordinary stagenet address whose spend key exists only as two shares. Funding and payout are CLSAG transactions co-signed by both.
+- **Priced in USD, fixed in XMR at funding.** Amounts are entered in USD; each stage's XMR is fixed with a reference price (CoinGecko, Kraken fallback) when it is locked, and both sides fund exactly that.
+
+Details: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) · [docs/PROTOCOL.md](docs/PROTOCOL.md).
+
+## Try it on stagenet
+
+1. Download from [Releases](https://github.com/felipebrunet/konstruado/releases): `konstruado-X.Y.Z-linux-x86_64` (desktop) and/or `konstruado-X.Y.Z-android-arm64.apk`. Check them against `SHA256SUMS`.
+2. Desktop (Debian/Ubuntu): `sudo apt install tor libgtk-3-0 libwebkit2gtk-4.1-0 libxdo3`, then `chmod +x` and run the binary. The desktop of the client hosts the room, so keep one desktop open.
+3. Android: install the APK and [Orbot](https://orbot.app/); in Konstruado **Account → Network** turn on **Use Orbot (SOCKS) and dial the room** (`127.0.0.1:9050`).
+4. Each side creates its stagenet wallet (**Wallet**) and gets stagenet coins from a stagenet faucet, or from your own `monerod --stagenet` (set it under **Account → Monero node**). Coins need 10 blocks before they can be spent.
+5. The client (**I pay for the job**) posts a job; the contractor (**I build it**) sees it on the board and accepts. Lock a stage, wait for the funding to unlock, report finish, accept and pay.
+
+Two people on one PC: run the desktop twice with `KONSTRUADO_DATOS=dir1` and `KONSTRUADO_DATOS=dir2`. Both apps are in Spanish or English (**ES / EN**). Build from source: [docs/BUILDING.md](docs/BUILDING.md).
 
 ## Status
 
-| Piece | Where it stands |
-|---|---|
-| Deal, board, Tor rendezvous, two data dirs | In the desktop window. |
-| Android Compose + Orbot | Same deal/caja flow via UniFFI. Needs a desktop (or `konstruado-sala`) hosting the room. |
-| Notes and extra text between the two parties | Sealed. A third person on the swarm can see the box, not the words. A live job leaves their board. |
-| Personal stagenet wallet | **Billetera** in the top bar, or the account screen. Create it there. The 25-word seed is `xmr/semilla.txt` (mode 0600), not `estado.json`. |
-| 2-of-2 box | Built when the job is agreed. Messages go to the other person, not the DHT. Each side keeps `xmr/{obra}.share`. |
-| Stage funding and payout | The buttons build the transaction. Encerrada and Pagada flip only after a local scan sees it in a block. A live publish can still be rejected by the node. |
-| Custom stagenet daemon | Optional URL (LAN / Tailscale) for scan, balance, funding and payout. **Use default** falls back to the public HTTPS daemon. |
-| Backups | One encrypted full backup (`.kbak`): seed + restore height, the whole profile (jobs, offers, withdrawals, name/role, theme/language), every FROST share and `daemon.url`. Restore is all-or-nothing and restarts the app. 0.2.7 files (seed / share / job JSON) still import under **Advanced**. See below. |
-| Unlock gate | A stage funding is spendable at *funding block + 10*. Until then **Avisar que terminé** / **Aceptar X% y pagar** are off and both apps show a block countdown (`caja::traba_partida`). |
-| Leaving a job | Archive hides a joint job on this device only (no funds moved, other side not cut off). Leave stage cancels local funding/proposal only. |
-| Removing an offer | The client can withdraw an offer nobody took. A signed withdrawal is gossiped under its own DHT key, so peers drop the offer and gossip cannot bring it back. |
-| Actions per stage | `caja::acciones_partida` decides which buttons a stage shows. Desktop and Android both use it, so a payment in flight never offers **Accept and pay** again. |
+What is checked:
 
-The default daemon is `https://stagenet.xmr.kernal.eu:38089`. Oxide is vendored under `third_party/monero-oxide` with the CLSAG patches this crate needs.
+- `cargo test --workspace` (about 140 tests) and the Android JVM tests pass on every release: deal state and merge rules, offer withdrawal, the DKG (both sides derive the same address, shares restore), funding/payout split amounts, locally built and verified CLSAG transactions (including a tampered ring that must fail), English seed vs a known Monero vector, backup encryption and restore, Tor/Orbot diagnosis, the ES/EN texts.
+- In-process network tests (no Tor): two nodes see each other's offers, a phone joins through a live session, two phones meet through the relay, the box messages go to the other side and not to the DHT.
 
-`cargo test --workspace` does not talk to that daemon.
+What is **not** verified:
 
-## How Monero pays a stage
+- No security audit of anything: the FROST/DKG integration, the CLSAG patches to monero-oxide, the message sealing, the backup format.
+- Full stage funding and payout against the public stagenet network is not covered by automated tests; a live publish can still be rejected by the node.
+- Tor itself is not exercised by the automated tests.
+- The single hardcoded rendezvous onion is a central point that can be blocked.
+- The USD reference price comes from centralized APIs.
+- Android has been tried on few devices.
 
-One personal wallet per machine, then one shared box per job, then one transaction in and one transaction out. The box is an ordinary stagenet address. Its spend key exists only as two FROST shares.
+## Feedback wanted
 
-**1. Personal wallet.** Cuenta or Billetera runs **Crear billetera de stagenet**. The address to fund is on Billetera. A fresh wallet scans from 40 blocks back; a restored seed scans from the block height stored in its backup; **Mirar 200 bloques más atrás** walks further. Spent outputs are pruned by key image, so the balance matches after a restore. The mempool does not count. Outputs stay locked for about 10 blocks. The other PC creates its own seed. Do not copy `semilla.txt`.
+- **Protocol review:** the 2-of-2 FROST DKG and co-signing flow, the stage split, the unlock gate, the rendezvous design. See [docs/PROTOCOL.md](docs/PROTOCOL.md).
+- **Testers** on stagenet, desktop and Android: open an [issue](https://github.com/felipebrunet/konstruado/issues) with what broke.
 
-**2. One 2-of-2 box when the two match.** The client is FROST index 1 and pays the funding fee. The contractor is index 2. The DKG context includes the job id. Neither side holds the full spend scalar. The shared view is sent once and stored in the share file.
+## More
 
-**3. Funding one stage.** **Confirmar y fondear** builds one transaction whose output is `2 × guarantee` to the box. Both personal wallets contribute. Encerrada is set when the scan sees that transaction in a block. If the node rejects the tx, **Empezar el fondeo de nuevo** clears the stuck session and picks fresh outputs.
+- [docs/BUILDING.md](docs/BUILDING.md): desktop, Android APK, Linux binary, icon.
+- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md): crates, rendezvous, status of each piece, languages.
+- [docs/PROTOCOL.md](docs/PROTOCOL.md): how Monero pays a stage, USD pricing, seed, full backup format, offer withdrawal.
+- [docs/RELEASES.md](docs/RELEASES.md): versioning, release assets, signing, notable versions.
+- [android/README.md](android/README.md): the Android app (Spanish).
 
-**4. Paying the stage.** The pot is `2 × guarantee`. The contractor receives the agreed percent of the payment plus their own guarantee. The client receives the rest. The fee comes from the client's remainder first. At 100% the contractor receives the pot minus the fee. The client's output is still there (Monero needs two outputs), but with 0 XMR: up to 0.2.7 it carried 1 piconero of dust. The same applies to personal sends: an exact send or **Usar el máximo** (free balance minus the fee) leaves a 0-amount change output.
+*En español:* la app está en español e inglés; la documentación del Android está en [android/README.md](android/README.md).
 
-**5. Unlock gate.** Monero only spends an output 10 blocks after the block that holds it. The box learns the funding block from its scan; `caja::traba_partida` (funding block + 10 vs the node tip) decides whether **Avisar que terminé** and **Aceptar X% y pagar** are enabled. While locked both apps show “Podés marcarla terminada en ~N bloques (~M min, bloque X)”, or “esperando que el fondeo entre en un bloque” if the funding is not in a block yet. The tip is refreshed every minute, so the gate opens without a restart.
+## License
 
-Peers on 0.2.7 still build the old 1-piconero split and cannot co-sign a 0.2.8 payment proposal (they reject the 0-amount split); 0.2.8 still co-signs the old split. Upgrade both sides.
-
-Both shares have to sign. One share is not a transaction.
-
-## Prices in USD (0.2.10)
-
-The client posts the job amount and the guarantee per stage in **USD** (`Moneda::Usd`, cents). The XMR of each stage is fixed when it is locked:
-
-- **Price source.** `konstruado-motor::cotizacion`: CoinGecko `simple/price` first, Kraken `XMRUSD` ticker as fallback, over HTTPS (rustls + webpki roots). With Tor on it goes through the SOCKS proxy (Orbot on Android, the bundled tor on desktop); remote DNS. The last quote is cached with its timestamp; without one the UI says so and **Proponer encerrar** refuses with a clear error.
-- **Stagenet.** Stagenet XMR has no value; the mainnet price is used as a reference and the UI says so.
-- **Fixed per stage.** The proposer stores a `PrecioFijado` in the stage (USD cents, USD/XMR rate, source, timestamp and the resulting piconero amount). The other side sees it before **Confirmar y fondear** and accepts by confirming; a warning shows the drift from the current price. Both funding sides read the piconero amount from the shared job state (`Obra::piconero_partida`), never reconvert, so different local prices cannot make `check_dest` reject the funding. Simultaneous proposals converge by the existing tie-break; a copy from an older peer without the price never erases it.
-- **Display.** Before funding: “USD X ≈ Y XMR al precio actual”. After: “Y XMR (USD X al dd/mm hh:mm, precio Z)”. Percent payments split the fixed XMR.
-- **Old jobs** keep the legacy unit (1 unit = 0.00002 XMR, a guarantee of 2000 is 0.04 XMR per side). The new fields are `serde(default)`. Peers on 0.2.9 do not understand USD jobs: upgrade both sides.
-
-Atomic spending and the multisig/FROST box path stay separate in the code; do not mix them.
-
-## Personal seed (view words)
-
-**Billetera → Respaldos y recuperación → Ver las 25 palabras** shows the personal single-sig mnemonic after a confirmation. The words are the standard Monero English seed (same derivation as Feather / monero-wallet-cli: spend from the 25 words, view = keccak(spend)). Job boxes are **not** recovered from this seed — they need the FROST shares in the full `.kbak`. The restore height is shown next to the words. Copy is allowed; the clipboard is cleared after 60 s if it still holds the seed (on Android the clip is marked `EXTRA_IS_SENSITIVE`). Android sets `FLAG_SECURE` while the words are on screen. The same block also shows the personal address and private view key for a view-only check without exposing the seed.
-
-## Full backup
-
-**Billetera → Respaldos y recuperación → Exportar respaldo completo** writes one file, `konstruado-respaldo-<YYYY-MM-DD>.kbak`:
-
-| Bytes | Field |
-|---|---|
-| 8 | magic `KSTRBAK\0` |
-| 1 | format version (1) |
-| 1 | KDF id (1 = Argon2id v1.3) |
-| 4 + 4 + 1 | memory KiB, passes, lanes (default 64 MiB, 3, 1) |
-| 16 | salt |
-| 24 | XChaCha20-Poly1305 nonce |
-| rest | ciphertext of a JSON document; the 59-byte header is the AAD |
-
-The JSON holds the full `estado.json` profile, the seed backup text and its height, each job's share (`xmr::ShareBackup`) with the box's scan start, and the node URL. Password: at least 8 characters, nothing stored. Code: `xmr_joint::sobre` (envelope) and `crates/konstruado-motor/src/respaldo.rs` (contents, restore), shared by desktop and Android.
-
-Restore (welcome screen **Restaurar desde respaldo**, or the same section in Billetera): decrypt, check the seed, check every share against its job and role (same checks as a single share import), show a summary. If the device already has an account, seed or shares, an explicit **Reemplazar lo de este equipo** is required. Then everything is written to `restaurar.tmp/`, renamed to `restaurar.listo/`, and the app restarts; at startup the old files move to `previo-<date>/` and the new ones take their place (resumable if cut). The wallet and each box scan from the stored height. Newer deal progress comes back from the other person through the room.
-
-The app shows when the last full backup was made and reminds you to export again after a new job or a new box (`ultimo-respaldo.json`).
-
-## Withdrawing an offer
-
-Before 0.2.6, **Quitar oferta** only deleted the offer from the local DHT store. The board key merges by union, so the next gossip from the contractor or the room put it back.
-
-Now each offer carries `retiro_hash = SHA-256(secret)`. The secret is derived from the client's X25519 secret and the offer id, so the same device can rebuild it after a restart. Withdrawing publishes a `RetiroOferta` that reveals the secret under the DHT key `clave_retiradas()`. Every peer checks the reveal against the hash and drops the offer from its board, from its store and from what it gossips. A forged withdrawal does not match the hash and is ignored.
-
-Offers published by 0.2.5 have no hash. For those, a withdrawal signed by the same client id is accepted. Withdrawals are capped at 512 and kept newest first. `estado.json` gains a `retiradas` list with a serde default, so older files still load. Older peers store the unknown key unchanged and keep relaying it.
-
-## Build desktop from source
-
-Needs Rust 1.89 or newer (`monero-wallet` 0.2), GTK3, WebKitGTK 4.1, `libxdo-dev`, and the `tor` package.
-
-```bash
-sudo apt install tor libgtk-3-0 libwebkit2gtk-4.1-0 libxdo-dev
-cargo test --workspace
-cargo run
-```
-
-The UI is Spanish by default. Switch to English with **ES / EN** in the top bar (or in the account screen). The deal itself does not change.
-
-State is saved in `~/.konstruado/estado.json` (override with `KONSTRUADO_DATOS`). The seed and the per-job share are under `xmr/` in that same directory, mode 0600, and are not inside `estado.json`.
-
-Two users on one PC need two data dirs:
-
-```bash
-KONSTRUADO_DATOS=.konstruado-dinero cargo run
-KONSTRUADO_DATOS=.konstruado-chasquilla cargo run
-```
-
-Window 1: José, **Pago la obra**, Publicar. Window 2: Juan, **La construyo** — the job appears on his board.
-
-## Build Android APK
-
-`android/` is a Jetpack Compose app on top of `crates/konstruado-ffi` (UniFFI bindings to the same Rust motor). Tor comes from Orbot. See [`android/README.md`](android/README.md). Short path (needs Android SDK + NDK, JDK 17+, `cargo-ndk`):
-
-```bash
-android/build-apk.sh          # debug APK (arm64-v8a + x86_64), for development and the emulator
-android/build-apk-release.sh  # release APK: Rust in release (arm64-v8a, stripped, LTO), R8, release signature
-```
-
-The release APK is signed with the key named by `KONSTRUADO_RELEASE_ENV` (default `~/.config/konstruado-release.env`, outside the repo: `KONSTRUADO_RELEASE_STORE_FILE`, `_STORE_PASSWORD`, `_KEY_ALIAS`, `_KEY_PASSWORD`; the same names also work as Gradle properties). Without it, Gradle signs the release build with the debug key, so anyone can build it.
-
-**Debug → release signature:** Android does not update an app signed with a different key. To move from a debug APK (0.2.9 and earlier) to the release APK, first make a full backup (**Billetera → Respaldos y recuperación → Exportar respaldo completo**, `.kbak`), uninstall the debug app, install the release APK and choose **Restaurar desde respaldo**. Uninstalling deletes the app's private data, including the seed and the job shares.
-
-APKs are **not** stored in git (`*.apk` is ignored). Published builds go on [Releases](https://github.com/felipebrunet/konstruado/releases).
-
-## Version and releases
-
-The version lives once, in `[workspace.package] version` of the root `Cargo.toml`. The desktop window title and **Help → About**, `konstruado-ffi` (Android About) and the APK `versionName` all read it. Bump it there, then tag `vX.Y.Z`.
-
-Each release on [Releases](https://github.com/felipebrunet/konstruado/releases) carries two assets: `konstruado-X.Y.Z-android-arm64.apk` (release-signed, R8) and `konstruado-X.Y.Z-linux-x86_64`. Up to 0.2.9 the APK was `konstruado-X.Y.Z-android-arm64-debug.apk` (debug signature).
-
-`scripts/release-assets.sh` builds both into `dist/`. `[profile.release]` uses `strip`, `lto = "fat"` and `codegen-units = 1`.
-
-## Icon
-
-`assets/icon/konstruado.svg` is the hand-made source (crossed shovel and pickaxe, app palette: red `#b8321f`, beige `#f4e4cc`, ink `#1c120c`). `python3 assets/icon/generar.py` (needs `rsvg-convert`) regenerates every derived file: `assets/icon/png/konstruado-{16…512}.png`, the desktop window icon `crates/konstruado/assets/konstruado-256.png` (embedded with `include_bytes!`), `assets/linux/konstruado.png`, and the Android adaptive icon (vector foreground, background colour, monochrome layer for themed icons, round icon, PNG fallbacks in `mipmap-*`).
-
-## Linux binary (not production)
-
-On Debian/Ubuntu:
-
-```bash
-sudo apt install tor libgtk-3-0 libwebkit2gtk-4.1-0 libxdo3
-chmod +x konstruado-*-linux-x86_64*
-./konstruado-*-linux-x86_64*
-```
-
-Menu entry and icon (per user, no root): `assets/linux/instalar.sh path/to/konstruado-X.Y.Z-linux-x86_64` installs the binary in `~/.local/bin`, `assets/linux/konstruado.desktop` in `~/.local/share/applications` and the icon in `~/.local/share/icons/hicolor/256x256/apps`.
-
-To rebuild it:
-
-```bash
-scripts/release-assets.sh     # dist/konstruado-X.Y.Z-linux-x86_64 + dist/konstruado-X.Y.Z-android-arm64.apk
-# or only the desktop binary:
-cargo build -p konstruado --release
-VERSION=$(cargo pkgid -p konstruado | sed 's/.*[#@]//')
-mkdir -p dist
-cp target/release/konstruado "dist/konstruado-$VERSION-linux-x86_64"
-```
-
-How to use the app (roles, two machines, the deal) is **Help → README** inside the window, not this file.
+[MIT](LICENSE) © 2026 Felipe Brunet. Vendored third-party code keeps its own license (`third_party/`, `crates/xmr-joint/vendor/`). The GitHub mark is from [Octicons](https://github.com/primer/octicons) (MIT).

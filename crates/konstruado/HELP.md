@@ -15,7 +15,7 @@ On the phone, the network card says what is actually wrong. **Orbot no responde*
 
 ## Language
 
-Spanish by default. Switch to English with **ES / EN** in the top bar, or in the account screen. The deal itself does not change.
+Spanish by default. Switch to English with **ES / EN** in the top bar, or in the account screen. The deal itself does not change. The phone app has the same choice under **Cuenta → Idioma / Language** (it starts in the phone's language when that is Spanish or English); the two sides can use different languages.
 
 ## Two people
 
@@ -102,4 +102,4 @@ After a restore, newer progress of a deal (notes, percents, payments) comes from
 
 Backups from 0.2.7 or earlier (25-word file, box share, job backup) still import under **Advanced: import standalone backups (0.2.7 or older)**: job backup → seed → share. The app no longer exports them separately.
 
-The version is in **Help → About**.
+The version is in **Help → About**. The source code, issues and releases are on GitHub: **Source on GitHub** in the account screen or in **Help → About** opens it in your browser.

@@ -1,6 +1,6 @@
 # Konstruado Android
 
-App nativa en **Jetpack Compose (español)** que corre el flujo completo de obra
+App nativa en **Jetpack Compose (español e inglés)** que corre el flujo completo de obra
 igual que el escritorio. La lógica es la misma en Rust, expuesta por UniFFI:
 
 - `crates/konstruado-ffi` usa la lib compartida `crates/konstruado-motor`
@@ -57,13 +57,21 @@ Orbot en modo VPN por app con Konstruado **sin** marcar sirve: el SOCKS sigue en
   la barra del escritorio): «Mirando la cadena… quedan N bloques», «Al día · bloque N»…
 - Paleta completa en claro y oscuro (`ui/theme/Theme.kt`); todos los pares
   texto/fondo de tonos y botones dan ≥ 4,5:1 (WCAG AA).
-- La app Android está solo en español (como antes); los textos compartidos del
-  motor tienen su versión en inglés para el escritorio.
+- **Idioma (0.3.0):** español o inglés en **Cuenta → Idioma / Language**; cambia al toque,
+  sin reiniciar, y queda en el perfil compartido (`idioma` en `estado.json`, el mismo campo
+  del escritorio, más `idioma_fijo` cuando la persona eligió). Si nunca eligió, sigue el
+  idioma del teléfono si es español o inglés; si no, español. Los textos de Compose son
+  pares `tr("es", "en")` (`ui/I18n.kt`); los que vienen de Rust por UniFFI (estados, errores,
+  avisos, chips) usan los mismos pares en `konstruado-ffi` (`tr` / `tf!`) y la misma lib
+  `konstruado-motor` que el escritorio. `I18nTest` y `textos_del_motor_tienen_ingles`
+  fallan si queda un texto en español sin su inglés.
+- **Código en GitHub:** en **Cuenta → Acerca de**, con la marca `mark-github` de Octicons
+  (vector, toma el color del tema); abre `CARGO_PKG_REPOSITORY` en el navegador del sistema.
 
 - Los botones de una partida salen de `caja::acciones_partida` (la misma regla del escritorio). Con el pago ya firmándose o esperando bloque no aparecen **Aceptar X% y pagar** ni la contra; se ve un chip con el estado del pago.
 - **Quitar oferta** retira la oferta para todos (lápida firmada en el DHT): no vuelve cuando el contratista se reconecta. Solo el mandante que la publicó, y solo si nadie la tomó.
 - Encerrada / Pagada se marcan **solo cuando el motor ve la transacción en el scan** (`Hecho` con `visto`), igual que el escritorio.
-- Errores del motor (sin saldo, trabadas, sin semilla, el otro no está en línea, sincronizando…) se muestran tal cual, en español.
+- Errores del motor (sin saldo, trabadas, sin semilla, el otro no está en línea, sincronizando…) se muestran tal cual, en el idioma elegido.
 - **Ver las 25 palabras** (billetera personal): advertencia, grilla, altura de restauración, copiar con `ClipDescription.EXTRA_IS_SENSITIVE` (API 33+) y borrado del portapapeles a los 60 s; `FLAG_SECURE` mientras se ven. Dirección y view key privadas aparte (solo lectura).
 - **Respaldo completo** con el selector de Android (SAF): `CreateDocument` para exportar el `.kbak`, `OpenDocument` para restaurar. Mismo formato y mismas verificaciones que el escritorio (`konstruado-motor/src/respaldo.rs`, el mismo código). Restaurar deja todo en `restaurar.listo/` y reinicia el proceso (`ReinicioActivity` en `:reinicio`); al arrancar, `KonstruadoApp.nuevo` aplica el cambio y deja lo anterior en `previo-<fecha>/`.
 - Los respaldos sueltos de 0.2.7 (25 palabras, share, obras) se importan en **Billetera → Respaldos y recuperación → Avanzado**; ya no se exportan por separado.
@@ -225,7 +233,7 @@ cargo build -p konstruado-ffi --lib
 cd android
 # pantallas reales sobre un perfil de demo (carpeta de datos de la app)
 ./gradlew :app:testDebugUnitTest --tests 'cl.konstruado.app.capturas.*' \
-  -Pcapturas=/tmp/capturas -Pdemo=/ruta/a/datos-demo   # -Poscuro=1 para tema oscuro
+  -Pcapturas=/tmp/capturas -Pdemo=/ruta/a/datos-demo   # -Poscuro=1 tema oscuro, -Pidioma=en en inglés
 ```
 
 `GaleriaEstadosTest` dibuja además los estados de Orbot/sala, la fila de escaneo,
