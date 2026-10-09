@@ -1170,8 +1170,11 @@ fn Cuenta(
             }
             }
             section { class: "panel",
+            h2 { {lang.t("Precio de XMR", "XMR price")} }
+            PanelPrecio { red, ajustes: true }
+            }
+            section { class: "panel",
             h2 { {lang.t("Billetera", "Wallet")} }
-            p { class: "help", "{caja::estado_cotizacion(matches!(lang, Idioma::Es))}" }
             if let Some(addr) = vista().personal.clone() {
                 span { class: "mono caja", "{addr}" }
                 button {
@@ -1777,6 +1780,138 @@ fn Tablero(
     }
 }
 
+/// Por dónde pedir el precio en el escritorio: por el tor propio; directo solo
+/// si tor no está o falló (la app entera ya va directo). `Err` mientras arranca.
+fn socks_precio(n: &Nodo) -> Result<Option<std::net::SocketAddr>, ()> {
+    match (n.socks(), n.estado_tor()) {
+        (Some(s), _) => Ok(Some(s)),
+        (None, EstadoTor::Ausente | EstadoTor::Fallo(_)) => Ok(None),
+        _ => Err(()),
+    }
+}
+
+fn avisar_precio() {
+    *PRECIO.write() = (cotizacion::ultima().map(|q| q.cuando).unwrap_or(0), cotizacion::ultimo_error());
+}
+
+/// Precio USD/XMR: estado (qué fuente falló y por qué), actualizar ahora,
+/// probar sin Tor (con aviso, solo si el usuario lo pide) y precio a mano.
+/// Con `ajustes`, también el permiso de pedirlo siempre sin Tor si Tor falla.
+#[component]
+fn PanelPrecio(red: Signal<Option<Nodo>>, #[props(default)] ajustes: bool) -> Element {
+    let lang = use_context::<Signal<Idioma>>()();
+    let es = lang == Idioma::Es;
+    let _ = PRECIO();
+    let mut pidiendo = use_signal(|| false);
+    let mut manual = use_signal(String::new);
+    let mut manual_abierto = use_signal(|| false);
+    let mut aviso = use_signal(|| Option::<Result<String, String>>::None);
+    let mut siempre = use_signal(cotizacion::directo_siempre);
+    let listo = caja::precio_listo();
+    let falla = cotizacion::ultima_falla();
+    let ofrecer = cotizacion::ofrecer_directo();
+    let clase = if falla.is_some() && !listo { "estado err" } else if listo { "help" } else { "estado wait" };
+    rsx! {
+        div { class: "precio",
+            p { class: "{clase}", "{caja::estado_cotizacion(es)}" }
+            div { class: "fila-btn",
+                button {
+                    class: "btn btn-ghost btn-sm",
+                    disabled: pidiendo(),
+                    onclick: move |_| {
+                        let Some(n) = red() else { return };
+                        let Ok(socks) = socks_precio(&n) else {
+                            aviso.set(Some(Err(lang_now().t("Tor todavía está arrancando. Probá en unos segundos.", "Tor is still starting. Try again in a few seconds.").into())));
+                            return;
+                        };
+                        pidiendo.set(true);
+                        aviso.set(None);
+                        spawn(async move {
+                            let _ = cotizacion::actualizar(socks).await;
+                            avisar_precio();
+                            pidiendo.set(false);
+                        });
+                    },
+                    if pidiendo() { {lang.t("Pidiendo el precio…", "Fetching the price…")} } else { {lang.t("Actualizar precio", "Update price")} }
+                }
+                if !listo || falla.is_some() {
+                    button {
+                        class: "btn btn-ghost btn-sm",
+                        onclick: move |_| manual_abierto.set(!manual_abierto()),
+                        {lang.t("Escribir el precio a mano", "Type the price by hand")}
+                    }
+                }
+            }
+            if ofrecer && !pidiendo() {
+                div { class: "estado wait",
+                    div {
+                    p { {lang.t("Por Tor no respondió ninguna fuente. ¿Reintentar sin Tor?", "No source answered over Tor. Retry without Tor?")} }
+                    p { style: "font-weight: 400", "{caja::aviso_sin_tor(es)}" }
+                    button {
+                        class: "btn btn-ghost btn-sm",
+                        onclick: move |_| {
+                            pidiendo.set(true);
+                            spawn(async move {
+                                let _ = cotizacion::actualizar_directo().await;
+                                avisar_precio();
+                                pidiendo.set(false);
+                            });
+                        },
+                        {lang.t("Probar sin Tor esta vez", "Try without Tor this time")}
+                    }
+                    }
+                }
+            }
+            if manual_abierto() && (!listo || falla.is_some()) {
+                label { class: "et", {lang.t("USD POR 1 XMR", "USD PER 1 XMR")} }
+                input {
+                    r#type: "text",
+                    value: "{manual}",
+                    placeholder: "540",
+                    oninput: move |e| manual.set(e.value()),
+                }
+                p { class: "help", {lang.t("Queda fijo al encerrar, igual que un precio leído. El otro ve que fue escrito a mano antes de confirmar.", "It is fixed when locking, like a fetched price. The other side sees it was typed by hand before confirming.")} }
+                div { class: "fila-btn",
+                    button {
+                        class: "btn btn-primary btn-sm",
+                        onclick: move |_| {
+                            let r = caja::precio_manual(lang_now() == Idioma::Es, &manual());
+                            if r.is_ok() {
+                                manual_abierto.set(false);
+                                manual.set(String::new());
+                            }
+                            aviso.set(Some(r));
+                            avisar_precio();
+                        },
+                        {lang.t("Usar este precio", "Use this price")}
+                    }
+                }
+            }
+            match aviso() {
+                Some(Ok(t)) => rsx! { p { class: "estado ok", {match lang { Idioma::Es => format!("Precio a mano: {t}"), Idioma::En => format!("Manual price: {t}") }} } },
+                Some(Err(e)) => rsx! { p { class: "estado err", "{e}" } },
+                None => rsx! {},
+            }
+            if ajustes {
+                label { class: "check",
+                    input {
+                        r#type: "checkbox",
+                        checked: siempre(),
+                        onchange: move |e| {
+                            let si = e.checked();
+                            cotizacion::fijar_directo_siempre(si);
+                            siempre.set(si);
+                            avisar_precio();
+                        },
+                    }
+                    {lang.t(" Si por Tor no hay precio, pedirlo sin Tor sin preguntar", " If there is no price over Tor, fetch it without Tor without asking")}
+                }
+                p { class: "help", "{caja::aviso_sin_tor(es)}" }
+            }
+        }
+    }
+}
+
 #[component]
 fn Nueva(
     yo: Signal<Option<Persona>>,
@@ -1839,7 +1974,7 @@ fn Nueva(
                     Err(e) => lang.error(&e),
                 }
             }
-            p { class: "help", "{caja::estado_cotizacion(lang == Idioma::Es)}" }
+            PanelPrecio { red }
             p { class: "help", "{caja::nota_precio_stagenet(lang == Idioma::Es)}" }
             p { class: "help", {lang.t("Mientras nadie la tome, la podés quitar del tablero. Se retira también para el contratista.", "While nobody takes it, you can remove it from the board. It is withdrawn for the contractor too.")} }
             button {
@@ -3574,7 +3709,7 @@ fn VerPartida(
                                 p { class: "help", {lang.t("Encerrar pone la garantía de los dos en la caja 2-de-2. Los dos tienen que confirmar y estar en línea.", "Locking puts both guarantees in the 2-of-2 box. Both have to confirm and be online.")} }
                                 if usd {
                                     p { class: "help", {lang.t("Al proponer, el XMR de esta partida queda fijo con el precio de ahora. El otro lo ve antes de confirmar.", "When you propose, this stage's XMR is fixed at the current price. The other person sees it before confirming.")} }
-                                    p { class: "help", "{caja::estado_cotizacion(es)}" }
+                                    PanelPrecio { red }
                                 }
                                 if confirma_encerrar() {
                                     div { class: "acciones",

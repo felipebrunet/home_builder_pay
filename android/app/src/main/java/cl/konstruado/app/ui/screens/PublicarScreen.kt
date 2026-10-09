@@ -19,6 +19,7 @@ import cl.konstruado.app.ui.Ayuda
 import cl.konstruado.app.ui.Banner
 import cl.konstruado.app.ui.ErrorTexto
 import cl.konstruado.app.ui.Nav
+import cl.konstruado.app.ui.PanelPrecio
 import cl.konstruado.app.ui.Pantalla
 import cl.konstruado.app.ui.Pista
 import cl.konstruado.app.ui.Primario
@@ -37,13 +38,11 @@ fun PublicarScreen(nav: Nav, banner: Banner) {
     var garantia by remember { mutableStateOf("200") }
     var detalles by remember { mutableStateOf("") }
     var previa by remember { mutableStateOf<uniffi.konstruado_ffi.PreviaPublicar?>(null) }
-    var precio by remember { mutableStateOf("") }
     val app = AppHolder.a
     LaunchedEffect(trabajo, garantia, Idioma.en) {
-        // El precio se pide solo (Orbot si está); acá se vuelve a leer cada pocos segundos.
+        // El precio lo mantiene el motor (Orbot si está); la vista previa usa el último.
         while (true) {
             previa = withContext(Dispatchers.IO) { app.previaPublicar(trabajo, garantia) }
-            precio = withContext(Dispatchers.IO) { app.estadoPrecio() }
             delay(5_000)
         }
     }
@@ -54,7 +53,7 @@ fun PublicarScreen(nav: Nav, banner: Banner) {
     OutlinedTextField(garantia, { garantia = it }, label = { Text(tr("Garantía sugerida por partida (USD)", "Suggested guarantee per stage (USD)")) },
         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal), modifier = Modifier.fillMaxWidth())
     previa?.let { p -> if (p.ok) Pista(p.texto) else ErrorTexto(p.texto) }
-    if (precio.isNotEmpty()) Ayuda(precio)
+    PanelPrecio(banner)
     Ayuda(app.notaPrecio())
     OutlinedTextField(detalles, { detalles = it }, label = { Text(tr("Partidas (una por línea, opcional)", "Stages (one per line, optional)")) },
         minLines = 3, modifier = Modifier.fillMaxWidth())

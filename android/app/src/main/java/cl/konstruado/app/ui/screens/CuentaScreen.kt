@@ -35,6 +35,7 @@ import cl.konstruado.app.ui.Divisor
 import cl.konstruado.app.ui.EnlaceGithub
 import cl.konstruado.app.ui.Idioma
 import cl.konstruado.app.ui.EstadoFila
+import cl.konstruado.app.ui.PanelPrecio
 import cl.konstruado.app.ui.Plegable
 import cl.konstruado.app.ui.Primario
 import cl.konstruado.app.ui.Secundario
@@ -147,6 +148,11 @@ fun CuentaScreen(banner: Banner) {
             Ayuda(tr("«Probar Orbot» solo abre el SOCKS ($host:$port) y hace el saludo SOCKS5; no llama a la sala.", "“Test Orbot” only opens the SOCKS proxy ($host:$port) and does the SOCKS5 handshake; it does not call the room."))
             Copiable(tr("Sala (onion)", "Room (onion)"), hint.onionSala)
         }
+    }
+
+    // ------------------------------------------------------------ precio
+    Tarjeta(tr("Precio de XMR", "XMR price")) {
+        PanelPrecio(banner, ajustes = true)
     }
 
     // ------------------------------------------------------------ nodo

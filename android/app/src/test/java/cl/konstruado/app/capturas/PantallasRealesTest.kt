@@ -109,7 +109,7 @@ class PantallasRealesTest {
     }
 
     @Test fun publicarUsd() {
-        // Precio real (CoinGecko / Kraken) antes de dibujar; sin red queda el aviso.
+        // Precio real (Kraken, Bitfinex, CoinGecko, CoinPaprika) antes de dibujar; sin red queda el aviso.
         val a = app()
         runCatching { a.actualizarPrecio() }
         foto("android-publicar-usd", tr("Publicar","Post a job")) { PublicarScreen(Nav(), Banner()) }

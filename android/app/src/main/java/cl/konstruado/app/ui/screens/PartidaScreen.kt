@@ -1,6 +1,7 @@
 package cl.konstruado.app.ui.screens
 
 import cl.konstruado.app.ui.tr
+import cl.konstruado.app.ui.PanelPrecio
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.text.KeyboardOptions
@@ -105,9 +106,9 @@ fun PartidaScreen(obraId: String, indice: UInt, banner: Banner) {
 
         // Solo las acciones válidas ahora (flags de `acciones_partida`, compartidas con el escritorio).
         if (p.puedeProponerEncerrar) {
-            p.estadoPrecio?.let {
+            p.estadoPrecio?.let { _ ->
                 Ayuda(tr("Al proponer, el XMR de esta partida queda fijo con el precio de ahora. El otro lo ve antes de confirmar.", "When you propose, this stage's XMR is fixed at the current price. The other side sees it before confirming."))
-                Ayuda(it)
+                PanelPrecio(banner)
             }
             if (confirmaEncerrar) {
                 Primario(tr("Proponer encerrar", "Propose locking")) {

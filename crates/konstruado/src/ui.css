@@ -893,3 +893,10 @@ ol.semilla .n { color: var(--apagado); min-width: 2ch; text-align: right; font-s
 .aviso-semilla p:first-child { font-weight: 700; }
 .fila-btn { display: flex; flex-wrap: wrap; gap: 10px; margin: 8px 0; }
 .fila-btn > .btn { width: auto; flex: 0 0 auto; padding-left: 18px; padding-right: 18px; }
+
+/* Panel del precio USD/XMR */
+.precio { display: flex; flex-direction: column; gap: 6px; margin: 6px 0; }
+.precio .estado p { margin: 0 0 6px; }
+.precio .estado .btn { width: auto; }
+.check { display: flex; align-items: center; gap: 8px; margin: 10px 0 0; font-size: 14px; cursor: pointer; }
+.check input { width: auto; min-height: 0; margin: 0; }
