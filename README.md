@@ -40,6 +40,7 @@ Two people on one PC: run the desktop twice with `KONSTRUADO_DATOS=dir1` and `KO
 What is checked:
 
 - `cargo test --workspace` (about 140 tests) and the Android JVM tests pass on every release: deal state and merge rules, offer withdrawal, the DKG (both sides derive the same address, shares restore), funding/payout split amounts, locally built and verified CLSAG transactions (including a tampered ring that must fail), English seed vs a known Monero vector, backup encryption and restore, Tor/Orbot diagnosis, the ES/EN texts.
+- Manually tested by the author on stagenet, desktop and Android over Tor: a stage funded into the 2-of-2 box and paid out to the contractor.
 - In-process network tests (no Tor): two nodes see each other's offers, a phone joins through a live session, two phones meet through the relay, the box messages go to the other side and not to the DHT.
 
 What is **not** verified:
