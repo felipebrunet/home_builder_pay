@@ -872,6 +872,16 @@ internal interface UniffiForeignFutureCompleteVoid : com.sun.jna.Callback {
 
 
 
+
+
+
+
+
+
+
+
+
+
 // For large crates we prevent `MethodTooLargeException` (see #2340)
 // N.B. the name of the extension is very misleading, since it is 
 // rather `InterfaceTooLargeException`, caused by too many methods 
@@ -898,6 +908,8 @@ fun uniffi_konstruado_ffi_checksum_method_konstruadoapp_aceptar_oferta(
 fun uniffi_konstruado_ffi_checksum_method_konstruadoapp_aceptar_y_pagar(
 ): Short
 fun uniffi_konstruado_ffi_checksum_method_konstruadoapp_actualizar_precio(
+): Short
+fun uniffi_konstruado_ffi_checksum_method_konstruadoapp_actualizar_precio_sin_tor(
 ): Short
 fun uniffi_konstruado_ffi_checksum_method_konstruadoapp_actualizar_saldo(
 ): Short
@@ -955,6 +967,10 @@ fun uniffi_konstruado_ffi_checksum_method_konstruadoapp_fijar_daemon(
 ): Short
 fun uniffi_konstruado_ffi_checksum_method_konstruadoapp_fijar_idioma(
 ): Short
+fun uniffi_konstruado_ffi_checksum_method_konstruadoapp_fijar_precio_manual(
+): Short
+fun uniffi_konstruado_ffi_checksum_method_konstruadoapp_fijar_precio_sin_tor_siempre(
+): Short
 fun uniffi_konstruado_ffi_checksum_method_konstruadoapp_guardar(
 ): Short
 fun uniffi_konstruado_ffi_checksum_method_konstruadoapp_guardar_cuenta(
@@ -984,6 +1000,10 @@ fun uniffi_konstruado_ffi_checksum_method_konstruadoapp_orbot_hint(
 fun uniffi_konstruado_ffi_checksum_method_konstruadoapp_partida_vista(
 ): Short
 fun uniffi_konstruado_ffi_checksum_method_konstruadoapp_perfil(
+): Short
+fun uniffi_konstruado_ffi_checksum_method_konstruadoapp_precio_sin_tor_siempre(
+): Short
+fun uniffi_konstruado_ffi_checksum_method_konstruadoapp_precio_vista(
 ): Short
 fun uniffi_konstruado_ffi_checksum_method_konstruadoapp_previa_aceptar(
 ): Short
@@ -1112,6 +1132,8 @@ fun uniffi_konstruado_ffi_fn_method_konstruadoapp_aceptar_y_pagar(`ptr`: Pointer
 ): Unit
 fun uniffi_konstruado_ffi_fn_method_konstruadoapp_actualizar_precio(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
+fun uniffi_konstruado_ffi_fn_method_konstruadoapp_actualizar_precio_sin_tor(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
+): RustBuffer.ByValue
 fun uniffi_konstruado_ffi_fn_method_konstruadoapp_actualizar_saldo(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
 ): Unit
 fun uniffi_konstruado_ffi_fn_method_konstruadoapp_agregar_destino(`ptr`: Pointer,`destino`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
@@ -1168,6 +1190,10 @@ fun uniffi_konstruado_ffi_fn_method_konstruadoapp_fijar_daemon(`ptr`: Pointer,`u
 ): RustBuffer.ByValue
 fun uniffi_konstruado_ffi_fn_method_konstruadoapp_fijar_idioma(`ptr`: Pointer,`codigo`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
+fun uniffi_konstruado_ffi_fn_method_konstruadoapp_fijar_precio_manual(`ptr`: Pointer,`texto`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+): RustBuffer.ByValue
+fun uniffi_konstruado_ffi_fn_method_konstruadoapp_fijar_precio_sin_tor_siempre(`ptr`: Pointer,`si`: Byte,uniffi_out_err: UniffiRustCallStatus, 
+): Unit
 fun uniffi_konstruado_ffi_fn_method_konstruadoapp_guardar(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
 ): Unit
 fun uniffi_konstruado_ffi_fn_method_konstruadoapp_guardar_cuenta(`ptr`: Pointer,`nombre`: RustBuffer.ByValue,`rol`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
@@ -1197,6 +1223,10 @@ fun uniffi_konstruado_ffi_fn_method_konstruadoapp_orbot_hint(`ptr`: Pointer,unif
 fun uniffi_konstruado_ffi_fn_method_konstruadoapp_partida_vista(`ptr`: Pointer,`obraId`: RustBuffer.ByValue,`indice`: Int,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
 fun uniffi_konstruado_ffi_fn_method_konstruadoapp_perfil(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
+): RustBuffer.ByValue
+fun uniffi_konstruado_ffi_fn_method_konstruadoapp_precio_sin_tor_siempre(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
+): Byte
+fun uniffi_konstruado_ffi_fn_method_konstruadoapp_precio_vista(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
 fun uniffi_konstruado_ffi_fn_method_konstruadoapp_previa_aceptar(`ptr`: Pointer,`ofertaId`: RustBuffer.ByValue,`garantia`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
@@ -1397,7 +1427,10 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if (lib.uniffi_konstruado_ffi_checksum_method_konstruadoapp_aceptar_y_pagar() != 55575.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_konstruado_ffi_checksum_method_konstruadoapp_actualizar_precio() != 682.toShort()) {
+    if (lib.uniffi_konstruado_ffi_checksum_method_konstruadoapp_actualizar_precio() != 44345.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_konstruado_ffi_checksum_method_konstruadoapp_actualizar_precio_sin_tor() != 50494.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_konstruado_ffi_checksum_method_konstruadoapp_actualizar_saldo() != 53422.toShort()) {
@@ -1484,6 +1517,12 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if (lib.uniffi_konstruado_ffi_checksum_method_konstruadoapp_fijar_idioma() != 8768.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if (lib.uniffi_konstruado_ffi_checksum_method_konstruadoapp_fijar_precio_manual() != 21101.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_konstruado_ffi_checksum_method_konstruadoapp_fijar_precio_sin_tor_siempre() != 31744.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if (lib.uniffi_konstruado_ffi_checksum_method_konstruadoapp_guardar() != 61543.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
@@ -1527,6 +1566,12 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_konstruado_ffi_checksum_method_konstruadoapp_perfil() != 51710.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_konstruado_ffi_checksum_method_konstruadoapp_precio_sin_tor_siempre() != 23278.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_konstruado_ffi_checksum_method_konstruadoapp_precio_vista() != 19659.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_konstruado_ffi_checksum_method_konstruadoapp_previa_aceptar() != 26330.toShort()) {
@@ -2052,9 +2097,16 @@ public interface KonstruadoAppInterface {
     fun `aceptarYPagar`(`obraId`: kotlin.String, `indice`: kotlin.UInt)
     
     /**
-     * Pide el precio ahora (CoinGecko, si falla Kraken), por Orbot si está configurado.
+     * Pide el precio ahora (Kraken, Bitfinex, CoinGecko y CoinPaprika en
+     * paralelo), por Orbot si está configurado. Sin Tor solo si el usuario lo
+     * permitió siempre. Bloquea hasta ~8 s (16 s si reintenta sin Tor).
      */
-    fun `actualizarPrecio`(): kotlin.String
+    fun `actualizarPrecio`(): PrecioVista
+    
+    /**
+     * Reintenta sin Tor porque el usuario lo pidió (la API ve su IP).
+     */
+    fun `actualizarPrecioSinTor`(): PrecioVista
     
     fun `actualizarSaldo`()
     
@@ -2160,6 +2212,13 @@ public interface KonstruadoAppInterface {
     fun `fijarIdioma`(`codigo`: kotlin.String): kotlin.String
     
     /**
+     * Último recurso: precio de 1 XMR en dólares escrito a mano.
+     */
+    fun `fijarPrecioManual`(`texto`: kotlin.String): PrecioVista
+    
+    fun `fijarPrecioSinTorSiempre`(`si`: kotlin.Boolean)
+    
+    /**
      * Guarda ya (onPause).
      */
     fun `guardar`()
@@ -2208,6 +2267,16 @@ public interface KonstruadoAppInterface {
     fun `partidaVista`(`obraId`: kotlin.String, `indice`: kotlin.UInt): PartidaVista
     
     fun `perfil`(): PerfilVista
+    
+    /**
+     * Permitir siempre pedir el precio sin Tor si por Tor no hay (por defecto no).
+     */
+    fun `precioSinTorSiempre`(): kotlin.Boolean
+    
+    /**
+     * Estado del precio para el panel (sin red; el bucle de fondo lo mantiene).
+     */
+    fun `precioVista`(): PrecioVista
     
     /**
      * Cuántas partidas salen con esa garantía, y si es contra.
@@ -2489,13 +2558,29 @@ open class KonstruadoApp: Disposable, AutoCloseable, KonstruadoAppInterface
 
     
     /**
-     * Pide el precio ahora (CoinGecko, si falla Kraken), por Orbot si está configurado.
-     */
-    @Throws(FfiException::class)override fun `actualizarPrecio`(): kotlin.String {
-            return FfiConverterString.lift(
+     * Pide el precio ahora (Kraken, Bitfinex, CoinGecko y CoinPaprika en
+     * paralelo), por Orbot si está configurado. Sin Tor solo si el usuario lo
+     * permitió siempre. Bloquea hasta ~8 s (16 s si reintenta sin Tor).
+     */override fun `actualizarPrecio`(): PrecioVista {
+            return FfiConverterTypePrecioVista.lift(
     callWithPointer {
-    uniffiRustCallWithError(FfiException) { _status ->
+    uniffiRustCall() { _status ->
     UniffiLib.INSTANCE.uniffi_konstruado_ffi_fn_method_konstruadoapp_actualizar_precio(
+        it, _status)
+}
+    }
+    )
+    }
+    
+
+    
+    /**
+     * Reintenta sin Tor porque el usuario lo pidió (la API ve su IP).
+     */override fun `actualizarPrecioSinTor`(): PrecioVista {
+            return FfiConverterTypePrecioVista.lift(
+    callWithPointer {
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_konstruado_ffi_fn_method_konstruadoapp_actualizar_precio_sin_tor(
         it, _status)
 }
     }
@@ -2890,6 +2975,33 @@ open class KonstruadoApp: Disposable, AutoCloseable, KonstruadoAppInterface
 
     
     /**
+     * Último recurso: precio de 1 XMR en dólares escrito a mano.
+     */
+    @Throws(FfiException::class)override fun `fijarPrecioManual`(`texto`: kotlin.String): PrecioVista {
+            return FfiConverterTypePrecioVista.lift(
+    callWithPointer {
+    uniffiRustCallWithError(FfiException) { _status ->
+    UniffiLib.INSTANCE.uniffi_konstruado_ffi_fn_method_konstruadoapp_fijar_precio_manual(
+        it, FfiConverterString.lower(`texto`),_status)
+}
+    }
+    )
+    }
+    
+
+    override fun `fijarPrecioSinTorSiempre`(`si`: kotlin.Boolean)
+        = 
+    callWithPointer {
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_konstruado_ffi_fn_method_konstruadoapp_fijar_precio_sin_tor_siempre(
+        it, FfiConverterBoolean.lower(`si`),_status)
+}
+    }
+    
+    
+
+    
+    /**
      * Guarda ya (onPause).
      */override fun `guardar`()
         = 
@@ -3084,6 +3196,36 @@ open class KonstruadoApp: Disposable, AutoCloseable, KonstruadoAppInterface
     callWithPointer {
     uniffiRustCall() { _status ->
     UniffiLib.INSTANCE.uniffi_konstruado_ffi_fn_method_konstruadoapp_perfil(
+        it, _status)
+}
+    }
+    )
+    }
+    
+
+    
+    /**
+     * Permitir siempre pedir el precio sin Tor si por Tor no hay (por defecto no).
+     */override fun `precioSinTorSiempre`(): kotlin.Boolean {
+            return FfiConverterBoolean.lift(
+    callWithPointer {
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_konstruado_ffi_fn_method_konstruadoapp_precio_sin_tor_siempre(
+        it, _status)
+}
+    }
+    )
+    }
+    
+
+    
+    /**
+     * Estado del precio para el panel (sin red; el bucle de fondo lo mantiene).
+     */override fun `precioVista`(): PrecioVista {
+            return FfiConverterTypePrecioVista.lift(
+    callWithPointer {
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_konstruado_ffi_fn_method_konstruadoapp_precio_vista(
         it, _status)
 }
     }
@@ -4654,6 +4796,72 @@ public object FfiConverterTypePerfilVista: FfiConverterRustBuffer<PerfilVista> {
             FfiConverterString.write(value.`nombre`, buf)
             FfiConverterString.write(value.`rol`, buf)
             FfiConverterString.write(value.`rolLabel`, buf)
+    }
+}
+
+
+
+/**
+ * Panel del precio USD/XMR (Publicar obra, encerrar partida).
+ */
+data class PrecioVista (
+    /**
+     * Precio actual o por qué no hay (dice qué fuente falló y por qué).
+     */
+    var `texto`: kotlin.String, 
+    /**
+     * Hay un precio reciente para fijar una partida.
+     */
+    var `listo`: kotlin.Boolean, 
+    /**
+     * La última falla (por fuente), si la hubo.
+     */
+    var `error`: kotlin.String?, 
+    /**
+     * Por Tor no hubo precio: ofrecer "probar sin Tor" (con [`Self::aviso_sin_tor`]).
+     */
+    var `ofrecerSinTor`: kotlin.Boolean, 
+    var `avisoSinTor`: kotlin.String, 
+    /**
+     * Se pide por Orbot.
+     */
+    var `porTor`: kotlin.Boolean
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypePrecioVista: FfiConverterRustBuffer<PrecioVista> {
+    override fun read(buf: ByteBuffer): PrecioVista {
+        return PrecioVista(
+            FfiConverterString.read(buf),
+            FfiConverterBoolean.read(buf),
+            FfiConverterOptionalString.read(buf),
+            FfiConverterBoolean.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterBoolean.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: PrecioVista) = (
+            FfiConverterString.allocationSize(value.`texto`) +
+            FfiConverterBoolean.allocationSize(value.`listo`) +
+            FfiConverterOptionalString.allocationSize(value.`error`) +
+            FfiConverterBoolean.allocationSize(value.`ofrecerSinTor`) +
+            FfiConverterString.allocationSize(value.`avisoSinTor`) +
+            FfiConverterBoolean.allocationSize(value.`porTor`)
+    )
+
+    override fun write(value: PrecioVista, buf: ByteBuffer) {
+            FfiConverterString.write(value.`texto`, buf)
+            FfiConverterBoolean.write(value.`listo`, buf)
+            FfiConverterOptionalString.write(value.`error`, buf)
+            FfiConverterBoolean.write(value.`ofrecerSinTor`, buf)
+            FfiConverterString.write(value.`avisoSinTor`, buf)
+            FfiConverterBoolean.write(value.`porTor`, buf)
     }
 }
 

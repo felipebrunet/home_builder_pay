@@ -441,6 +441,22 @@ struct Sesion {
     idioma_fijo: bool,
 }
 
+/// Panel del precio USD/XMR (Publicar obra, encerrar partida).
+#[derive(Clone, Debug, uniffi::Record)]
+pub struct PrecioVista {
+    /// Precio actual o por qué no hay (dice qué fuente falló y por qué).
+    pub texto: String,
+    /// Hay un precio reciente para fijar una partida.
+    pub listo: bool,
+    /// La última falla (por fuente), si la hubo.
+    pub error: Option<String>,
+    /// Por Tor no hubo precio: ofrecer "probar sin Tor" (con [`Self::aviso_sin_tor`]).
+    pub ofrecer_sin_tor: bool,
+    pub aviso_sin_tor: String,
+    /// Se pide por Orbot.
+    pub por_tor: bool,
+}
+
 #[derive(uniffi::Object)]
 pub struct KonstruadoApp {
     rt: tokio::runtime::Runtime,
@@ -1871,13 +1887,47 @@ impl KonstruadoApp {
 
     // ------------------------------------------------------------ precio USD/XMR
 
-    /// Pide el precio ahora (CoinGecko, si falla Kraken), por Orbot si está configurado.
-    pub fn actualizar_precio(&self) -> Result<String, FfiError> {
+    /// Pide el precio ahora (Kraken, Bitfinex, CoinGecko y CoinPaprika en
+    /// paralelo), por Orbot si está configurado. Sin Tor solo si el usuario lo
+    /// permitió siempre. Bloquea hasta ~8 s (16 s si reintenta sin Tor).
+    pub fn actualizar_precio(&self) -> PrecioVista {
         let socks = self.nodo.socks();
-        self.rt
-            .block_on(konstruado_motor::cotizacion::actualizar(socks))
-            .map(|q| caja::texto_cotizacion(es(), &q))
-            .map_err(|e| fallo(&tf!("Sin precio de XMR: {e}", "No XMR price: {e}")))
+        let _ = self.rt.block_on(konstruado_motor::cotizacion::actualizar(socks));
+        self.precio_vista()
+    }
+
+    /// Reintenta sin Tor porque el usuario lo pidió (la API ve su IP).
+    pub fn actualizar_precio_sin_tor(&self) -> PrecioVista {
+        let _ = self.rt.block_on(konstruado_motor::cotizacion::actualizar_directo());
+        self.precio_vista()
+    }
+
+    /// Último recurso: precio de 1 XMR en dólares escrito a mano.
+    pub fn fijar_precio_manual(&self, texto: String) -> Result<PrecioVista, FfiError> {
+        caja::precio_manual(es(), &texto).map_err(|e| fallo(&e))?;
+        Ok(self.precio_vista())
+    }
+
+    /// Permitir siempre pedir el precio sin Tor si por Tor no hay (por defecto no).
+    pub fn precio_sin_tor_siempre(&self) -> bool {
+        konstruado_motor::cotizacion::directo_siempre()
+    }
+
+    pub fn fijar_precio_sin_tor_siempre(&self, si: bool) {
+        konstruado_motor::cotizacion::fijar_directo_siempre(si);
+    }
+
+    /// Estado del precio para el panel (sin red; el bucle de fondo lo mantiene).
+    pub fn precio_vista(&self) -> PrecioVista {
+        use konstruado_motor::cotizacion as c;
+        PrecioVista {
+            texto: caja::estado_cotizacion(es()),
+            listo: caja::precio_listo(),
+            error: c::ultima_falla().map(|f| f.texto(es())),
+            ofrecer_sin_tor: c::ofrecer_directo(),
+            aviso_sin_tor: caja::aviso_sin_tor(es()).to_string(),
+            por_tor: self.nodo.socks().is_some(),
+        }
     }
 
     /// Estado del precio de referencia (último conocido o por qué no hay).

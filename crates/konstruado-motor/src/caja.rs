@@ -200,9 +200,9 @@ pub fn saldo_corto(es: bool, estado: PartidaEstado, por_lado_pico: Option<u64>, 
 /// El XMR de stagenet no vale nada: se usa el precio de mainnet como referencia.
 pub fn nota_precio_stagenet(es: bool) -> String {
     if es {
-        "Los montos van en dólares. El XMR de stagenet no vale nada: para convertir se usa el precio de mainnet como referencia (CoinGecko, o Kraken si falla). El XMR de cada partida queda fijo al fondearla.".into()
+        "Los montos van en dólares. El XMR de stagenet no vale nada: para convertir se usa el precio de mainnet como referencia (Kraken, Bitfinex, CoinGecko o CoinPaprika, la primera que responda). El XMR de cada partida queda fijo al fondearla.".into()
     } else {
-        "Amounts are in US dollars. Stagenet XMR has no value: conversion uses the mainnet price as a reference (CoinGecko, or Kraken as fallback). Each stage's XMR is fixed when it is funded.".into()
+        "Amounts are in US dollars. Stagenet XMR has no value: conversion uses the mainnet price as a reference (Kraken, Bitfinex, CoinGecko or CoinPaprika, whichever answers first). Each stage's XMR is fixed when it is funded.".into()
     }
 }
 
@@ -216,12 +216,8 @@ fn hora_local(ts: i64, es: bool) -> String {
         .unwrap_or_default()
 }
 
-fn nombre_fuente(f: &str) -> &str {
-    match f {
-        "coingecko" => "CoinGecko",
-        "kraken" => "Kraken",
-        otro => otro,
-    }
+fn nombre_fuente(f: &str, es: bool) -> &str {
+    crate::cotizacion::nombre_fuente(f, es)
 }
 
 /// `USD 536,44/XMR (CoinGecko, 08/10 19:20)`.
@@ -229,30 +225,57 @@ pub fn texto_cotizacion(es: bool, q: &crate::cotizacion::Cotizacion) -> String {
     format!(
         "{}/XMR ({}, {})",
         konstruado_core::fmt_usd(q.centavos_por_xmr, es),
-        nombre_fuente(&q.fuente),
+        nombre_fuente(&q.fuente, es),
         hora_local(q.cuando, es)
     )
 }
 
 /// Estado del precio para la pantalla: el último conocido o por qué no hay.
+/// Si el precio está viejo y el último intento falló, dice por qué (nada en silencio).
 pub fn estado_cotizacion(es: bool) -> String {
+    let falla = crate::cotizacion::ultima_falla();
     match crate::cotizacion::ultima() {
         Some(q) => {
             let viejo = q.edad_seg(konstruado_core::ahora()) > crate::cotizacion::MAX_EDAD_FIJAR_SEG;
             let base = if es { "Precio de referencia: " } else { "Reference price: " };
-            let extra = match (viejo, es) {
-                (true, true) => " · desactualizado, actualizando…",
-                (true, false) => " · out of date, updating…",
-                _ => "",
+            let extra = match (viejo, &falla, es) {
+                (true, Some(f), true) => format!(" · desactualizado y no se pudo actualizar. {}.", f.texto(true)),
+                (true, Some(f), false) => format!(" · out of date and could not be updated. {}.", f.texto(false)),
+                (true, None, true) => " · desactualizado, actualizando…".into(),
+                (true, None, false) => " · out of date, updating…".into(),
+                _ => String::new(),
             };
             format!("{base}{}{extra}", texto_cotizacion(es, &q))
         }
-        None => match (crate::cotizacion::ultimo_error(), es) {
-            (Some(e), true) => format!("Sin precio de XMR ({e}). Se reintenta solo; sin precio no se puede encerrar una partida."),
-            (Some(e), false) => format!("No XMR price ({e}). It retries on its own; without a price a stage cannot be locked."),
+        None => match (falla, es) {
+            (Some(f), true) => format!("Sin precio de XMR. {}. Se reintenta solo; sin precio no se puede encerrar una partida.", f.texto(true)),
+            (Some(f), false) => format!("No XMR price. {}. It retries on its own; without a price a stage cannot be locked.", f.texto(false)),
             (None, true) => "Buscando el precio de XMR…".into(),
             (None, false) => "Fetching the XMR price…".into(),
         },
+    }
+}
+
+/// Se puede fijar una partida con el precio actual (hay uno y no es muy viejo).
+pub fn precio_listo() -> bool {
+    crate::cotizacion::para_fijar(konstruado_core::ahora()).is_some()
+}
+
+/// Aviso antes de reintentar sin Tor.
+pub fn aviso_sin_tor(es: bool) -> &'static str {
+    if es {
+        "Sin Tor, el servicio del precio ve tu IP y sabe que estás consultando el precio de XMR. Nada más sale de la app."
+    } else {
+        "Without Tor, the price service sees your IP and knows you are checking the XMR price. Nothing else leaves the app."
+    }
+}
+
+/// Lee un precio escrito a mano y lo deja como el actual. `Err` con el texto para mostrar.
+pub fn precio_manual(es: bool, texto: &str) -> Result<String, String> {
+    match crate::cotizacion::fijar_manual(texto) {
+        Some(q) => Ok(texto_cotizacion(es, &q)),
+        None if es => Err("Escribí el precio de 1 XMR en dólares, por ejemplo 540 o 540,25.".into()),
+        None => Err("Type the price of 1 XMR in dollars, e.g. 540 or 540.25.".into()),
     }
 }
 
@@ -275,7 +298,7 @@ pub fn texto_precio_fijado(es: bool, p: &konstruado_core::PrecioFijado) -> Strin
     let usd = konstruado_core::fmt_usd(p.usd_centavos, es);
     let precio = konstruado_core::fmt_usd(p.centavos_por_xmr, es);
     let cuando = hora_local(p.cuando, es);
-    let fuente = nombre_fuente(&p.fuente);
+    let fuente = nombre_fuente(&p.fuente, es);
     if es {
         format!("{xmr} XMR ({usd} al {cuando}, precio {precio}/XMR, {fuente})")
     } else {
@@ -861,8 +884,8 @@ pub fn aviso_humano(aviso: &str, es: bool) -> String {
             "The node tip has not arrived yet. The send was not built.",
         ),
         "codigo:sin-precio" | "sin-precio" => (
-            "No hay precio de XMR reciente para fijar la partida. Esperá a que se actualice (arriba dice el estado del precio).",
-            "There is no recent XMR price to fix the stage. Wait for it to update (the price status is shown above).",
+            "No hay precio de XMR reciente para fijar la partida. Actualizalo arriba (o, si no hay forma, escribilo a mano).",
+            "There is no recent XMR price to fix the stage. Update it above (or, if nothing works, type it by hand).",
         ),
         "codigo:sin-semilla" | "sin-semilla" => (
             "Primero creá la billetera de stagenet.",
