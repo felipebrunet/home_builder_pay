@@ -864,6 +864,14 @@ internal interface UniffiForeignFutureCompleteVoid : com.sun.jna.Callback {
 
 
 
+
+
+
+
+
+
+
+
 // For large crates we prevent `MethodTooLargeException` (see #2340)
 // N.B. the name of the extension is very misleading, since it is 
 // rather `InterfaceTooLargeException`, caused by too many methods 
@@ -945,9 +953,15 @@ fun uniffi_konstruado_ffi_checksum_method_konstruadoapp_exportar_respaldo(
 ): Short
 fun uniffi_konstruado_ffi_checksum_method_konstruadoapp_fijar_daemon(
 ): Short
+fun uniffi_konstruado_ffi_checksum_method_konstruadoapp_fijar_idioma(
+): Short
 fun uniffi_konstruado_ffi_checksum_method_konstruadoapp_guardar(
 ): Short
 fun uniffi_konstruado_ffi_checksum_method_konstruadoapp_guardar_cuenta(
+): Short
+fun uniffi_konstruado_ffi_checksum_method_konstruadoapp_idioma(
+): Short
+fun uniffi_konstruado_ffi_checksum_method_konstruadoapp_idioma_inicial(
 ): Short
 fun uniffi_konstruado_ffi_checksum_method_konstruadoapp_importar_obras(
 ): Short
@@ -998,6 +1012,8 @@ fun uniffi_konstruado_ffi_checksum_method_konstruadoapp_rechazar_extra(
 fun uniffi_konstruado_ffi_checksum_method_konstruadoapp_red(
 ): Short
 fun uniffi_konstruado_ffi_checksum_method_konstruadoapp_reintentar_fondeo(
+): Short
+fun uniffi_konstruado_ffi_checksum_method_konstruadoapp_repositorio(
 ): Short
 fun uniffi_konstruado_ffi_checksum_method_konstruadoapp_respaldo_guardado(
 ): Short
@@ -1150,9 +1166,15 @@ fun uniffi_konstruado_ffi_fn_method_konstruadoapp_exportar_respaldo(`ptr`: Point
 ): RustBuffer.ByValue
 fun uniffi_konstruado_ffi_fn_method_konstruadoapp_fijar_daemon(`ptr`: Pointer,`url`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
+fun uniffi_konstruado_ffi_fn_method_konstruadoapp_fijar_idioma(`ptr`: Pointer,`codigo`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+): RustBuffer.ByValue
 fun uniffi_konstruado_ffi_fn_method_konstruadoapp_guardar(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
 ): Unit
 fun uniffi_konstruado_ffi_fn_method_konstruadoapp_guardar_cuenta(`ptr`: Pointer,`nombre`: RustBuffer.ByValue,`rol`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+): RustBuffer.ByValue
+fun uniffi_konstruado_ffi_fn_method_konstruadoapp_idioma(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
+): RustBuffer.ByValue
+fun uniffi_konstruado_ffi_fn_method_konstruadoapp_idioma_inicial(`ptr`: Pointer,`dispositivo`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
 fun uniffi_konstruado_ffi_fn_method_konstruadoapp_importar_obras(`ptr`: Pointer,`texto`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
@@ -1204,6 +1226,8 @@ fun uniffi_konstruado_ffi_fn_method_konstruadoapp_red(`ptr`: Pointer,uniffi_out_
 ): RustBuffer.ByValue
 fun uniffi_konstruado_ffi_fn_method_konstruadoapp_reintentar_fondeo(`ptr`: Pointer,`obraId`: RustBuffer.ByValue,`indice`: Int,uniffi_out_err: UniffiRustCallStatus, 
 ): Unit
+fun uniffi_konstruado_ffi_fn_method_konstruadoapp_repositorio(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
+): RustBuffer.ByValue
 fun uniffi_konstruado_ffi_fn_method_konstruadoapp_respaldo_guardado(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
 ): Unit
 fun uniffi_konstruado_ffi_fn_method_konstruadoapp_restaurar_respaldo(`ptr`: Pointer,`datos`: RustBuffer.ByValue,`clave`: RustBuffer.ByValue,`reemplazar`: Byte,uniffi_out_err: UniffiRustCallStatus, 
@@ -1457,10 +1481,19 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if (lib.uniffi_konstruado_ffi_checksum_method_konstruadoapp_fijar_daemon() != 21840.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if (lib.uniffi_konstruado_ffi_checksum_method_konstruadoapp_fijar_idioma() != 8768.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if (lib.uniffi_konstruado_ffi_checksum_method_konstruadoapp_guardar() != 61543.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_konstruado_ffi_checksum_method_konstruadoapp_guardar_cuenta() != 63302.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_konstruado_ffi_checksum_method_konstruadoapp_idioma() != 4298.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_konstruado_ffi_checksum_method_konstruadoapp_idioma_inicial() != 5642.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_konstruado_ffi_checksum_method_konstruadoapp_importar_obras() != 7994.toShort()) {
@@ -1536,6 +1569,9 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_konstruado_ffi_checksum_method_konstruadoapp_reintentar_fondeo() != 3882.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_konstruado_ffi_checksum_method_konstruadoapp_repositorio() != 36032.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_konstruado_ffi_checksum_method_konstruadoapp_respaldo_guardado() != 42709.toShort()) {
@@ -2119,11 +2155,28 @@ public interface KonstruadoAppInterface {
     fun `fijarDaemon`(`url`: kotlin.String): kotlin.String
     
     /**
+     * ES/EN desde Cuenta: se guarda en el perfil y se aplica ya.
+     */
+    fun `fijarIdioma`(`codigo`: kotlin.String): kotlin.String
+    
+    /**
      * Guarda ya (onPause).
      */
     fun `guardar`()
     
     fun `guardarCuenta`(`nombre`: kotlin.String, `rol`: kotlin.String): PerfilVista
+    
+    /**
+     * Idioma activo: `es` o `en`.
+     */
+    fun `idioma`(): kotlin.String
+    
+    /**
+     * Al arrancar: el idioma elegido en el perfil (compartido con el
+     * escritorio) o, si nunca se eligió, el del teléfono si es es/en; si no, ES.
+     * Lo aplica a los textos del motor y lo devuelve.
+     */
+    fun `idiomaInicial`(`dispositivo`: kotlin.String): kotlin.String
     
     /**
      * Importa obras/ofertas de un respaldo. No trae seed ni share; avisa que puede estar viejo.
@@ -2210,6 +2263,11 @@ public interface KonstruadoAppInterface {
     fun `red`(): RedVista
     
     fun `reintentarFondeo`(`obraId`: kotlin.String, `indice`: kotlin.UInt)
+    
+    /**
+     * URL del repositorio (`CARGO_PKG_REPOSITORY`), para «Código en GitHub».
+     */
+    fun `repositorio`(): kotlin.String
     
     /**
      * El archivo quedó escrito: anota la fecha del último respaldo.
@@ -2817,6 +2875,21 @@ open class KonstruadoApp: Disposable, AutoCloseable, KonstruadoAppInterface
 
     
     /**
+     * ES/EN desde Cuenta: se guarda en el perfil y se aplica ya.
+     */override fun `fijarIdioma`(`codigo`: kotlin.String): kotlin.String {
+            return FfiConverterString.lift(
+    callWithPointer {
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_konstruado_ffi_fn_method_konstruadoapp_fijar_idioma(
+        it, FfiConverterString.lower(`codigo`),_status)
+}
+    }
+    )
+    }
+    
+
+    
+    /**
      * Guarda ya (onPause).
      */override fun `guardar`()
         = 
@@ -2836,6 +2909,38 @@ open class KonstruadoApp: Disposable, AutoCloseable, KonstruadoAppInterface
     uniffiRustCallWithError(FfiException) { _status ->
     UniffiLib.INSTANCE.uniffi_konstruado_ffi_fn_method_konstruadoapp_guardar_cuenta(
         it, FfiConverterString.lower(`nombre`),FfiConverterString.lower(`rol`),_status)
+}
+    }
+    )
+    }
+    
+
+    
+    /**
+     * Idioma activo: `es` o `en`.
+     */override fun `idioma`(): kotlin.String {
+            return FfiConverterString.lift(
+    callWithPointer {
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_konstruado_ffi_fn_method_konstruadoapp_idioma(
+        it, _status)
+}
+    }
+    )
+    }
+    
+
+    
+    /**
+     * Al arrancar: el idioma elegido en el perfil (compartido con el
+     * escritorio) o, si nunca se eligió, el del teléfono si es es/en; si no, ES.
+     * Lo aplica a los textos del motor y lo devuelve.
+     */override fun `idiomaInicial`(`dispositivo`: kotlin.String): kotlin.String {
+            return FfiConverterString.lift(
+    callWithPointer {
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_konstruado_ffi_fn_method_konstruadoapp_idioma_inicial(
+        it, FfiConverterString.lower(`dispositivo`),_status)
 }
     }
     )
@@ -3180,6 +3285,21 @@ open class KonstruadoApp: Disposable, AutoCloseable, KonstruadoAppInterface
 }
     }
     
+    
+
+    
+    /**
+     * URL del repositorio (`CARGO_PKG_REPOSITORY`), para «Código en GitHub».
+     */override fun `repositorio`(): kotlin.String {
+            return FfiConverterString.lift(
+    callWithPointer {
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_konstruado_ffi_fn_method_konstruadoapp_repositorio(
+        it, _status)
+}
+    }
+    )
+    }
     
 
     

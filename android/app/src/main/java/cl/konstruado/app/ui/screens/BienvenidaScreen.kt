@@ -1,5 +1,6 @@
 package cl.konstruado.app.ui.screens
 
+import cl.konstruado.app.ui.tr
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -44,44 +45,44 @@ fun BienvenidaScreen(banner: Banner, modoInicial: ModoBienvenida = ModoBienvenid
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(24.dp)) {
         Spacer(Modifier.height(32.dp))
         Titulo("Konstruado")
-        Lead("Garantía de obra entre dos personas, con una caja 2-de-2 de Monero (stagenet).")
+        Lead(tr("Garantía de obra entre dos personas, con una caja 2-de-2 de Monero (stagenet).", "A building-work guarantee between two people, with a 2-of-2 Monero box (stagenet)."))
         Spacer(Modifier.height(16.dp))
         BannerVista(banner)
         when (modo) {
             ModoBienvenida.Elegir -> {
                 Tarjeta {
-                    Primario("Crear cuenta nueva") { banner.error.value = null; modo = ModoBienvenida.Crear }
-                    Pista("Elegís tu nombre y si pagás la obra o la construís.")
+                    Primario(tr("Crear cuenta nueva", "Create a new account")) { banner.error.value = null; modo = ModoBienvenida.Crear }
+                    Pista(tr("Elegís tu nombre y si pagás la obra o la construís.", "Pick your name and whether you pay for the job or build it."))
                     Divisor()
-                    Secundario("Restaurar desde respaldo") { banner.error.value = null; modo = ModoBienvenida.Restaurar }
-                    Pista("Traés todo del archivo cifrado: semilla, obras, cajas, nombre y rol.")
+                    Secundario(tr("Restaurar desde respaldo", "Restore from backup")) { banner.error.value = null; modo = ModoBienvenida.Restaurar }
+                    Pista(tr("Traés todo del archivo cifrado: semilla, obras, cajas, nombre y rol.", "Bring everything from the encrypted file: seed, jobs, boxes, name and role."))
                 }
                 return@Column
             }
             ModoBienvenida.Restaurar -> {
-                TextoBoton("← Volver") { banner.error.value = null; modo = ModoBienvenida.Elegir }
-                Tarjeta { RestaurarRespaldo(acciones, banner) }
+                TextoBoton(tr("← Volver", "← Back")) { banner.error.value = null; modo = ModoBienvenida.Elegir }
+                Tarjeta { RestaurarRespaldo(acciones) }
                 return@Column
             }
-            ModoBienvenida.Crear -> TextoBoton("← Volver") { banner.error.value = null; modo = ModoBienvenida.Elegir }
+            ModoBienvenida.Crear -> TextoBoton(tr("← Volver", "← Back")) { banner.error.value = null; modo = ModoBienvenida.Elegir }
         }
-        Seccion("1 · Tu nombre")
-        OutlinedTextField(nombre, { nombre = it }, label = { Text("Nombre") }, modifier = Modifier.fillMaxWidth())
-        Seccion("2 · ¿Qué vas a hacer?")
+        Seccion(tr("1 · Tu nombre", "1 · Your name"))
+        OutlinedTextField(nombre, { nombre = it }, label = { Text(tr("Nombre", "Name")) }, modifier = Modifier.fillMaxWidth())
+        Seccion(tr("2 · ¿Qué vas a hacer?", "2 · What will you do?"))
         FilterChip(selected = rol == "mandante", onClick = { rol = "mandante" },
-            label = { Text("Pago la obra (mandante)") })
-        Pista("Publicás el trabajo y la garantía. El otro la ve.")
+            label = { Text(tr("Pago la obra (mandante)", "I pay for the job (client)")) })
+        Pista(tr("Publicás el trabajo y la garantía. El otro la ve.", "You post the job and the guarantee. The other side sees it."))
         FilterChip(selected = rol == "contratista", onClick = { rol = "contratista" },
-            label = { Text("La construyo (contratista)") })
-        Pista("Buscás lo publicado y aceptás, o proponés otra garantía.")
+            label = { Text(tr("La construyo (contratista)", "I build it (contractor)")) })
+        Pista(tr("Buscás lo publicado y aceptás, o proponés otra garantía.", "You look at posted jobs and accept, or propose another guarantee."))
         Spacer(Modifier.height(16.dp))
-        Primario("Entrar") {
+        Primario(tr("Entrar", "Enter")) {
             if (rol.isEmpty()) {
-                banner.error.value = "Elegí si pagás la obra o la construís."
+                banner.error.value = tr("Elegí si pagás la obra o la construís.", "Choose whether you pay for the job or build it.")
             } else {
                 acciones.correr(alTerminar = entrar) { AppHolder.a.crearCuenta(nombre, rol) }
             }
         }
-        Pista("En el teléfono la red va por Orbot (SOCKS 127.0.0.1:9050). Lo podés cambiar después en Cuenta.")
+        Pista(tr("En el teléfono la red va por Orbot (SOCKS 127.0.0.1:9050). Lo podés cambiar después en Cuenta.", "On the phone the network goes through Orbot (SOCKS 127.0.0.1:9050). You can change it later in Account."))
     }
 }

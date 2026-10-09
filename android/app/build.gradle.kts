@@ -103,6 +103,7 @@ android {
             }
             (project.findProperty("demo") as String?)?.let { d -> it.systemProperty("konstruado.demo", d) }
             (project.findProperty("oscuro") as String?)?.let { o -> it.systemProperty("konstruado.oscuro", o) }
+            (project.findProperty("idioma") as String?)?.let { i -> it.systemProperty("konstruado.idioma", i) }
             it.systemProperty("jna.library.path", rootProject.file("../target/debug").absolutePath)
             it.testLogging { showStandardStreams = true; events("passed", "failed") }
             // Las capturas usan ui-test-manifest (solo debug); en release corren los tests del motor.

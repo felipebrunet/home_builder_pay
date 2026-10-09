@@ -89,7 +89,25 @@ pub fn menu() -> Menu {
     menu
 }
 
-fn abrir_url(url: &str) {
+/// Octicon `mark-github` (primer/octicons, MIT), 16×16. Toma el color del texto.
+pub const GITHUB_MARK: &str = include_str!("../../../assets/icon/mark-github.svg");
+
+/// «Código en GitHub» / «Source on GitHub»: abre el repo en el navegador del sistema.
+#[component]
+pub fn EnlaceGithub(etiqueta: String) -> Element {
+    let svg = GITHUB_MARK.replacen("<svg ", "<svg aria-hidden=\"true\" fill=\"currentColor\" ", 1);
+    rsx! {
+        button {
+            class: "gh-link",
+            title: "{REPO}",
+            onclick: move |_| abrir_url(REPO),
+            span { class: "gh-mark", dangerous_inner_html: "{svg}" }
+            span { "{etiqueta}" }
+        }
+    }
+}
+
+pub fn abrir_url(url: &str) {
     #[cfg(target_os = "windows")]
     let _ = std::process::Command::new("cmd")
         .args(["/C", "start", "", url])
@@ -122,11 +140,8 @@ pub fn Help(yo: Signal<Option<Persona>>, screen: Signal<Screen>, vista: Vista) -
                         p { strong { "Konstruado" } " {VERSION}" }
                         p { "{DESCRIPCION}" }
                         p { "{LICENSE}" }
-                        button {
-                            class: "help-link",
-                            onclick: move |_| abrir_url(REPO),
-                            "{REPO}"
-                        }
+                        EnlaceGithub { etiqueta: "Source on GitHub".to_string() }
+                        p { class: "help", "{REPO}" }
                     }
                 },
                 Vista::Readme => rsx! {

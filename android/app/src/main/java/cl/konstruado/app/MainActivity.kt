@@ -1,5 +1,7 @@
 package cl.konstruado.app
 
+import cl.konstruado.app.ui.tr
+import cl.konstruado.app.ui.Idioma
 import android.Manifest
 import android.content.Context
 import android.content.Intent
@@ -92,9 +94,11 @@ object AppHolder {
                 destinos = Prefs.destinos(c),
                 escritorio = false,
             )
+            // Idioma: el elegido en el perfil; si no, el del teléfono (es/en); si no, ES.
+            Idioma.en = app!!.idiomaInicial(java.util.Locale.getDefault().language) == "en"
             null
         } catch (t: Throwable) {
-            "No pude arrancar el motor: ${t.message ?: t.javaClass.simpleName}"
+            tr("No pude arrancar el motor: ${t.message ?: t.javaClass.simpleName}", "Could not start the engine: ${t.message ?: t.javaClass.simpleName}")
         }
     }
 }

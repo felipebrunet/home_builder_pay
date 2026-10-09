@@ -1,5 +1,7 @@
 package cl.konstruado.app.ui.screens
 
+import cl.konstruado.app.ui.tr
+import cl.konstruado.app.ui.Idioma
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.OutlinedTextField
@@ -33,12 +35,12 @@ import kotlinx.coroutines.withContext
 fun OfertaScreen(id: String, nav: Nav, banner: Banner) {
     val acciones = rememberAcciones(banner)
     val app = AppHolder.a
-    val r = sondear(id) { app.oferta(id) } ?: run { Pista("Cargando…"); return }
+    val r = sondear(id) { app.oferta(id) } ?: run { Pista(tr("Cargando…", "Loading…")); return }
     val o = r.getOrElse { ErrorTexto(it.humano()); return }
     var garantia by remember(id) { mutableStateOf(o.garantiaEditable) }
     val detalles = remember(id) { mutableStateListOf<String>() }
     var previa by remember { mutableStateOf<uniffi.konstruado_ffi.PreviaAceptar?>(null) }
-    LaunchedEffect(garantia) {
+    LaunchedEffect(garantia, Idioma.en) {
         val p = withContext(Dispatchers.IO) { app.previaAceptar(id, garantia) }
         previa = p
         if (p.ok) {
@@ -49,23 +51,23 @@ fun OfertaScreen(id: String, nav: Nav, banner: Banner) {
     }
     Titulo(o.nombre)
     Lead(o.resumen)
-    OutlinedTextField(garantia, { garantia = it }, label = { Text(if (o.usd) "Tu garantía por partida (USD)" else "Tu garantía") },
+    OutlinedTextField(garantia, { garantia = it }, label = { Text(if (o.usd) tr("Tu garantía por partida (USD)", "Your guarantee per stage (USD)") else tr("Tu garantía", "Your guarantee")) },
         keyboardOptions = KeyboardOptions(keyboardType = if (o.usd) KeyboardType.Decimal else KeyboardType.Number), modifier = Modifier.fillMaxWidth())
     previa?.let { p -> if (p.ok) Pista(p.texto) else ErrorTexto(p.texto) }
     val contra = previa?.contra == true
-    Seccion("Partidas")
+    Seccion(tr("Partidas", "Stages"))
     if (contra) {
-        Pista("Al cambiar la garantía, el número de partidas cambia. Completá o ajustá los textos.")
+        Pista(tr("Al cambiar la garantía, el número de partidas cambia. Completá o ajustá los textos.", "Changing the guarantee changes the number of stages. Fill in or adjust the texts."))
         detalles.forEachIndexed { i, d ->
-            OutlinedTextField(d, { detalles[i] = it }, label = { Text("Partida ${i + 1}") }, modifier = Modifier.fillMaxWidth())
+            OutlinedTextField(d, { detalles[i] = it }, label = { Text(tr("Partida ${i + 1}", "Stage ${i + 1}")) }, modifier = Modifier.fillMaxWidth())
         }
     } else {
-        o.detalles.forEachIndexed { i, d -> Text("${i + 1}. ${d.ifBlank { "Partida ${i + 1}" }}") }
+        o.detalles.forEachIndexed { i, d -> Text("${i + 1}. ${d.ifBlank { tr("Partida ${i + 1}", "Stage ${i + 1}") }}") }
     }
-    Primario(if (contra) "Proponer esta garantía" else "Aceptar condiciones", enabled = previa?.ok == true) {
+    Primario(if (contra) tr("Proponer esta garantía", "Propose this guarantee") else tr("Aceptar condiciones", "Accept terms"), enabled = previa?.ok == true) {
         val d = detalles.toList()
         acciones.pedir({ app.aceptarOferta(id, garantia, d) }) { obra ->
-            banner.ok.value = if (contra) "Contra enviada. El mandante tiene que confirmar." else "Aceptada. Se arma la caja 2-de-2."
+            banner.ok.value = if (contra) tr("Contra enviada. El mandante tiene que confirmar.", "Counteroffer sent. The client has to confirm.") else tr("Aceptada. Se arma la caja 2-de-2.", "Accepted. The 2-of-2 box is being set up.")
             nav.raiz(Pantalla.Tablero)
             nav.ir(Pantalla.Obra(obra))
         }

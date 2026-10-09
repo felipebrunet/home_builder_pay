@@ -23,6 +23,8 @@ import cl.konstruado.app.ui.screens.ObraScreen
 import cl.konstruado.app.ui.screens.PartidaScreen
 import cl.konstruado.app.ui.screens.TableroScreen
 import cl.konstruado.app.ui.screens.PublicarScreen
+import cl.konstruado.app.ui.Idioma
+import cl.konstruado.app.ui.tr
 import cl.konstruado.app.ui.rememberAcciones
 import cl.konstruado.app.ui.screens.VerSemilla
 import cl.konstruado.app.ui.theme.KonstruadoTheme
@@ -57,6 +59,9 @@ class PantallasRealesTest {
         val dir = File(System.getProperty("java.io.tmpdir"), "konstruado-capturas-" + System.nanoTime())
         File(demo!!).copyRecursively(dir, overwrite = true)
         val a = KonstruadoApp.nuevo(dir.absolutePath, null, null, emptyList(), false)
+        // -Pidioma=en: capturas en inglés (UI y textos del motor).
+        if (idioma == "en") a.fijarIdioma("en")
+        Idioma.en = idioma == "en"
         val f = AppHolder::class.java.getDeclaredField("app")
         f.isAccessible = true
         f.set(AppHolder, a)
@@ -64,6 +69,7 @@ class PantallasRealesTest {
     }
 
     private val oscuro = System.getProperty("konstruado.oscuro") == "1"
+    private val idioma: String? = System.getProperty("konstruado.idioma")
 
     private fun foto(nombre: String, titulo: String, contenido: @Composable () -> Unit) {
         compose.mainClock.autoAdvance = false
@@ -82,42 +88,42 @@ class PantallasRealesTest {
             compose.mainClock.advanceTimeBy(250)
             Thread.sleep(120)
         }
-        val sufijo = if (oscuro) "-oscuro" else ""
+        val sufijo = (if (oscuro) "-oscuro" else "") + (if (idioma == "en") "-en" else "")
         compose.onRoot().captureRoboImage(File(salida!!, "$nombre$sufijo.png").absolutePath)
     }
 
-    @Test fun billetera() { app(); foto("android-billetera", "Billetera") { BilleteraScreen(Banner()) } }
+    @Test fun billetera() { app(); foto("android-billetera", tr("Billetera","Wallet")) { BilleteraScreen(Banner()) } }
 
-    @Test fun cuenta() { app(); foto("android-cuenta", "Cuenta") { CuentaScreen(Banner()) } }
+    @Test fun cuenta() { app(); foto("android-cuenta", tr("Cuenta","Account")) { CuentaScreen(Banner()) } }
 
-    @Test fun tablero() { app(); foto("android-tablero", "Tablero") { TableroScreen(Nav(), Banner()) } }
+    @Test fun tablero() { app(); foto("android-tablero", tr("Tablero","Board")) { TableroScreen(Nav(), Banner()) } }
 
     @Test fun obra() {
         val id = app().tablero().obras.first().id
-        foto("android-obra", "Obra") { ObraScreen(id, Nav(), Banner()) }
+        foto("android-obra", tr("Obra","Job")) { ObraScreen(id, Nav(), Banner()) }
     }
 
     @Test fun partida() {
         val id = app().tablero().obras.first().id
-        foto("android-partida", "Partida") { PartidaScreen(id, 0u, Banner()) }
+        foto("android-partida", tr("Partida","Stage")) { PartidaScreen(id, 0u, Banner()) }
     }
 
     @Test fun publicarUsd() {
         // Precio real (CoinGecko / Kraken) antes de dibujar; sin red queda el aviso.
         val a = app()
         runCatching { a.actualizarPrecio() }
-        foto("android-publicar-usd", "Publicar") { PublicarScreen(Nav(), Banner()) }
+        foto("android-publicar-usd", tr("Publicar","Post a job")) { PublicarScreen(Nav(), Banner()) }
     }
 
-    @Test fun bienvenida() { app(); foto("android-bienvenida", "Bienvenida") { BienvenidaScreen(Banner()) {} } }
+    @Test fun bienvenida() { app(); foto("android-bienvenida", tr("Bienvenida","Welcome")) { BienvenidaScreen(Banner()) {} } }
 
     @Test fun bienvenidaRestaurar() {
-        app(); foto("android-bienvenida-restaurar", "Restaurar") { BienvenidaScreen(Banner(), ModoBienvenida.Restaurar) {} }
+        app(); foto("android-bienvenida-restaurar", tr("Restaurar","Restore")) { BienvenidaScreen(Banner(), ModoBienvenida.Restaurar) {} }
     }
 
     @Test fun semillaOculta() {
         app()
-        foto("android-semilla-oculta", "Semilla") {
+        foto("android-semilla-oculta", tr("Semilla","Seed")) {
             val b = Banner()
             VerSemilla(rememberAcciones(b), b, pasoInicial = 0, verVkInicial = true)
         }
@@ -125,7 +131,7 @@ class PantallasRealesTest {
 
     @Test fun semillaAviso() {
         app()
-        foto("android-semilla-aviso", "Semilla") {
+        foto("android-semilla-aviso", tr("Semilla","Seed")) {
             val b = Banner()
             VerSemilla(rememberAcciones(b), b, pasoInicial = 1)
         }
@@ -133,7 +139,7 @@ class PantallasRealesTest {
 
     @Test fun semillaRevelada() {
         app()
-        foto("android-semilla-revelada", "Semilla") {
+        foto("android-semilla-revelada", tr("Semilla","Seed")) {
             val b = Banner()
             VerSemilla(rememberAcciones(b), b, pasoInicial = 2, verVkInicial = true)
         }

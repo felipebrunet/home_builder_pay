@@ -552,6 +552,7 @@ mod tests {
             presentes: vec![m.clone()],
             tema: "oscuro".into(),
             idioma: "en".into(),
+            idioma_fijo: false,
             clave_sec: sec,
             spend_sec: String::new(),
             obras_salidas: vec![],

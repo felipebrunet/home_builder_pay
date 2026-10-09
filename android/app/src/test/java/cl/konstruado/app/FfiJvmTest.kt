@@ -75,6 +75,19 @@ class FfiJvmTest {
         assertEquals(propio, otra.daemonActivo())
         assertEquals(app.daemonPorDefecto(), app.usarDaemonPorDefecto())
         assertTrue(app.daemonEsDefecto())
+        // Idioma (0.3.0): el motor arma sus textos en ES o EN y queda en el perfil.
+        assertEquals("es", app.idiomaInicial("es-CL"))
+        app.fijarIdioma("en")
+        assertEquals("en", app.idioma())
+        assertTrue(app.previaPublicar("10000", "2000").texto.contains("stages"))
+        assertTrue(app.notaPrecio().contains("US dollars"))
+        val eErr = runCatching { app.confirmarYFondear("no-existe", 0u) }.exceptionOrNull()
+        assertTrue(eErr is FfiException.Fallo && !eErr.msg.contains("todavía"))
+        assertTrue(app.repositorio().endsWith("felipebrunet/konstruado"))
+        // Elegido en el perfil: manda sobre el idioma del teléfono al volver a abrir.
+        assertEquals("en", KonstruadoApp.nuevo(dir, null, null, emptyList(), false).idiomaInicial("es-CL"))
+        app.fijarIdioma("es")
+        assertTrue(app.previaPublicar("10000", "2000").texto.contains("partidas"))
         // Fondear sin obra: error honesto.
         val f = runCatching { app.confirmarYFondear("no-existe", 0u) }.exceptionOrNull()
         assertTrue(f is FfiException.Fallo)

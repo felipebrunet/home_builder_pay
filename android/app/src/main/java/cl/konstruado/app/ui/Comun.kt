@@ -49,8 +49,10 @@ fun Throwable.humano(): String = when (this) {
 /** Lee del motor cada segundo en Dispatchers.IO. */
 @Composable
 fun <T> sondear(vararg keys: Any?, leer: () -> T): Result<T>? {
-    val estado = remember(*keys) { mutableStateOf<Result<T>?>(null) }
-    LaunchedEffect(*keys) {
+    // El idioma va en las claves: al cambiarlo se vuelve a leer al toque (textos del motor).
+    val en = Idioma.en
+    val estado = remember(*keys, en) { mutableStateOf<Result<T>?>(null) }
+    LaunchedEffect(*keys, en) {
         while (true) {
             estado.value = withContext(Dispatchers.IO) { runCatching { leer() } }
             delay(1000)
@@ -162,12 +164,12 @@ fun ErrorTexto(t: String) = Text(t, style = MaterialTheme.typography.bodyMedium,
 
 fun escribirUri(c: Context, uri: Uri, texto: String) {
     c.contentResolver.openOutputStream(uri, "wt")?.use { it.write(texto.toByteArray()) }
-        ?: error("No pude abrir el archivo elegido")
+        ?: error(tr("No pude abrir el archivo elegido", "Could not open the chosen file"))
 }
 
 fun leerUri(c: Context, uri: Uri): String =
     c.contentResolver.openInputStream(uri)?.use { it.readBytes().toString(Charsets.UTF_8) }
-        ?: error("No pude leer el archivo elegido")
+        ?: error(tr("No pude leer el archivo elegido", "Could not read the chosen file"))
 
 /**
  * Guardar un respaldo con el selector de Android (SAF). `contenido` se pide al
@@ -212,7 +214,7 @@ fun rememberGuardarBytes(
         if (uri != null) acciones.correr(okMsg) {
             val b = contenido()
             ctx.contentResolver.openOutputStream(uri, "wt")?.use { it.write(b); it.flush() }
-                ?: error("No pude abrir el archivo elegido")
+                ?: error(tr("No pude abrir el archivo elegido", "Could not open the chosen file"))
             alGuardar()
         }
     }
@@ -226,7 +228,7 @@ fun rememberAbrirBytes(acciones: Acciones, usar: (nombre: String, bytes: ByteArr
     val lanzador = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) acciones.pedir({
             val b = ctx.contentResolver.openInputStream(uri)?.use { it.readBytes() }
-                ?: error("No pude leer el archivo elegido")
+                ?: error(tr("No pude leer el archivo elegido", "Could not read the chosen file"))
             Pair(uri.lastPathSegment?.substringAfterLast('/') ?: "respaldo", b)
         }) { (n, b) -> usar(n, b) }
     }

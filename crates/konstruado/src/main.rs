@@ -124,6 +124,8 @@ fn persistir(
         presentes: n.presentes(),
         tema,
         idioma,
+        // En el escritorio el idioma siempre es una elección (por defecto ES).
+        idioma_fijo: true,
         clave_sec,
         spend_sec,
         obras_salidas: n.obras_salidas(),
@@ -1010,6 +1012,11 @@ fn Cuenta(
                     span { {lang.t("English. The deal does not change.", "English. The deal does not change.")} }
                 }
             }
+            }
+            section { class: "panel",
+            h2 { {lang.t("Código", "Source")} }
+            p { class: "help", {lang.t("Konstruado es software libre. El código, los issues y los releases están en GitHub.", "Konstruado is free software. Code, issues and releases are on GitHub.")} }
+            help::EnlaceGithub { etiqueta: lang.t("Código en GitHub", "Source on GitHub").to_string() }
             }
             button {
                 class: "btn btn-primary",

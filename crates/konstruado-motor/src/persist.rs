@@ -18,6 +18,9 @@ pub struct EstadoDisco {
     pub tema: String,
     #[serde(default = "idioma_es")]
     pub idioma: String,
+    /// La persona eligió el idioma (ES/EN). Si no, Android usa el del teléfono.
+    #[serde(default)]
+    pub idioma_fijo: bool,
     /// X25519 secret, base64. Stays in this data dir. Never gossiped.
     #[serde(default)]
     pub clave_sec: String,
@@ -146,6 +149,7 @@ mod tests {
             presentes: vec![yo.clone()],
             tema: "vivo".into(),
             idioma: "en".into(),
+            idioma_fijo: true,
             clave_sec: String::new(),
             spend_sec: String::new(),
             obras_salidas: vec![],

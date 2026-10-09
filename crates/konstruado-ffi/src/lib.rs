@@ -13,6 +13,7 @@ uniffi::setup_scaffolding!();
 use konstruado_motor::{caja, i18n, persist, respaldo};
 
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -24,8 +25,39 @@ use konstruado_core::{
 };
 use konstruado_net::{DiagSocks, EstadoTor, Nodo, PeerAddr, ORBOT_SOCKS, PUERTO_LOCAL, RED, RENDEZVOUS_ONION, VIRT_PORT};
 
-const L: Idioma = Idioma::Es;
-const ES: bool = true;
+// ---------------------------------------------------------------- idioma
+
+/// Idioma de los textos que arma el motor (es() por defecto). Lo fija la app
+/// al arrancar (perfil o idioma del teléfono) y desde Cuenta.
+static EN: AtomicBool = AtomicBool::new(false);
+
+fn es() -> bool {
+    !EN.load(Ordering::Relaxed)
+}
+
+fn l() -> Idioma {
+    if es() {
+        Idioma::Es
+    } else {
+        Idioma::En
+    }
+}
+
+/// Texto fijo en el idioma activo.
+fn tr<'a>(es_txt: &'a str, en_txt: &'a str) -> &'a str {
+    if es() {
+        es_txt
+    } else {
+        en_txt
+    }
+}
+
+/// `format!` en el idioma activo: `tf!("hola {x}", "hi {x}")`.
+macro_rules! tf {
+    ($es:literal, $en:literal $(, $arg:expr)* $(,)?) => {
+        if es() { format!($es $(, $arg)*) } else { format!($en $(, $arg)*) }
+    };
+}
 
 // ---------------------------------------------------------------- errores
 
@@ -40,11 +72,11 @@ fn fallo(m: impl Into<String>) -> FfiError {
 }
 
 fn err_core(e: konstruado_core::Error) -> FfiError {
-    fallo(L.error(&e))
+    fallo(l().error(&e))
 }
 
 fn err_caja(e: String) -> FfiError {
-    fallo(caja::aviso_humano(&e, ES))
+    fallo(caja::aviso_humano(&e, es()))
 }
 
 // ---------------------------------------------------------------- vistas
@@ -406,6 +438,7 @@ struct Sesion {
     spend_sec: String,
     tema: String,
     idioma: String,
+    idioma_fijo: bool,
 }
 
 #[derive(uniffi::Object)]
@@ -444,10 +477,28 @@ fn destino_txt(d: &PeerAddr) -> String {
     match d {
         PeerAddr::Tcp { host, port } => format!("{host}:{port}"),
         PeerAddr::Onion { host, port } if host == RENDEZVOUS_ONION => {
-            format!("sala {}…:{port} (Orbot)", &host[..10.min(host.len())])
+            tf!("sala {}…:{port} (Orbot)", "room {}…:{port} (Orbot)", &host[..10.min(host.len())])
         }
         PeerAddr::Onion { host, port } => format!("{host}:{port}"),
-        PeerAddr::Buzon { .. } => "buzón".into(),
+        PeerAddr::Buzon { .. } => tr("buzón", "mailbox").into(),
+    }
+}
+
+fn aplicar_idioma(codigo: &str) {
+    EN.store(Idioma::parse(codigo) == Idioma::En, Ordering::Relaxed);
+}
+
+/// Perfil elegido (o `en` de antes, que solo se guarda si alguien lo eligió);
+/// si no, el idioma del teléfono cuando es es/en; si no, ES.
+fn idioma_de_arranque(guardado: &str, fijo: bool, dispositivo: &str) -> &'static str {
+    if fijo || guardado.eq_ignore_ascii_case("en") {
+        return Idioma::parse(guardado).codigo();
+    }
+    let d = dispositivo.trim().to_ascii_lowercase();
+    if d.starts_with("en") {
+        "en"
+    } else {
+        "es"
     }
 }
 
@@ -463,7 +514,7 @@ fn parse_rol(s: &str) -> Result<Rol, FfiError> {
     match s.trim().to_lowercase().as_str() {
         "mandante" => Ok(Rol::Mandante),
         "contratista" => Ok(Rol::Contratista),
-        _ => Err(fallo("Elegí si pagás la obra o la construís.")),
+        _ => Err(fallo(tr("Elegí si pagás la obra o la construís.", "Choose whether you pay for the job or build it."))),
     }
 }
 
@@ -509,12 +560,12 @@ fn mirada_de(v: &caja::CajaVista, obra: &str) -> Option<MiradaVista> {
     let m = v.miradas.iter().find(|m| m.obra == obra);
     Some(match m {
         Some(m) => MiradaVista {
-            bloques: format!("La caja mira {} bloques hacia atrás.", m.bloques),
-            retro: (m.retro > 0).then(|| format!("Quedan {} bloques por mirar en la caja.", m.retro)),
-            aviso: m.aviso.as_ref().map(|a| caja::aviso_humano(a, ES)),
+            bloques: tf!("La caja mira {} bloques hacia atrás.", "The box looks {} blocks back.", m.bloques),
+            retro: (m.retro > 0).then(|| tf!("Quedan {} bloques por mirar en la caja.", "{} blocks left to scan in the box.", m.retro)),
+            aviso: m.aviso.as_ref().map(|a| caja::aviso_humano(a, es())),
         },
         None => MiradaVista {
-            bloques: "La caja arranca por los últimos 40 bloques.".into(),
+            bloques: tr("La caja arranca por los últimos 40 bloques.", "The box starts from the last 40 blocks.").into(),
             retro: None,
             aviso: None,
         },
@@ -535,8 +586,8 @@ fn avisos_para(mid: &str, obras: &[Obra], sec: &str) -> Vec<AvisoVista> {
         }
         if obra.estado == EstadoObra::Contra && obra.mandante.id == mid {
             out.push(AvisoVista {
-                texto: format!(
-                    "{}: {} propone garantía {}",
+                texto: tf!(
+                    "{}: {} propone garantía {}", "{}: {} proposes a guarantee of {}",
                     obra.nombre,
                     obra.contratista.nombre,
                     mm(obra.moneda, obra.garantia)
@@ -549,11 +600,11 @@ fn avisos_para(mid: &str, obras: &[Obra], sec: &str) -> Vec<AvisoVista> {
             if ex.por.id != mid {
                 let detalle = match obra.leer_extra(sec) {
                     TextoLeido::Plano(t) => t,
-                    TextoLeido::Cerrado => "Texto cifrado".into(),
+                    TextoLeido::Cerrado => tr("Texto cifrado", "Encrypted text").into(),
                 };
                 out.push(AvisoVista {
-                    texto: format!(
-                        "{}: {} propone extra {} ({})",
+                    texto: tf!(
+                        "{}: {} propone extra {} ({})", "{}: {} proposes an extra {} ({})",
                         obra.nombre,
                         ex.por.nombre,
                         detalle,
@@ -567,7 +618,7 @@ fn avisos_para(mid: &str, obras: &[Obra], sec: &str) -> Vec<AvisoVista> {
         if let Some(cl) = obra.cierre.as_ref() {
             if cl.id != mid {
                 out.push(AvisoVista {
-                    texto: format!("{}: {} quiere cortar el trato", obra.nombre, cl.nombre),
+                    texto: tf!("{}: {} quiere cortar el trato", "{}: {} wants to end the deal", obra.nombre, cl.nombre),
                     obra_id: obra.id.clone(),
                     partida: None,
                 });
@@ -579,12 +630,12 @@ fn avisos_para(mid: &str, obras: &[Obra], sec: &str) -> Vec<AvisoVista> {
             Rol::Contratista
         };
         for (i, p) in obra.partidas.iter().enumerate() {
-            let titulo = L.titulo_partida(i, &p.detalle);
+            let titulo = l().titulo_partida(i, &p.detalle);
             if p.estado == PartidaEstado::Encerrando
                 && p.encerrado_por.as_ref().map(|q| q.id.as_str()) != Some(mid)
             {
                 out.push(AvisoVista {
-                    texto: format!("{} · {}: te toca confirmar el encierre", obra.nombre, titulo),
+                    texto: tf!("{} · {}: te toca confirmar el encierre", "{} · {}: your turn to confirm the lock", obra.nombre, titulo),
                     obra_id: obra.id.clone(),
                     partida: Some(i as u32),
                 });
@@ -592,7 +643,7 @@ fn avisos_para(mid: &str, obras: &[Obra], sec: &str) -> Vec<AvisoVista> {
             if p.estado == PartidaEstado::EnTrato && p.turno == Some(mi_rol) {
                 let pct = p.propuesto.unwrap_or(0);
                 out.push(AvisoVista {
-                    texto: format!("{} · {}: te toca responder ({pct}%)", obra.nombre, titulo),
+                    texto: tf!("{} · {}: te toca responder ({pct}%)", "{} · {}: your turn to answer ({pct}%)", obra.nombre, titulo),
                     obra_id: obra.id.clone(),
                     partida: Some(i as u32),
                 });
@@ -602,10 +653,10 @@ fn avisos_para(mid: &str, obras: &[Obra], sec: &str) -> Vec<AvisoVista> {
                     .encerrado_por
                     .as_ref()
                     .map(|q| q.nombre.as_str())
-                    .unwrap_or("el mandante");
+                    .unwrap_or(tr("el mandante", "the client"));
                 out.push(AvisoVista {
-                    texto: format!(
-                        "{} · {}: {quien} encerró, avisá cuando termines",
+                    texto: tf!(
+                        "{} · {}: {quien} encerró, avisá cuando termines", "{} · {}: {quien} locked it, report when you finish",
                         obra.nombre, titulo
                     ),
                     obra_id: obra.id.clone(),
@@ -620,15 +671,15 @@ fn avisos_para(mid: &str, obras: &[Obra], sec: &str) -> Vec<AvisoVista> {
 fn oferta_vista(o: &Oferta, mid: &str) -> OfertaVista {
     let mia = o.mandante.id == mid;
     let resumen = if mia {
-        format!(
-            "Trabajo {} · garantía sugerida {} · {} partidas",
+        tf!(
+            "Trabajo {} · garantía sugerida {} · {} partidas", "Job {} · suggested guarantee {} · {} stages",
             mm(o.moneda, o.trabajo),
             mm(o.moneda, o.garantia_sugerida),
             o.n_partidas_sugeridas
         )
     } else {
-        format!(
-            "{} ofrece trabajo por {}. Garantía sugerida {} ({} partidas).",
+        tf!(
+            "{} ofrece trabajo por {}. Garantía sugerida {} ({} partidas).", "{} offers a job for {}. Suggested guarantee {} ({} stages).",
             o.mandante.nombre,
             mm(o.moneda, o.trabajo),
             mm(o.moneda, o.garantia_sugerida),
@@ -670,7 +721,7 @@ fn leer(moneda: Moneda, s: &str) -> u64 {
 }
 
 fn mm(moneda: Moneda, n: u64) -> String {
-    fmt_monto(moneda, n, ES)
+    fmt_monto(moneda, n, es())
 }
 
 fn recorta_nota(s: String) -> String {
@@ -690,7 +741,7 @@ impl KonstruadoApp {
             .unwrap()
             .yo
             .clone()
-            .ok_or_else(|| fallo("Falta tu nombre en este equipo."))
+            .ok_or_else(|| fallo(tr("Falta tu nombre en este equipo.", "Your name is missing on this device.")))
     }
 
     fn sec(&self) -> String {
@@ -712,7 +763,7 @@ impl KonstruadoApp {
             .obras_todas()
             .into_iter()
             .find(|o| o.id == id)
-            .ok_or_else(|| fallo("La obra todavía no llegó a este equipo."))
+            .ok_or_else(|| fallo(tr("La obra todavía no llegó a este equipo.", "The job has not reached this device yet.")))
     }
 
     fn persistir(&self) {
@@ -725,6 +776,7 @@ impl KonstruadoApp {
             presentes: self.nodo.presentes(),
             tema: s.tema.clone(),
             idioma: s.idioma.clone(),
+            idioma_fijo: s.idioma_fijo,
             clave_sec: s.clave_sec.clone(),
             spend_sec: s.spend_sec.clone(),
             obras_salidas: self.nodo.obras_salidas(),
@@ -739,18 +791,18 @@ impl KonstruadoApp {
         let n = &self.nodo;
         if matches!(n.estado_tor(), EstadoTor::Arrancando { .. }) && n.n_peers() == 0 {
             return Err(fallo(
-                "Sincronizando el trato… esperá a que baje el estado del otro.",
+                tr("Sincronizando el trato… esperá a que baje el estado del otro.", "Syncing the deal… wait for the other side's state to arrive."),
             ));
         }
         if n.trato_alineado(&p.id, &otro) {
             Ok(p)
         } else if n.sesion_viva(&p.id, &otro) && !n.sync_reciente() {
             Err(fallo(
-                "Sincronizando el trato… todavía no bajó lo último del otro.",
+                tr("Sincronizando el trato… todavía no bajó lo último del otro.", "Syncing the deal… the other side's latest state has not arrived yet."),
             ))
         } else {
             Err(fallo(
-                "El otro no está en línea. Tiene que tener Konstruado abierto.",
+                tr("El otro no está en línea. Tiene que tener Konstruado abierto.", "The other person is not online. They need Konstruado open."),
             ))
         }
     }
@@ -810,7 +862,7 @@ impl KonstruadoApp {
                         s.yo.clone(),
                         s.rol,
                         s.clave_sec.clone(),
-                        (s.tema.clone(), s.idioma.clone(), s.spend_sec.clone()),
+                        (s.tema.clone(), s.idioma.clone(), s.spend_sec.clone(), s.idioma_fijo),
                     )
                 };
                 if let Some(p) = &yo {
@@ -833,6 +885,7 @@ impl KonstruadoApp {
                     presentes: nodo.presentes(),
                     tema: disco.0,
                     idioma: disco.1,
+                    idioma_fijo: disco.3,
                     clave_sec: sec,
                     spend_sec: disco.2,
                     obras_salidas: nodo.obras_salidas(),
@@ -866,18 +919,18 @@ impl KonstruadoApp {
         let sala = sala_de(&n.diag_socks(), socks.as_deref(), vivos, hay_tcp, None);
         let estado = match &tor {
             _ if socks.is_some() || vivos > 0 => sala.titulo.clone(),
-            EstadoTor::Listo { .. } if vivos > 0 => "Conectado a la sala".to_string(),
-            EstadoTor::Listo { .. } => "Orbot listo, buscando sala".to_string(),
-            EstadoTor::Arrancando { paso } => L.paso_tor(paso),
+            EstadoTor::Listo { .. } if vivos > 0 => tr("Conectado a la sala", "Connected to the room").to_string(),
+            EstadoTor::Listo { .. } => tr("Orbot listo, buscando sala", "Orbot ready, looking for the room").to_string(),
+            EstadoTor::Arrancando { paso } => l().paso_tor(paso),
             EstadoTor::Fallo(s) => format!("Orbot: {s}"),
-            EstadoTor::Ausente if vivos > 0 => "Conectado por TCP".to_string(),
-            EstadoTor::Ausente => "Sin Orbot ni destino TCP".to_string(),
+            EstadoTor::Ausente if vivos > 0 => tr("Conectado por TCP", "Connected over TCP").to_string(),
+            EstadoTor::Ausente => tr("Sin Orbot ni destino TCP", "No Orbot and no TCP target").to_string(),
         };
         let gente = if otros.is_empty() {
             if pares == 0 {
-                "nadie más en la red".to_string()
+                tr("nadie más en la red", "nobody else on the network").to_string()
             } else {
-                format!("{pares} par(es), todavía sin nombre")
+                tf!("{pares} par(es), todavía sin nombre", "{pares} peer(s), no name yet")
             }
         } else {
             otros.join(", ")
@@ -918,59 +971,59 @@ fn sala_de(
         return e(
             "conectado",
             caja::Tono::Ok,
-            "Conectado a la sala".into(),
-            format!("Sesiones vivas: {vivos}."),
+            tr("Conectado a la sala", "Connected to the room").into(),
+            tf!("Sesiones vivas: {vivos}.", "Live sessions: {vivos}."),
         );
     }
     match diag {
         DiagSocks::SinSocks if hay_tcp => e(
             "tcp",
             caja::Tono::Espera,
-            "Buscando por TCP…".into(),
-            "Sin Orbot: se marca solo el destino TCP de Avanzado.".into(),
+            tr("Buscando por TCP…", "Looking over TCP…").into(),
+            tr("Sin Orbot: se marca solo el destino TCP de Avanzado.", "No Orbot: only the TCP target from Advanced is dialed.").into(),
         ),
         DiagSocks::SinSocks => e(
             "orbot_apagado_en_app",
             caja::Tono::Apagado,
-            "Orbot apagado en Konstruado".into(),
-            "Activá «Usar Orbot» en Red para marcar la sala.".into(),
+            tr("Orbot apagado en Konstruado", "Orbot is off in Konstruado").into(),
+            tr("Activá «Usar Orbot» en Red para marcar la sala.", "Turn on “Use Orbot” under Network to dial the room.").into(),
         ),
         DiagSocks::SinProbar => e(
             "probando",
             caja::Tono::Espera,
-            "Probando Orbot…".into(),
-            format!("Primer intento por el SOCKS {s}."),
+            tr("Probando Orbot…", "Testing Orbot…").into(),
+            tf!("Primer intento por el SOCKS {s}.", "First attempt through SOCKS {s}."),
         ),
         DiagSocks::SocksCaido(_) if orbot_instalado == Some(false) => e(
             "sin_orbot",
             caja::Tono::Error,
-            "Orbot no está instalado".into(),
-            "Instalalo desde F-Droid o Google Play y encendelo.".into(),
+            tr("Orbot no está instalado", "Orbot is not installed").into(),
+            tr("Instalalo desde F-Droid o Google Play y encendelo.", "Install it from F-Droid or Google Play and start it.").into(),
         ),
         DiagSocks::SocksCaido(err) => e(
             "socks_caido",
             caja::Tono::Error,
-            format!("Orbot no responde en {s}"),
-            format!("Abrí Orbot y tocá Iniciar, o revisá el puerto SOCKS ({err})."),
+            tf!("Orbot no responde en {s}", "Orbot does not answer on {s}"),
+            tf!("Abrí Orbot y tocá Iniciar, o revisá el puerto SOCKS ({err}).", "Open Orbot and tap Start, or check the SOCKS port ({err})."),
         ),
         DiagSocks::SocksOk => e(
             "socks_ok",
             caja::Tono::Espera,
-            "Orbot responde · llamando a la sala…".into(),
-            "Tor puede tardar hasta un minuto en encontrar la sala.".into(),
+            tr("Orbot responde · llamando a la sala…", "Orbot answers · calling the room…").into(),
+            tr("Tor puede tardar hasta un minuto en encontrar la sala.", "Tor can take up to a minute to find the room.").into(),
         ),
         DiagSocks::DestinoNoResponde(err) => e(
             "sala_no_responde",
             // Ámbar: Orbot anda; falta el otro lado (PC apagado / sin Konstruado).
             caja::Tono::Espera,
-            "La sala no responde".into(),
-            format!("Orbot funciona. ¿Está abierto Konstruado en el PC? ({err})"),
+            tr("La sala no responde", "The room does not answer").into(),
+            tf!("Orbot funciona. ¿Está abierto Konstruado en el PC? ({err})", "Orbot works. Is Konstruado open on the PC? ({err})"),
         ),
         DiagSocks::Conectado => e(
             "socks_ok",
             caja::Tono::Espera,
-            "Reconectando con la sala…".into(),
-            "Orbot funciona; se cortó la sesión y se vuelve a marcar.".into(),
+            tr("Reconectando con la sala…", "Reconnecting to the room…").into(),
+            tr("Orbot funciona; se cortó la sesión y se vuelve a marcar.", "Orbot works; the session dropped and is being dialed again.").into(),
         ),
     }
 }
@@ -999,10 +1052,10 @@ impl KonstruadoApp {
         escritorio: bool,
     ) -> Result<Arc<Self>, FfiError> {
         let datos = PathBuf::from(&datos_dir);
-        std::fs::create_dir_all(&datos).map_err(|e| fallo(format!("Carpeta de datos: {e}")))?;
+        std::fs::create_dir_all(&datos).map_err(|e| fallo(tf!("Carpeta de datos: {e}", "Data folder: {e}")))?;
         std::env::set_var("KONSTRUADO_DATOS", &datos_dir);
         // Un respaldo completo restaurado se aplica antes de leer nada (ver respaldo.rs).
-        respaldo::aplicar_pendiente(&datos).map_err(|e| fallo(format!("Restaurar respaldo: {e}")))?;
+        respaldo::aplicar_pendiente(&datos).map_err(|e| fallo(tf!("Restaurar respaldo: {e}", "Restore backup: {e}")))?;
         persist::cargar_daemon_al_arrancar().map_err(fallo)?;
         let mut g = persist::cargar();
         if let Some(yo) = g.yo.as_mut() {
@@ -1041,7 +1094,7 @@ impl KonstruadoApp {
                     Nodo::arrancar_movil(socks, dest).await
                 }
             })
-            .map_err(|e| fallo(format!("Red: {e}")))?;
+            .map_err(|e| fallo(tf!("Red: {e}", "Network: {e}")))?;
         // Hidratar como el escritorio: obras propias selladas, presentes propios.
         let mut obras0 = g.obras.clone();
         if let Some(p) = g.yo.clone() {
@@ -1077,7 +1130,8 @@ impl KonstruadoApp {
                 clave_sec: g.clave_sec.clone(),
                 spend_sec: g.spend_sec.clone(),
                 tema: if g.tema.is_empty() { "vivo".into() } else { g.tema.clone() },
-                idioma: "es".into(),
+                idioma: g.idioma.clone(),
+                idioma_fijo: g.idioma_fijo,
             })),
             datos,
             ultima_prueba: Mutex::new(None),
@@ -1085,6 +1139,42 @@ impl KonstruadoApp {
         });
         app.lanzar_bucle();
         Ok(app)
+    }
+
+    // ------------------------------------------------------------ idioma
+
+    /// Idioma activo: `es` o `en`.
+    pub fn idioma(&self) -> String {
+        l().codigo().into()
+    }
+
+    /// Al arrancar: el idioma elegido en el perfil (compartido con el
+    /// escritorio) o, si nunca se eligió, el del teléfono si es es/en; si no, ES.
+    /// Lo aplica a los textos del motor y lo devuelve.
+    pub fn idioma_inicial(&self, dispositivo: String) -> String {
+        let s = self.ses.lock().unwrap();
+        let codigo = idioma_de_arranque(&s.idioma, s.idioma_fijo, &dispositivo);
+        drop(s);
+        aplicar_idioma(codigo);
+        codigo.into()
+    }
+
+    /// ES/EN desde Cuenta: se guarda en el perfil y se aplica ya.
+    pub fn fijar_idioma(&self, codigo: String) -> String {
+        let i = Idioma::parse(&codigo);
+        aplicar_idioma(i.codigo());
+        {
+            let mut s = self.ses.lock().unwrap();
+            s.idioma = i.codigo().into();
+            s.idioma_fijo = true;
+        }
+        self.persistir();
+        i.codigo().into()
+    }
+
+    /// URL del repositorio (`CARGO_PKG_REPOSITORY`), para «Código en GitHub».
+    pub fn repositorio(&self) -> String {
+        env!("CARGO_PKG_REPOSITORY").into()
     }
 
     pub fn version(&self) -> String {
@@ -1105,7 +1195,7 @@ impl KonstruadoApp {
             id: s.yo.as_ref().map(|p| p.id.clone()).unwrap_or_default(),
             nombre: s.yo.as_ref().map(|p| p.nombre.clone()).unwrap_or_default(),
             rol: rol_txt(s.rol),
-            rol_label: s.rol.map(|r| L.rol(r).to_string()).unwrap_or_default(),
+            rol_label: s.rol.map(|r| l().rol(r).to_string()).unwrap_or_default(),
         }
     }
 
@@ -1190,7 +1280,7 @@ impl KonstruadoApp {
 
     pub fn agregar_destino(&self, destino: String) -> Result<(), FfiError> {
         let d = parse_destino(&destino)
-            .ok_or_else(|| fallo("Destino inválido. Usá host:puerto, p. ej. 10.0.2.2:17432."))?;
+            .ok_or_else(|| fallo(tr("Destino inválido. Usá host:puerto, p. ej. 10.0.2.2:17432.", "Invalid target. Use host:port, e.g. 10.0.2.2:17432.")))?;
         let _e = self.rt.enter();
         self.nodo.agregar_destino(d);
         Ok(())
@@ -1201,7 +1291,7 @@ impl KonstruadoApp {
             self.nodo.quitar_destino(&d);
         }
         // "sala …" quita el onion.
-        if destino.starts_with("sala") {
+        if destino.starts_with("sala") || destino.starts_with("room") {
             self.nodo.quitar_destino(&PeerAddr::Onion {
                 host: RENDEZVOUS_ONION.into(),
                 port: VIRT_PORT,
@@ -1222,13 +1312,13 @@ impl KonstruadoApp {
             socks_port: ORBOT_SOCKS,
             onion_sala: RENDEZVOUS_ONION.into(),
             pasos: vec![
-                "Instalá Orbot y encendelo. No hace falta el modo VPN: Konstruado usa el proxy SOCKS de Orbot para la sala.".into(),
-                "Dejá el proxy SOCKS de Orbot en 127.0.0.1:9050 (viene así).".into(),
-                "En Cuenta → Red tocá «Usar Orbot». El teléfono marca la sala horneada.".into(),
-                "El nodo Monero no usa el SOCKS: Konstruado lo llama directo. Un nodo de tu red local o Tailscale (192.168.x, 10.x, 100.x) va directo y nunca por Tor; un nodo público también va directo (ve tu IP), salvo que la VPN de Orbot capture a Konstruado, y ahí va por Tor.".into(),
-                "Si usás la VPN de Orbot con un nodo local, dejá Konstruado afuera: en «Elegir aplicaciones» marcá otra app y no Konstruado (sin ninguna marcada Orbot captura todo el teléfono), o usá «Modo de usuarie avanzado» (solo SOCKS, sin VPN).".into(),
-                "La sala la hospeda una PC: el mandante de escritorio, o `konstruado-sala`.".into(),
-                "Dos teléfonos se hablan a través de esa PC (relay).".into(),
+                tr("Instalá Orbot y encendelo. No hace falta el modo VPN: Konstruado usa el proxy SOCKS de Orbot para la sala.", "Install Orbot and start it. VPN mode is not needed: Konstruado uses Orbot's SOCKS proxy for the room.").into(),
+                tr("Dejá el proxy SOCKS de Orbot en 127.0.0.1:9050 (viene así).", "Leave Orbot's SOCKS proxy on 127.0.0.1:9050 (the default).").into(),
+                tr("En Cuenta → Red tocá «Usar Orbot». El teléfono marca la sala horneada.", "In Account → Network tap “Use Orbot”. The phone dials the built-in room.").into(),
+                tr("El nodo Monero no usa el SOCKS: Konstruado lo llama directo. Un nodo de tu red local o Tailscale (192.168.x, 10.x, 100.x) va directo y nunca por Tor; un nodo público también va directo (ve tu IP), salvo que la VPN de Orbot capture a Konstruado, y ahí va por Tor.", "The Monero node does not use the SOCKS proxy: Konstruado calls it directly. A node on your LAN or Tailscale (192.168.x, 10.x, 100.x) is always direct, never over Tor; a public node is also direct (it sees your IP), unless Orbot's VPN captures Konstruado, and then it goes over Tor.").into(),
+                tr("Si usás la VPN de Orbot con un nodo local, dejá Konstruado afuera: en «Elegir aplicaciones» marcá otra app y no Konstruado (sin ninguna marcada Orbot captura todo el teléfono), o usá «Modo de usuarie avanzado» (solo SOCKS, sin VPN).", "If you use Orbot's VPN with a local node, leave Konstruado out: in “Choose apps” tick another app and not Konstruado (with none ticked Orbot captures the whole phone), or use “Power user mode” (SOCKS only, no VPN).").into(),
+                tr("La sala la hospeda una PC: el mandante de escritorio, o `konstruado-sala`.", "A PC hosts the room: the desktop client, or `konstruado-sala`.").into(),
+                tr("Dos teléfonos se hablan a través de esa PC (relay).", "Two phones talk through that PC (relay).").into(),
             ],
         }
     }
@@ -1270,17 +1360,17 @@ impl KonstruadoApp {
         // anduviera. Ahora usa el diagnóstico medido de Orbot → sala.
         let pista = if red.pares == 0 {
             if red.sala.tipo == "conectado" {
-                "Conectado a la sala. Nadie más todavía.".to_string()
+                tr("Conectado a la sala. Nadie más todavía.", "Connected to the room. Nobody else yet.").to_string()
             } else {
                 format!("{}. {}", red.sala.titulo, red.sala.detalle)
             }
         } else if soy_m {
-            "Publicá una obra; el contratista la ve en su tablero.".to_string()
+            tr("Publicá una obra; el contratista la ve en su tablero.", "Post a job; the contractor sees it on their board.").to_string()
         } else if red.otros.is_empty() {
-            "No hay avisos. El mandante tiene que publicar; podés tocar Buscar ofertas.".to_string()
+            tr("No hay avisos. El mandante tiene que publicar; podés tocar Buscar ofertas.", "No offers. The client has to post one; you can tap Look for offers.").to_string()
         } else {
-            format!(
-                "{} está en la red. Si no ves el aviso, tocá Buscar ofertas.",
+            tf!(
+                "{} está en la red. Si no ves el aviso, tocá Buscar ofertas.", "{} is on the network. If you do not see the offer, tap Look for offers.",
                 red.otros.join(", ")
             )
         };
@@ -1294,12 +1384,12 @@ impl KonstruadoApp {
                     id: o.id.clone(),
                     nombre: o.nombre.clone(),
                     estado: estado_obra_txt(o.estado),
-                    estado_label: L.label_estado(o.estado).into(),
+                    estado_label: l().label_estado(o.estado).into(),
                     en_curso: obra_en_curso(o.estado),
                     con_quien: if o.mandante.id == mid {
-                        format!("con {}", o.contratista.nombre)
+                        tf!("con {}", "with {}", o.contratista.nombre)
                     } else {
-                        format!("con {}", o.mandante.nombre)
+                        tf!("con {}", "with {}", o.mandante.nombre)
                     },
                 })
                 .collect(),
@@ -1315,7 +1405,7 @@ impl KonstruadoApp {
             .iter()
             .find(|o| o.id == oferta_id)
             .map(|o| oferta_vista(o, &mid))
-            .ok_or_else(|| fallo("Esa oferta ya no está en el tablero."))
+            .ok_or_else(|| fallo(tr("Esa oferta ya no está en el tablero.", "That offer is no longer on the board.")))
     }
 
     pub fn publicar_oferta(
@@ -1344,13 +1434,13 @@ impl KonstruadoApp {
                 ok: false,
                 contra: false,
                 n_partidas: 0,
-                texto: "Esa oferta ya no está.".into(),
+                texto: tr("Esa oferta ya no está.", "That offer is gone.").into(),
                 detalles: vec![],
             };
         };
         let g = leer(o.moneda, &garantia);
         let contra = g != o.garantia_sugerida;
-        let gtxt = if o.moneda.es_usd() { caja::texto_usd_aprox(ES, g) } else { mm(o.moneda, g) };
+        let gtxt = if o.moneda.es_usd() { caja::texto_usd_aprox(es(), g) } else { mm(o.moneda, g) };
         match n_partidas(o.trabajo, g) {
             Ok(n) => {
                 let mut d = o.detalles.clone();
@@ -1360,9 +1450,9 @@ impl KonstruadoApp {
                     contra,
                     n_partidas: n,
                     texto: if contra {
-                        format!("Contra: {n} partidas de {gtxt}. El mandante tiene que confirmar.")
+                        tf!("Contra: {n} partidas de {gtxt}. El mandante tiene que confirmar.", "Counter: {n} stages of {gtxt}. The client has to confirm.")
                     } else {
-                        format!("Aceptás {n} partidas. Los dos encierran {gtxt} en cada una.")
+                        tf!("Aceptás {n} partidas. Los dos encierran {gtxt} en cada una.", "You accept {n} stages. Both lock {gtxt} in each one.")
                     },
                     detalles: d,
                 }
@@ -1371,7 +1461,7 @@ impl KonstruadoApp {
                 ok: false,
                 contra,
                 n_partidas: 0,
-                texto: L.error(&e),
+                texto: l().error(&e),
                 detalles: vec![],
             },
         }
@@ -1390,7 +1480,7 @@ impl KonstruadoApp {
             .tablero()
             .into_iter()
             .find(|o| o.id == oferta_id)
-            .ok_or_else(|| fallo("Esa oferta ya no está en el tablero."))?;
+            .ok_or_else(|| fallo(tr("Esa oferta ya no está en el tablero.", "That offer is no longer on the board.")))?;
         let g = leer(oferta.moneda, &garantia);
         let contra = g != oferta.garantia_sugerida;
         let dets = if contra { detalles } else { oferta.detalles.clone() };
@@ -1409,7 +1499,7 @@ impl KonstruadoApp {
         let obra = self.obra(&obra_id)?;
         let mid = self.mid();
         if !obra.participa(&mid) {
-            return Err(fallo("Esta obra es de otras dos personas."));
+            return Err(fallo(tr("Esta obra es de otras dos personas.", "This job belongs to two other people.")));
         }
         let sec = self.sec();
         let v = self.caja.vista();
@@ -1424,7 +1514,7 @@ impl KonstruadoApp {
         let extra = obra.extra.as_ref().map(|ex| {
             let texto = match obra.leer_extra(&sec) {
                 TextoLeido::Plano(t) => t,
-                TextoLeido::Cerrado => "Texto cifrado".into(),
+                TextoLeido::Cerrado => tr("Texto cifrado", "Encrypted text").into(),
             };
             ExtraVista {
                 texto,
@@ -1439,9 +1529,9 @@ impl KonstruadoApp {
             id: obra.id.clone(),
             nombre: obra.nombre.clone(),
             estado: estado_obra_txt(estado),
-            estado_label: L.label_estado(estado).into(),
-            resumen: format!(
-                "Mandante {} · contratista {} · {} partidas · trabajo {}",
+            estado_label: l().label_estado(estado).into(),
+            resumen: tf!(
+                "Mandante {} · contratista {} · {} partidas · trabajo {}", "Client {} · contractor {} · {} stages · job {}",
                 obra.mandante.nombre,
                 obra.contratista.nombre,
                 obra.n_partidas,
@@ -1453,8 +1543,8 @@ impl KonstruadoApp {
             sincronizando: abierta && self.sincronizando(&obra),
             contra,
             contra_texto: contra.then(|| {
-                format!(
-                    "El contratista propone garantía {} ({} partidas).",
+                tf!(
+                    "El contratista propone garantía {} ({} partidas).", "The contractor proposes a guarantee of {} ({} stages).",
                     mm(obra.moneda, obra.garantia),
                     obra.n_partidas
                 )
@@ -1480,18 +1570,18 @@ impl KonstruadoApp {
                 .enumerate()
                 .map(|(i, p)| PartidaFila {
                     indice: i as u32,
-                    titulo: L.titulo_partida(i, &p.detalle),
-                    label: L.label_partida(p),
+                    titulo: l().titulo_partida(i, &p.detalle),
+                    label: l().label_partida(p),
                     estado: estado_partida_txt(p.estado),
-                    por_lado: format!("{} por lado", mm(obra.moneda, p.capital(obra.garantia))),
+                    por_lado: tf!("{} por lado", "{} per side", mm(obra.moneda, p.capital(obra.garantia))),
                     saldo_corto: caja::saldo_corto(
-                        ES,
+                        es(),
                         p.estado,
                         obra.piconero_partida(i),
                         p.fondeo_txid.is_some(),
                     ),
                     activa: activa == Some(i),
-                    traba_corta: caja::traba_corta(v.traba(&obra, i), ES),
+                    traba_corta: caja::traba_corta(v.traba(&obra, i), es()),
                 })
                 .collect(),
         })
@@ -1546,12 +1636,12 @@ impl KonstruadoApp {
 
     pub fn proponer_extra(&self, obra_id: String, texto: String, monto_lado: String) -> Result<(), FfiError> {
         if texto.trim().is_empty() {
-            return Err(fallo("La extra necesita un texto."));
+            return Err(fallo(tr("La extra necesita un texto.", "The extra needs a description.")));
         }
         let moneda = self.obra(&obra_id)?.moneda;
         let m = leer(moneda, &monto_lado);
         if m == 0 {
-            return Err(fallo("La extra lleva un monto mayor a cero."));
+            return Err(fallo(tr("La extra lleva un monto mayor a cero.", "The extra needs an amount above zero.")));
         }
         self.accion(&obra_id, true, |o, q| o.proponer_extra(q, texto, m))
     }
@@ -1577,10 +1667,10 @@ impl KonstruadoApp {
             .partidas
             .get(i)
             .cloned()
-            .ok_or_else(|| fallo("No está esa partida."))?;
+            .ok_or_else(|| fallo(tr("No está esa partida.", "That stage does not exist.")))?;
         let mid = self.mid();
         if !obra.participa(&mid) {
-            return Err(fallo("Esta obra es de otras dos personas."));
+            return Err(fallo(tr("Esta obra es de otras dos personas.", "This job belongs to two other people.")));
         }
         let sec = self.sec();
         let v = self.caja.vista();
@@ -1606,7 +1696,7 @@ impl KonstruadoApp {
         let nada_en_curso = acc.en_curso == caja::EnCurso::Nada;
         let pagando = matches!(acc.en_curso, caja::EnCurso::PagoFirmando | caja::EnCurso::PagoEnRed);
         let saldo = caja::saldo_partida(
-            ES,
+            es(),
             p.estado,
             obra.piconero_partida(i),
             p.fondeo_txid.is_some(),
@@ -1615,22 +1705,22 @@ impl KonstruadoApp {
         );
         let usd = obra.moneda.es_usd();
         let xmr_por_lado = if saldo.is_none() && !usd {
-            caja::xmr_partida(ES, &obra, i)
+            caja::xmr_partida(es(), &obra, i)
         } else {
             None
         };
-        let xmr_partida = if usd { caja::xmr_partida(ES, &obra, i) } else { None };
+        let xmr_partida = if usd { caja::xmr_partida(es(), &obra, i) } else { None };
         let precio_propuesto = p
             .precio
             .as_ref()
             .filter(|_| p.estado == PartidaEstado::Encerrando && !soy_prop_enc)
-            .map(|pr| format!("Precio que propone: cada lado pone {}. Confirmar acepta ese precio.", caja::texto_precio_fijado(ES, pr)));
+            .map(|pr| tf!("Precio que propone: cada lado pone {}. Confirmar acepta ese precio.", "Proposed price: each side puts in {}. Confirming accepts that price.", caja::texto_precio_fijado(es(), pr)));
         let aviso_precio = precio_propuesto
             .as_ref()
             .and(p.precio.as_ref())
-            .and_then(|pr| caja::aviso_diferencia_precio(ES, pr));
+            .and_then(|pr| caja::aviso_diferencia_precio(es(), pr));
         let estado_precio = (usd && p.precio.is_none() && p.estado == PartidaEstado::Pendiente)
-            .then(|| caja::estado_cotizacion(ES));
+            .then(|| caja::estado_cotizacion(es()));
         let notas = p
             .notas
             .iter()
@@ -1639,13 +1729,13 @@ impl KonstruadoApp {
                     "{} · {}% · {}",
                     n.autor_nombre,
                     n.porcentaje,
-                    L.fmt_cuando(n.cuando)
+                    l().fmt_cuando(n.cuando)
                 );
                 match obra.leer_nota(n, &sec) {
                     TextoLeido::Plano(t) => NotaVista { cabeza, cuerpo: t, cifrada: false },
                     TextoLeido::Cerrado => NotaVista {
                         cabeza,
-                        cuerpo: "Nota cifrada".into(),
+                        cuerpo: tr("Nota cifrada", "Encrypted note").into(),
                         cifrada: true,
                     },
                 }
@@ -1654,24 +1744,24 @@ impl KonstruadoApp {
         let pendiente = !cortada && p.estado == PartidaEstado::Pendiente;
         let encerrando = !cortada && p.estado == PartidaEstado::Encerrando;
         let pista = if pendiente && contra {
-            Some("Primero hay que confirmar la contra de la obra.".to_string())
+            Some(tr("Primero hay que confirmar la contra de la obra.", "The job's counteroffer has to be confirmed first.").to_string())
         } else if pendiente && !activa {
-            Some("Todavía no toca. Cerrá la partida que está en curso.".to_string())
+            Some(tr("Todavía no toca. Cerrá la partida que está en curso.", "Not yet. Close the stage in progress first.").to_string())
         } else if pendiente {
-            Some("Los dos tienen que confirmar el encierre. El otro tiene que estar en línea.".to_string())
+            Some(tr("Los dos tienen que confirmar el encierre. El otro tiene que estar en línea.", "Both have to confirm the lock. The other person has to be online.").to_string())
         } else if encerrando && soy_prop_enc && !frenado && nada_en_curso {
-            Some("Esperando que el otro confirme el encierre.".to_string())
+            Some(tr("Esperando que el otro confirme el encierre.", "Waiting for the other person to confirm the lock.").to_string())
         } else if encerrando && acc.confirmar_fondeo {
-            Some("El otro quiere encerrar esta partida. Confirmar arma una sola transacción con los dos.".to_string())
+            Some(tr("El otro quiere encerrar esta partida. Confirmar arma una sola transacción con los dos.", "The other person wants to lock this stage. Confirming builds one transaction with both.").to_string())
         } else if encerrando && acc.en_curso == caja::EnCurso::FondeoEnRed {
-            Some("El fondeo ya está en la red. No se puede cancelar; se encierra solo cuando entra en un bloque.".to_string())
+            Some(tr("El fondeo ya está en la red. No se puede cancelar; se encierra solo cuando entra en un bloque.", "The funding is already on the network. It cannot be cancelled; the stage locks once it is in a block.").to_string())
         } else if !cortada && p.estado == PartidaEstado::EnTrato && pagando {
-            Some(format!(
-                "Pago del {}% en curso. No hace falta volver a aceptar; se cierra cuando la transacción entra en un bloque.",
+            Some(tf!(
+                "Pago del {}% en curso. No hace falta volver a aceptar; se cierra cuando la transacción entra en un bloque.", "Payment of {}% in progress. No need to accept again; it closes when the transaction is in a block.",
                 p.propuesto.unwrap_or(0)
             ))
         } else if !cortada && p.estado == PartidaEstado::Encerrada && soy_m {
-            Some("El contratista avisa cuando termina y propone cuánto se paga.".to_string())
+            Some(tr("El contratista avisa cuando termina y propone cuánto se paga.", "The contractor reports when finished and proposes how much is paid.").to_string())
         } else {
             None
         };
@@ -1680,11 +1770,11 @@ impl KonstruadoApp {
             obra_id: obra.id.clone(),
             obra_nombre: obra.nombre.clone(),
             indice,
-            titulo: L.titulo_partida(i, &p.detalle),
-            label: L.label_partida(&p),
+            titulo: l().titulo_partida(i, &p.detalle),
+            label: l().label_partida(&p),
             estado: estado_partida_txt(p.estado),
-            lead: format!(
-                "{} por lado. Mandante {} · contratista {}",
+            lead: tf!(
+                "{} por lado. Mandante {} · contratista {}", "{} per side. Client {} · contractor {}",
                 mm(obra.moneda, p.capital(garantia)),
                 obra.mandante.nombre,
                 obra.contratista.nombre
@@ -1696,7 +1786,7 @@ impl KonstruadoApp {
             caja_direccion: v.caja_de(&obra.id).map(|s| s.to_string()),
             fondeo_txid: p.fondeo_txid.clone(),
             pago_txid: p.pago_txid.clone(),
-            linea: fondeo_curso.as_ref().map(|t| t.mostrar(ES)),
+            linea: fondeo_curso.as_ref().map(|t| t.mostrar(es())),
             linea_freno: frenado,
             sincronizando: !cortada && self.sincronizando(&obra),
             cortada,
@@ -1704,21 +1794,21 @@ impl KonstruadoApp {
             puede_editar: acc.editar_texto,
             recibo: if p.estado == PartidaEstado::Pagada {
                 p.recibo.as_ref().map(|r| {
-                    format!(
-                        "Recibo · {} · pagó {}% · {} · aceptó {} · {}",
+                    tf!(
+                        "Recibo · {} · pagó {}% · {} · aceptó {} · {}", "Receipt · {} · paid {}% · {} · accepted by {} · {}",
                         r.titulo,
                         r.porcentaje,
                         mm(obra.moneda, r.monto),
                         r.acepto_nombre,
-                        L.fmt_cuando(r.cuando)
+                        l().fmt_cuando(r.cuando)
                     )
                 })
             } else {
                 None
             },
             cerrado_texto: (p.estado == PartidaEstado::Pagada && p.recibo.is_none()).then(|| {
-                format!(
-                    "Cerró al {}% ({}). El hilo quedó guardado.",
+                tf!(
+                    "Cerró al {}% ({}). El hilo quedó guardado.", "Closed at {}% ({}). The thread is kept.",
                     p.pago.unwrap_or(0),
                     mm(obra.moneda, monto_pct(garantia, p.pago.unwrap_or(0)))
                 )
@@ -1726,7 +1816,7 @@ impl KonstruadoApp {
             encerro: p
                 .encerrado_por
                 .as_ref()
-                .map(|q| format!("Encerró {} · {}", q.nombre, L.fmt_cuando(p.encerrado_cuando))),
+                .map(|q| tf!("Encerró {} · {}", "Locked by {} · {}", q.nombre, l().fmt_cuando(p.encerrado_cuando))),
             notas,
             pista,
             // Todo sale de `caja::acciones_partida`, igual que en el escritorio.
@@ -1742,7 +1832,7 @@ impl KonstruadoApp {
             propuesto: if en_trato { p.propuesto } else { None },
             propuesto_texto: if en_trato {
                 p.propuesto
-                    .map(|n| format!("Sobre la mesa: {n}% ({}).", mm(obra.moneda, monto_pct(garantia, n))))
+                    .map(|n| tf!("Sobre la mesa: {n}% ({}).", "On the table: {n}% ({}).", mm(obra.moneda, monto_pct(garantia, n))))
             } else {
                 None
             },
@@ -1752,10 +1842,10 @@ impl KonstruadoApp {
             puede_aceptar_pago: acc.aceptar_pago,
             puede_contraofertar: acc.contraofertar,
             puede_salir_local: acc.salir_local,
-            en_curso: caja::en_curso_corto(acc.en_curso, ES).map(str::to_string),
+            en_curso: caja::en_curso_corto(acc.en_curso, es()).map(str::to_string),
             pago_en_curso: pagando,
-            traba: caja::texto_traba(acc.traba, soy_c, ES),
-            traba_corta: caja::traba_corta(acc.traba, ES),
+            traba: caja::texto_traba(acc.traba, soy_c, es()),
+            traba_corta: caja::traba_corta(acc.traba, es()),
             termino_trabado: !cortada && soy_c && p.estado == PartidaEstado::Encerrada && acc.traba.trabada(),
             pago_trabado: en_trato && acc.me_toca && !pagando && acc.traba.trabada(),
             xmr_partida,
@@ -1783,20 +1873,20 @@ impl KonstruadoApp {
         let socks = self.nodo.socks();
         self.rt
             .block_on(konstruado_motor::cotizacion::actualizar(socks))
-            .map(|q| caja::texto_cotizacion(ES, &q))
-            .map_err(|e| fallo(&format!("Sin precio de XMR: {e}")))
+            .map(|q| caja::texto_cotizacion(es(), &q))
+            .map_err(|e| fallo(&tf!("Sin precio de XMR: {e}", "No XMR price: {e}")))
     }
 
     /// Estado del precio de referencia (último conocido o por qué no hay).
     pub fn estado_precio(&self) -> String {
         let _e = self.rt.enter();
         konstruado_motor::cotizacion::refrescar_en_fondo(self.nodo.socks());
-        caja::estado_cotizacion(ES)
+        caja::estado_cotizacion(es())
     }
 
     /// Nota fija: montos en USD, precio de mainnet como referencia en stagenet.
     pub fn nota_precio(&self) -> String {
-        caja::nota_precio_stagenet(ES)
+        caja::nota_precio_stagenet(es())
     }
 
     /// Vista previa del formulario de publicar (en USD).
@@ -1807,9 +1897,9 @@ impl KonstruadoApp {
             Ok(n) => PreviaPublicar {
                 ok: true,
                 n_partidas: n,
-                texto: format!("{n} partidas. En cada una los dos encierran {}.", caja::texto_usd_aprox(ES, g)),
+                texto: tf!("{n} partidas. En cada una los dos encierran {}.", "{n} stages. In each one both lock {}.", caja::texto_usd_aprox(es(), g)),
             },
-            Err(e) => PreviaPublicar { ok: false, n_partidas: 0, texto: L.error(&e) },
+            Err(e) => PreviaPublicar { ok: false, n_partidas: 0, texto: l().error(&e) },
         }
     }
 
@@ -1867,7 +1957,7 @@ impl KonstruadoApp {
     pub fn billetera(&self) -> BilleteraVista {
         let v = self.caja.vista();
         let b = &v.billetera;
-        let est = caja::estado_billetera(b, v.personal.is_some(), v.tip, ES);
+        let est = caja::estado_billetera(b, v.personal.is_some(), v.tip, es());
         let obras = self.nodo.obras();
         let cajas = v
             .cajas
@@ -1892,16 +1982,16 @@ impl KonstruadoApp {
             libre: caja::fmt_xmr(b.libre),
             trabado: caja::fmt_xmr(b.trabado),
             visto: match (b.desde, b.hasta) {
-                (Some(d), Some(h)) => format!("Visto desde el bloque {d} hasta el {h}."),
-                _ => "Todavía no miré la cadena. Arranco por los últimos 40 bloques.".into(),
+                (Some(d), Some(h)) => tf!("Visto desde el bloque {d} hasta el {h}.", "Scanned from block {d} to {h}."),
+                _ => tr("Todavía no miré la cadena. Arranco por los últimos 40 bloques.", "The chain has not been scanned yet. Starting from the last 40 blocks.").into(),
             },
             buscando: b.buscando,
             enviando: b.enviando,
-            retro: (b.retro > 0).then(|| format!("Quedan {} bloques por mirar hacia atrás.", b.retro)),
-            aviso: b.aviso.as_ref().map(|a| caja::aviso_humano(a, ES)),
+            retro: (b.retro > 0).then(|| tf!("Quedan {} bloques por mirar hacia atrás.", "{} blocks left to scan backwards.", b.retro)),
+            aviso: b.aviso.as_ref().map(|a| caja::aviso_humano(a, es())),
             ultimo: b.ultimo.as_ref().map(|tx| {
-                format!(
-                    "Último envío {tx}. Fee {} XMR. Cambio {} XMR, vuelve en el próximo bloque.",
+                tf!(
+                    "Último envío {tx}. Fee {} XMR. Cambio {} XMR, vuelve en el próximo bloque.", "Last send {tx}. Fee {} XMR. Change {} XMR, back in the next block.",
                     caja::fmt_xmr(b.ultimo_fee.unwrap_or(0)),
                     caja::fmt_xmr(b.ultimo_cambio.unwrap_or(0))
                 )
@@ -1911,19 +2001,19 @@ impl KonstruadoApp {
                 .iter()
                 .map(|m| MovVista {
                     monto: format!("{} XMR", caja::fmt_xmr(m.monto)),
-                    detalle: format!(
-                        "bloque {} · {}",
+                    detalle: tf!(
+                        "bloque {} · {}", "block {} · {}",
                         m.altura,
-                        if m.libre { "libre" } else { "trabado" }
+                        if m.libre { tr("libre", "free") } else { tr("trabado", "locked") }
                     ),
                 })
                 .collect(),
-            escala: caja::estado_cotizacion(ES),
+            escala: caja::estado_cotizacion(es()),
             cajas,
             estado_linea: est.1,
             estado_tono: est.0.codigo().into(),
             total_pico: b.total,
-            ayuda_envio: caja::ayuda_envio(ES).to_string(),
+            ayuda_envio: caja::ayuda_envio(es()).to_string(),
         }
     }
 
@@ -1939,13 +2029,13 @@ impl KonstruadoApp {
         let (sem, cajas) = self.caja.claves_respaldo();
         let obras = self.nodo.obras_todas();
         let est = respaldo::estado(&self.datos, &respaldo::huella_de_partes(&mid, &obras, sem, cajas));
-        let (tono, linea) = respaldo::texto_estado(&est, L);
+        let (tono, linea) = respaldo::texto_estado(&est, l());
         RespaldoEstado {
             linea,
             tono: tono.codigo().into(),
             falta: est.falta && est.hay_algo,
-            ultimo: est.ultimo.map(|t| L.fmt_cuando(t)),
-            ayuda: respaldo::ayuda(ES).into_iter().map(str::to_string).collect(),
+            ultimo: est.ultimo.map(|t| l().fmt_cuando(t)),
+            ayuda: respaldo::ayuda(es()).into_iter().map(str::to_string).collect(),
             nombre_archivo: respaldo::nombre_archivo(),
             clave_minima: respaldo::CLAVE_MINIMA as u32,
         }
@@ -1957,24 +2047,24 @@ impl KonstruadoApp {
         self.persistir();
         let ahora = chrono::Utc::now().timestamp();
         let (bytes, h) = respaldo::exportar(&self.datos, persist::cargar(), self.caja.material_respaldo(), &clave, ahora)
-            .map_err(|e| fallo(respaldo::aviso(&e, ES)))?;
+            .map_err(|e| fallo(respaldo::aviso(&e, es())))?;
         *self.respaldo_pendiente.lock().unwrap() = Some(h);
         Ok(bytes)
     }
 
     /// El archivo quedó escrito: anota la fecha del último respaldo.
     pub fn respaldo_guardado(&self) -> Result<(), FfiError> {
-        let h = self.respaldo_pendiente.lock().unwrap().take().ok_or_else(|| fallo("No hay un respaldo armado."))?;
+        let h = self.respaldo_pendiente.lock().unwrap().take().ok_or_else(|| fallo(tr("No hay un respaldo armado.", "There is no backup ready.")))?;
         respaldo::marcar_hecho(&self.datos, h, chrono::Utc::now().timestamp()).map_err(fallo)
     }
 
     /// Descifra y valida sin escribir nada.
     pub fn revisar_respaldo(&self, datos: Vec<u8>, clave: String) -> Result<RespaldoResumen, FfiError> {
-        let r = respaldo::revisar(&self.datos, &datos, &clave).map_err(|e| fallo(respaldo::aviso(&e, ES)))?;
+        let r = respaldo::revisar(&self.datos, &datos, &clave).map_err(|e| fallo(respaldo::aviso(&e, es())))?;
         Ok(RespaldoResumen {
             nombre: r.nombre,
-            rol: L.rol(r.rol).to_string(),
-            creado: L.fmt_cuando(r.creado),
+            rol: l().rol(r.rol).to_string(),
+            creado: l().fmt_cuando(r.creado),
             app: r.app,
             n_obras: r.n_obras as u32,
             n_ofertas: r.n_ofertas as u32,
@@ -1990,7 +2080,7 @@ impl KonstruadoApp {
     pub fn restaurar_respaldo(&self, datos: Vec<u8>, clave: String, reemplazar: bool) -> Result<(), FfiError> {
         respaldo::preparar(&self.datos, &datos, &clave, reemplazar)
             .map(|_| ())
-            .map_err(|e| fallo(respaldo::aviso(&e, ES)))
+            .map_err(|e| fallo(respaldo::aviso(&e, es())))
     }
 
     /// Las 25 palabras de la billetera personal. Solo después de la advertencia
@@ -2001,8 +2091,8 @@ impl KonstruadoApp {
             palabras: v.palabras.as_str().to_string(),
             altura: v.altura,
             direccion: v.direccion,
-            avisos: caja::aviso_ver_semilla(ES),
-            aviso_copia: caja::aviso_copia_semilla(ES),
+            avisos: caja::aviso_ver_semilla(es()),
+            aviso_copia: caja::aviso_copia_semilla(es()),
         })
     }
 
@@ -2011,7 +2101,7 @@ impl KonstruadoApp {
         self.caja.llaves_billetera().map(|l| LlavesBilleteraFfi {
             direccion: l.direccion,
             view_key: l.view_key,
-            ayuda: caja::ayuda_view_key_billetera(ES).into(),
+            ayuda: caja::ayuda_view_key_billetera(es()).into(),
         })
     }
 
@@ -2023,7 +2113,7 @@ impl KonstruadoApp {
 
     /// Textos de la advertencia previa a mostrar las 25 palabras (sin leer la semilla).
     pub fn avisos_ver_semilla(&self) -> Vec<String> {
-        caja::aviso_ver_semilla(ES)
+        caja::aviso_ver_semilla(es())
     }
 
     /// Importa obras/ofertas de un respaldo. No trae seed ni share; avisa que puede estar viejo.
@@ -2046,8 +2136,8 @@ impl KonstruadoApp {
         }
         drop(_e);
         self.persistir();
-        Ok(format!(
-            "Importé {n_obras} obra(s) y {n_ofertas} oferta(s). El estado puede estar desfasado respecto al otro; la cadena y el share mandan para el dinero. Si tenés el share, recuperalo después."
+        Ok(tf!(
+            "Importé {n_obras} obra(s) y {n_ofertas} oferta(s). El estado puede estar desfasado respecto al otro; la cadena y el share mandan para el dinero. Si tenés el share, recuperalo después.", "Imported {n_obras} job(s) and {n_ofertas} offer(s). The state may lag behind the other side; the chain and the share rule for money. If you have the share, restore it afterwards."
         ))
     }
 
@@ -2062,7 +2152,7 @@ impl KonstruadoApp {
         let obra = self.obra(&obra_id)?;
         let yo = self.yo()?;
         if !obra.participa(&yo.id) {
-            return Err(fallo("Esta obra es de otras dos personas."));
+            return Err(fallo(tr("Esta obra es de otras dos personas.", "This job belongs to two other people.")));
         }
         if matches!(
             obra.estado,
@@ -2080,7 +2170,7 @@ impl KonstruadoApp {
         drop(_e);
         self.persistir();
         Ok(
-            "Archivé la obra en este equipo. Ya no se ve en el tablero ni en Mis obras. No se movieron fondos; el share y el contexto quedan en disco."
+            tr("Archivé la obra en este equipo. Ya no se ve en el tablero ni en Mis obras. No se movieron fondos; el share y el contexto quedan en disco.", "Archived the job on this device. It no longer shows on the board or in My jobs. No funds moved; the share and context stay on disk.")
                 .into(),
         )
     }
@@ -2095,14 +2185,14 @@ impl KonstruadoApp {
             .tablero()
             .into_iter()
             .find(|o| o.id == oferta_id)
-            .ok_or_else(|| fallo("Esa oferta ya no está en el tablero."))?;
+            .ok_or_else(|| fallo(tr("Esa oferta ya no está en el tablero.", "That offer is no longer on the board.")))?;
         let retiro = retirar_oferta(&oferta, &yo.id, &self.sec(), &self.nodo.obras_todas())
             .map_err(err_core)?;
         let _e = self.rt.enter();
         self.nodo.retirar(retiro);
         drop(_e);
         self.persistir();
-        Ok("Quité la oferta. Tampoco va a aparecer en el tablero del contratista.".into())
+        Ok(tr("Quité la oferta. Tampoco va a aparecer en el tablero del contratista.", "Offer removed. It will not show on the contractor's board either.").into())
     }
 
     /// Cancela fondeo/propuesta de encierre de una partida solo en este equipo. No mueve fondos en cadena.
@@ -2110,25 +2200,25 @@ impl KonstruadoApp {
         let mut obra = self.obra(&obra_id)?;
         let yo = self.yo()?;
         if !obra.participa(&yo.id) {
-            return Err(fallo("Esta obra es de otras dos personas."));
+            return Err(fallo(tr("Esta obra es de otras dos personas.", "This job belongs to two other people.")));
         }
         let i = indice as usize;
         if obra.partidas.get(i).is_none() {
-            return Err(fallo("No está esa partida."));
+            return Err(fallo(tr("No está esa partida.", "That stage does not exist.")));
         }
         let _e = self.rt.enter();
         self.caja.cancelar_fondeo(&obra.id, i);
         let mut aviso = String::from(
-            "Cancelé el fondeo local de esta partida. Los fondos ya en la caja 2-de-2 no se tocan.",
+            tr("Cancelé el fondeo local de esta partida. Los fondos ya en la caja 2-de-2 no se tocan.", "Cancelled this stage's local funding. Funds already in the 2-of-2 box are untouched."),
         );
         if obra.partidas[i].estado == PartidaEstado::Encerrando {
             match obra.encerrar_cancelar(i, &yo) {
                 Ok(()) => {
                     let _ = self.publicar_trato(obra.clone(), &yo);
-                    aviso.push_str(" También volví la propuesta de encierre a Pendiente en este equipo.");
+                    aviso.push_str(tr(" También volví la propuesta de encierre a Pendiente en este equipo.", " The lock proposal also went back to Pending on this device."));
                 }
                 Err(_) => {
-                    aviso.push_str(" La propuesta de encierre no se pudo revertir sola (hace falta el otro o ya no está Encerrando).");
+                    aviso.push_str(tr(" La propuesta de encierre no se pudo revertir sola (hace falta el otro o ya no está Encerrando).", " The lock proposal could not be reverted alone (the other person is needed or it is no longer Locking)."));
                 }
             }
         }
@@ -2152,7 +2242,7 @@ impl KonstruadoApp {
         let _e = self.rt.enter();
         let r = self.caja.restaurar_semilla(&path);
         let _ = std::fs::remove_file(&path);
-        r.map(|c| caja::listo_humano(c, ES)).map_err(err_caja)
+        r.map(|c| caja::listo_humano(c, es())).map_err(err_caja)
     }
 
     pub fn restaurar_share(&self, texto: String) -> Result<String, FfiError> {
@@ -2163,7 +2253,7 @@ impl KonstruadoApp {
         let _e = self.rt.enter();
         let r = self.caja.restaurar_share(&path, &yo, &obras);
         let _ = std::fs::remove_file(&path);
-        r.map(|c| caja::listo_humano(c, ES)).map_err(err_caja)
+        r.map(|c| caja::listo_humano(c, es())).map_err(err_caja)
     }
 
     /// View key de la caja (hex). Muestra movimientos; no gasta.
@@ -2238,7 +2328,7 @@ impl KonstruadoApp {
             Some(false) => caja::VpnApp::Ninguna,
             None => caja::VpnApp::Desconocida,
         };
-        let r = self.rt.block_on(caja::probar_daemon_con_vpn(ES, vpn));
+        let r = self.rt.block_on(caja::probar_daemon_con_vpn(es(), vpn));
         let prueba = DaemonPrueba {
             ok: r.ok,
             url: r.url,
@@ -2258,7 +2348,7 @@ impl KonstruadoApp {
 
     /// Aviso para mostrar antes de probar: nodo local + VPN capturando la app.
     pub fn aviso_vpn_daemon(&self, vpn_captura: bool) -> Option<String> {
-        (vpn_captura && xmr_joint::daemon_es_local()).then(|| caja::pista_vpn_local(ES).to_string())
+        (vpn_captura && xmr_joint::daemon_es_local()).then(|| caja::pista_vpn_local(es()).to_string())
     }
 
     /// Último resultado de «Probar RPC del nodo» (éxito o fallo), si ya se probó.
@@ -2276,8 +2366,16 @@ impl KonstruadoApp {
 mod ffi_tests {
     use super::*;
 
+    /// El idioma es global: los tests que leen textos no corren a la vez.
+    static IDIOMA: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    fn idioma_fijo_en_test() -> std::sync::MutexGuard<'static, ()> {
+        IDIOMA.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
     #[test]
     fn con_socks_vivo_no_se_pide_encender_orbot() {
+        let _g = idioma_fijo_en_test();
+        aplicar_idioma("es");
         let s = Some("127.0.0.1:9050");
         // El caso de Felipe: Orbot en VPN por app (Konstruado afuera), SOCKS OK, PC apagado.
         let e = sala_de(&DiagSocks::DestinoNoResponde("onion sin respuesta".into()), s, 0, false, Some(true));
@@ -2301,15 +2399,62 @@ mod ffi_tests {
 
     #[test]
     fn destinos_se_leen() {
+        let _g = idioma_fijo_en_test();
+        aplicar_idioma("es");
         assert!(matches!(parse_destino("10.0.2.2:17432"), Some(PeerAddr::Tcp { port: 17432, .. })));
         assert!(matches!(parse_destino("abc.onion:80"), Some(PeerAddr::Onion { .. })));
         assert!(parse_destino("sinpuerto").is_none());
+        // Idioma: perfil elegido > teléfono es/en > ES.
+        aplicar_idioma("en");
+        assert_eq!(tr("Hola", "Hi"), "Hi");
+        assert_eq!(tf!("{} partidas", "{} stages", 3), "3 stages");
+        aplicar_idioma("es");
+        assert_eq!(tf!("{} partidas", "{} stages", 3), "3 partidas");
+        assert_eq!(idioma_de_arranque("es", true, "en-US"), "es");
+        assert_eq!(idioma_de_arranque("en", false, "es-CL"), "en");
+        assert_eq!(idioma_de_arranque("es", false, "en-GB"), "en");
+        assert_eq!(idioma_de_arranque("es", false, "es-CL"), "es");
+        assert_eq!(idioma_de_arranque("es", false, "pt-BR"), "es");
     }
 
     #[test]
     fn numeros_y_notas() {
+        let _g = idioma_fijo_en_test();
+        aplicar_idioma("es");
         assert_eq!(parse_num("2.000"), 2000);
         assert_eq!(recorta_nota("x".repeat(MAX_NOTA + 5)).chars().count(), MAX_NOTA);
     }
 
+    /// Sin claves faltantes: todo texto con pinta de español fuera de los tests
+    /// va dentro de `tr(es, en)` o `tf!(es, en, …)`.
+    #[test]
+    fn textos_del_motor_tienen_ingles() {
+        let fuente = include_str!("lib.rs");
+        let codigo = &fuente[..fuente.find("#[cfg(test)]").unwrap()];
+        let internas = ["es", "en", "pendiente", "en fondeo", "en obra", "en trato", "pagada", "mandante", "contratista", "sala"];
+        let palabras = [
+            " el ", " la ", " los ", " las ", " de ", " que ", " una ", " en ", " por ", " para ", " con ", " sin ", " no ", " ya ",
+        ];
+        let mut sueltos = Vec::new();
+        let lineas: Vec<&str> = codigo.lines().collect();
+        for (n, linea) in lineas.iter().enumerate() {
+            let t = linea.trim_start();
+            if t.starts_with("//") || t.starts_with("#[") {
+                continue;
+            }
+            let previa = lineas[..n].iter().rev().find(|l| !l.trim().is_empty()).map(|l| l.trim_end()).unwrap_or("");
+            let envuelta = linea.contains("tr(") || linea.contains("tf!(") || previa.ends_with("tf!(");
+            for (i, trozo) in linea.split('"').enumerate() {
+                if i % 2 == 0 || internas.contains(&trozo) {
+                    continue;
+                }
+                let plano = format!(" {} ", trozo.to_lowercase());
+                let es = trozo.chars().any(|c| "áéíóúñ¿¡«".contains(c)) || palabras.iter().any(|p| plano.contains(p));
+                if es && !envuelta {
+                    sueltos.push(format!("{}: {trozo}", n + 1));
+                }
+            }
+        }
+        assert!(sueltos.is_empty(), "textos sin tr/tf:\n{}", sueltos.join("\n"));
+    }
 }

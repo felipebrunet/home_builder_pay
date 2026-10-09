@@ -1,5 +1,7 @@
 package cl.konstruado.app.ui.screens
 
+import cl.konstruado.app.ui.tr
+import cl.konstruado.app.ui.Idioma
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
@@ -66,7 +68,7 @@ fun VerSemilla(
         )
     }
     var verVk by remember { mutableStateOf(verVkInicial) }
-    val llaves = remember { app.llavesBilletera() }
+    val llaves = remember(Idioma.en) { app.llavesBilletera() }
     val seg = remember { app.semillaPortapapelesSeg().toLong() }
 
     // Al salir de esta sección (o de la pantalla) se oculta y se quita FLAG_SECURE.
@@ -87,11 +89,11 @@ fun VerSemilla(
         onDispose { }
     }
 
-    Text("Las 25 palabras y la view key", style = MaterialTheme.typography.titleSmall)
-    Ayuda("Para abrir esta billetera personal en Feather o monero-wallet-cli (stagenet).")
+    Text(tr("Las 25 palabras y la view key", "The 25 words and the view key"), style = MaterialTheme.typography.titleSmall)
+    Ayuda(tr("Para abrir esta billetera personal en Feather o monero-wallet-cli (stagenet).", "To open this personal wallet in Feather or monero-wallet-cli (stagenet)."))
 
     when (paso) {
-        0 -> Secundario("Ver las 25 palabras") { paso = 1; banner.error.value = null }
+        0 -> Secundario(tr("Ver las 25 palabras", "Show the 25 words")) { paso = 1; banner.error.value = null }
         1 -> {
             Column(
                 Modifier
@@ -101,7 +103,7 @@ fun VerSemilla(
                 verticalArrangement = Arrangement.spacedBy(6.dp),
             ) {
                 // Los avisos vienen del motor (caja::aviso_ver_semilla); no leen la semilla.
-                remember { app.avisosVerSemilla() }.forEachIndexed { i, t ->
+                remember(Idioma.en) { app.avisosVerSemilla() }.forEachIndexed { i, t ->
                     Text(
                         t,
                         color = MaterialTheme.colorScheme.onErrorContainer,
@@ -110,20 +112,20 @@ fun VerSemilla(
                     )
                 }
             }
-            Primario("Mostrar") {
+            Primario(tr("Mostrar", "Show")) {
                 acciones.pedir({ app.verSemilla() }) {
                     semilla = it
                     paso = 2
                 }
             }
-            TextoBoton("Cancelar") { paso = 0 }
+            TextoBoton(tr("Cancelar", "Cancel")) { paso = 0 }
         }
         2 -> {
             val v = semilla
             if (v != null) {
                 GrillaPalabras(v.palabras)
                 Text(
-                    "Altura de restauración (bloque)",
+                    tr("Altura de restauración (bloque)", "Restore height (block)"),
                     style = MaterialTheme.typography.labelMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -132,13 +134,13 @@ fun VerSemilla(
                     fontFamily = FontFamily.Monospace,
                     fontSize = 14.sp,
                 )
-                Ayuda("En la otra billetera elegí «restaurar desde semilla», red stagenet, y poné este bloque.")
-                Secundario("Copiar las 25 palabras") {
+                Ayuda(tr("En la otra billetera elegí «restaurar desde semilla», red stagenet, y poné este bloque.", "In the other wallet choose “restore from seed”, stagenet network, and enter this block."))
+                Secundario(tr("Copiar las 25 palabras", "Copy the 25 words")) {
                     copiarSensible(ctx, v.palabras, seg)
                     banner.ok.value = v.avisoCopia
                 }
             }
-            Primario("Ocultar") {
+            Primario(tr("Ocultar", "Hide")) {
                 paso = 0
                 semilla = null
             }
@@ -148,10 +150,10 @@ fun VerSemilla(
     val l = llaves
     if (l != null) {
         Divisor()
-        Copiable("Tu dirección stagenet", l.direccion)
-        TextoBoton(if (verVk) "Ocultar view key" else "Mostrar view key") { verVk = !verVk }
+        Copiable(tr("Tu dirección stagenet", "Your stagenet address"), l.direccion)
+        TextoBoton(if (verVk) tr("Ocultar view key", "Hide view key") else tr("Mostrar view key", "Show view key")) { verVk = !verVk }
         if (verVk) {
-            Copiable("View key de la billetera", l.viewKey)
+            Copiable(tr("View key de la billetera", "Wallet view key"), l.viewKey)
             Ayuda(l.ayuda)
         }
     }

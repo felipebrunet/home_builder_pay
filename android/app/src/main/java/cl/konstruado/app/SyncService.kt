@@ -1,5 +1,6 @@
 package cl.konstruado.app
 
+import cl.konstruado.app.ui.tr
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -34,10 +35,10 @@ class SyncService : Service() {
         val nm = getSystemService(NotificationManager::class.java)
         if (Build.VERSION.SDK_INT >= 26) {
             nm.createNotificationChannel(
-                NotificationChannel(CANAL, "Sincronización", NotificationManager.IMPORTANCE_LOW)
+                NotificationChannel(CANAL, tr("Sincronización", "Sync"), NotificationManager.IMPORTANCE_LOW)
             )
         }
-        val n = notificacion("Conectando…")
+        val n = notificacion(tr("Conectando…", "Connecting…"))
         if (Build.VERSION.SDK_INT >= 29) {
             startForeground(ID, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
         } else {
@@ -46,7 +47,7 @@ class SyncService : Service() {
         scope.launch {
             var ultima = ""
             while (isActive) {
-                val linea = runCatching { AppHolder.appOrNull()?.red()?.linea }.getOrNull() ?: "Sin motor"
+                val linea = runCatching { AppHolder.appOrNull()?.red()?.linea }.getOrNull() ?: tr("Sin motor", "No engine")
                 if (linea != ultima) {
                     nm.notify(ID, notificacion(linea))
                     ultima = linea
@@ -76,7 +77,7 @@ class SyncService : Service() {
         )
         return NotificationCompat.Builder(this, CANAL)
             .setSmallIcon(android.R.drawable.stat_notify_sync)
-            .setContentTitle("Konstruado sincronizando")
+            .setContentTitle(tr("Konstruado sincronizando", "Konstruado syncing"))
             .setContentText(texto)
             .setOngoing(true)
             .setContentIntent(abrir)

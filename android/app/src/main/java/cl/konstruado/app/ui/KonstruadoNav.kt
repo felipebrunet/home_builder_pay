@@ -36,14 +36,17 @@ import cl.konstruado.app.ui.screens.PartidaScreen
 import cl.konstruado.app.ui.screens.PublicarScreen
 import cl.konstruado.app.ui.screens.TableroScreen
 
-sealed class Pantalla(val titulo: String) {
-    data object Tablero : Pantalla("Tablero")
-    data object Billetera : Pantalla("Billetera")
-    data object Cuenta : Pantalla("Cuenta")
-    data object Publicar : Pantalla("Publicar obra")
-    data class Oferta(val id: String) : Pantalla("Oferta")
-    data class Obra(val id: String) : Pantalla("Obra")
-    data class Partida(val obra: String, val indice: UInt) : Pantalla("Partida")
+sealed class Pantalla(private val es: String, private val en: String) {
+    /** Título en el idioma activo (se lee al dibujar). */
+    val titulo: String get() = tr(es, en)
+
+    data object Tablero : Pantalla("Tablero", "Board")
+    data object Billetera : Pantalla("Billetera", "Wallet")
+    data object Cuenta : Pantalla("Cuenta", "Account")
+    data object Publicar : Pantalla("Publicar obra", "Post a job")
+    data class Oferta(val id: String) : Pantalla("Oferta", "Offer")
+    data class Obra(val id: String) : Pantalla("Obra", "Job")
+    data class Partida(val obra: String, val indice: UInt) : Pantalla("Partida", "Stage")
 }
 
 /** Navegación simple con pila propia. */
@@ -81,7 +84,7 @@ fun KonstruadoNav(errorArranque: String?) {
                 title = { Text(if (raiz) "Konstruado · ${nav.actual.titulo}" else nav.actual.titulo) },
                 navigationIcon = {
                     if (!raiz) IconButton(onClick = { nav.atras() }) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Volver")
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = tr("Volver", "Back"))
                     }
                 },
             )
@@ -89,9 +92,9 @@ fun KonstruadoNav(errorArranque: String?) {
         bottomBar = {
             NavigationBar {
                 listOf(
-                    Triple(Pantalla.Tablero, Icons.Filled.Dashboard, "Tablero"),
-                    Triple(Pantalla.Billetera, Icons.Filled.AccountBalanceWallet, "Billetera"),
-                    Triple(Pantalla.Cuenta, Icons.Filled.Person, "Cuenta"),
+                    Triple(Pantalla.Tablero, Icons.Filled.Dashboard, Pantalla.Tablero.titulo),
+                    Triple(Pantalla.Billetera, Icons.Filled.AccountBalanceWallet, Pantalla.Billetera.titulo),
+                    Triple(Pantalla.Cuenta, Icons.Filled.Person, Pantalla.Cuenta.titulo),
                 ).forEach { (p, icono, et) ->
                     NavigationBarItem(
                         selected = nav.pila.first() == p,

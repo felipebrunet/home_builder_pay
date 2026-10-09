@@ -1,5 +1,6 @@
 package cl.konstruado.app.ui.screens
 
+import cl.konstruado.app.ui.tr
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -53,7 +54,7 @@ fun salaEnCurso(s: SalaEstado) = s.tipo in setOf("probando", "socks_ok", "tcp")
 fun RedTarjeta(red: RedVista, sala: SalaEstado = red.sala) {
     EstadoTarjeta(tonoDe(sala.tono), sala.titulo, sala.detalle, salaEnCurso(sala))
     Ayuda(
-        "Red ${red.red} · sesiones ${red.sesionesVivas} · pares ${red.pares}" +
+        tr("Red ${red.red} · sesiones ${red.sesionesVivas} · pares ${red.pares}", "Network ${red.red} · sessions ${red.sesionesVivas} · peers ${red.pares}") +
             (red.socks?.let { " · SOCKS $it" } ?: ""),
         maxLines = 1,
     )
@@ -90,26 +91,26 @@ fun TableroScreen(nav: Nav, banner: Banner) {
     val app = AppHolder.a
     val ctx = LocalContext.current
     val r = sondear { Triple(app.tablero(), app.perfil(), app.estadoSala(orbotInstalado(ctx))) }
-        ?: run { Pista("Cargando…"); return }
+        ?: run { Pista(tr("Cargando…", "Loading…")); return }
     val (t, perfil, sala) = r.getOrElse { ErrorTexto(it.message ?: "error"); return }
-    Tarjeta("Red") {
+    Tarjeta(tr("Red", "Network")) {
         RedTarjeta(t.red, sala)
         // La pista solo suma si no repite el estado de la sala.
         if (!mensajeYaVisible(t.pista, listOf(sala.titulo))) Ayuda(t.pista)
-        TextoBoton("Buscar ofertas") { acciones.correr("Pedí lo último a la red.") { app.buscar() } }
+        TextoBoton(tr("Buscar ofertas", "Look for offers")) { acciones.correr(tr("Pedí lo último a la red.", "Asked the network for the latest.")) { app.buscar() } }
     }
     // Recordatorio del respaldo completo (obra nueva, caja armada o nunca exportado).
     val resp = sondear { app.estadoRespaldo() }?.getOrNull()
     if (resp?.falta == true && (resp.ultimo != null || t.obras.isNotEmpty())) {
         Tarjeta {
             EstadoFila(Tono.Espera, resp.linea)
-            TextoBoton("Ir a Respaldos") { nav.raiz(Pantalla.Billetera) }
+            TextoBoton(tr("Ir a Respaldos", "Go to Backups")) { nav.raiz(Pantalla.Billetera) }
         }
     }
     if (t.avisos.isNotEmpty()) {
-        Tarjeta("Te toca", resaltada = true) {
+        Tarjeta(tr("Te toca", "Your turn"), resaltada = true) {
             t.avisos.forEach { a ->
-                FilaIr(a.texto, "Tocá para abrir", null) {
+                FilaIr(a.texto, tr("Tocá para abrir", "Tap to open"), null) {
                     val p = a.partida
                     if (p != null) nav.ir(Pantalla.Partida(a.obraId, p)) else nav.ir(Pantalla.Obra(a.obraId))
                 }
@@ -117,7 +118,7 @@ fun TableroScreen(nav: Nav, banner: Banner) {
         }
     }
     if (t.obras.isNotEmpty()) {
-        Tarjeta("Mis obras") {
+        Tarjeta(tr("Mis obras", "My jobs")) {
             t.obras.forEach { o ->
                 FilaIr(o.nombre, o.conQuien, {
                     Chip(o.estadoLabel, if (o.enCurso) Tono.Ok else Tono.Apagado)
@@ -126,20 +127,20 @@ fun TableroScreen(nav: Nav, banner: Banner) {
         }
     }
     if (perfil.rol == "mandante") {
-        Tarjeta("Mis ofertas publicadas") {
-            if (t.misOfertas.isEmpty()) Ayuda("Todavía no publicaste.")
+        Tarjeta(tr("Mis ofertas publicadas", "My posted offers")) {
+            if (t.misOfertas.isEmpty()) Ayuda(tr("Todavía no publicaste.", "You have not posted yet."))
             t.misOfertas.forEach { o ->
-                FilaIr(o.nombre, o.resumen, { Chip("esperando contratista", Tono.Espera) }, null)
+                FilaIr(o.nombre, o.resumen, { Chip(tr("esperando contratista", "waiting for a contractor"), Tono.Espera) }, null)
                 // Solo mientras nadie la tomó (las tomadas ya son obras).
-                TextoBoton("Quitar oferta") {
-                    acciones.correr("Quité la oferta. Tampoco va a aparecer en el tablero del contratista.") { app.quitarMiOferta(o.id) }
+                TextoBoton(tr("Quitar oferta", "Remove offer")) {
+                    acciones.correr(tr("Quité la oferta. Tampoco va a aparecer en el tablero del contratista.", "Offer removed. It will not show on the contractor's board either.")) { app.quitarMiOferta(o.id) }
                 }
             }
-            Primario("Publicar obra") { nav.ir(Pantalla.Publicar) }
+            Primario(tr("Publicar obra", "Post a job")) { nav.ir(Pantalla.Publicar) }
         }
     }
-    Tarjeta("Ofertas en la red") {
-        if (t.ofertas.isEmpty()) Ayuda("No hay ofertas de otros todavía.")
+    Tarjeta(tr("Ofertas en la red", "Offers on the network")) {
+        if (t.ofertas.isEmpty()) Ayuda(tr("No hay ofertas de otros todavía.", "No offers from others yet."))
         t.ofertas.forEach { o -> FilaIr(o.nombre, o.resumen, null) { nav.ir(Pantalla.Oferta(o.id)) } }
     }
 }

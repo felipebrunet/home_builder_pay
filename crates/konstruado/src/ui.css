@@ -798,6 +798,19 @@ details.plegable > summary:focus-visible {
 }
 .about p { margin: 0 0 8px; }
 .about p:last-child { margin: 0; }
+/* Enlace al repo con el Octicon mark-github (toma el color del tema). */
+.gh-link {
+  display: inline-flex; align-items: center; gap: 8px;
+  background: var(--card); color: var(--tinta);
+  border: 1px solid var(--borde); border-radius: 10px;
+  padding: 8px 14px; font: inherit; font-weight: 600; cursor: pointer;
+  align-self: flex-start; margin-top: 8px;
+}
+.gh-link:hover { background: var(--hover); }
+.gh-link:focus-visible { outline: 2px solid var(--foco); outline-offset: 2px; }
+.gh-mark { display: inline-flex; width: 18px; height: 18px; }
+.gh-mark svg { width: 18px; height: 18px; }
+
 .help-link {
   background: none;
   border: 0;

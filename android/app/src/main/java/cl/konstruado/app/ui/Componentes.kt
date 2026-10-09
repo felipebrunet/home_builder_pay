@@ -85,7 +85,7 @@ fun colores(t: Tono): ParTono {
 }
 
 @Composable
-private fun Indicador(t: Tono, enCurso: Boolean, color: androidx.compose.ui.graphics.Color) {
+private fun Indicador(enCurso: Boolean, color: androidx.compose.ui.graphics.Color) {
     Box(Modifier.size(16.dp), contentAlignment = Alignment.Center) {
         if (enCurso) {
             CircularProgressIndicator(Modifier.size(14.dp), color = color, strokeWidth = 2.dp)
@@ -104,7 +104,7 @@ fun EstadoFila(tono: Tono, texto: String, enCurso: Boolean = false, modifier: Mo
     val c = colores(tono)
     Surface(color = c.fondo, shape = RoundedCornerShape(10.dp), modifier = modifier.fillMaxWidth().height(40.dp)) {
         Row(Modifier.padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-            Indicador(tono, enCurso, c.texto)
+            Indicador(enCurso, c.texto)
             Spacer(Modifier.width(10.dp))
             Text(
                 texto, color = c.texto, style = MaterialTheme.typography.bodyMedium.copy(fontSize = 13.sp),
@@ -123,7 +123,7 @@ fun EstadoTarjeta(tono: Tono, titulo: String, detalle: String, enCurso: Boolean 
     val c = colores(tono)
     Surface(color = c.fondo, shape = RoundedCornerShape(12.dp), modifier = Modifier.fillMaxWidth()) {
         Row(Modifier.padding(12.dp), verticalAlignment = Alignment.Top) {
-            Box(Modifier.padding(top = 2.dp)) { Indicador(tono, enCurso, c.texto) }
+            Box(Modifier.padding(top = 2.dp)) { Indicador(enCurso, c.texto) }
             Spacer(Modifier.width(10.dp))
             Column {
                 Text(
@@ -214,7 +214,7 @@ fun Plegable(
             }
             Icon(
                 if (ver) Icons.Outlined.ExpandLess else Icons.Outlined.ExpandMore,
-                contentDescription = if (ver) "Cerrar" else "Abrir",
+                contentDescription = if (ver) tr("Cerrar", "Close") else tr("Abrir", "Open"),
             )
         }
         AnimatedVisibility(ver) {
@@ -230,7 +230,7 @@ private fun mutableStateOfBool(v: Boolean) = androidx.compose.runtime.mutableSta
 
 /** Explicación larga plegada: texto chico y apagado, se abre a pedido. */
 @Composable
-fun ComoFunciona(titulo: String = "Cómo funciona", content: @Composable ColumnScope.() -> Unit) {
+fun ComoFunciona(titulo: String = tr("Cómo funciona", "How it works"), content: @Composable ColumnScope.() -> Unit) {
     var ver by rememberSaveable(titulo) { mutableStateOfBool(false) }
     Column(Modifier.fillMaxWidth()) {
         Row(
@@ -300,8 +300,8 @@ fun Copiable(etiqueta: String, valor: String) {
                 }
                 IconButton(onClick = {
                     clip.setText(AnnotatedString(valor))
-                    Toast.makeText(ctx, "Copiado", Toast.LENGTH_SHORT).show()
-                }) { Icon(Icons.Outlined.ContentCopy, contentDescription = "Copiar $etiqueta") }
+                    Toast.makeText(ctx, tr("Copiado", "Copied"), Toast.LENGTH_SHORT).show()
+                }) { Icon(Icons.Outlined.ContentCopy, contentDescription = tr("Copiar $etiqueta", "Copy $etiqueta")) }
             }
         }
     }
