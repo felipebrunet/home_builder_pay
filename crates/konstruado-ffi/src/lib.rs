@@ -856,6 +856,9 @@ impl KonstruadoApp {
         let ses = self.ses.clone();
         self.rt.spawn(async move {
             loop {
+                // Precio USD/XMR siempre al día (como el escritorio), en cualquier
+                // pantalla: antes solo se pedía con "Publicar obra" abierta.
+                konstruado_motor::cotizacion::refrescar_en_fondo(nodo.socks());
                 let (yo, rol, sec, disco) = {
                     let s = ses.lock().unwrap();
                     (
