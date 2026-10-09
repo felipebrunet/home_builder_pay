@@ -21,7 +21,7 @@ A client hires a contractor for a job paid in milestones. Today one side has to 
 - **Android app** in Jetpack Compose, calling the same Rust through [UniFFI](https://mozilla.github.io/uniffi-rs/). Tor comes from Orbot.
 - **Peers meet over Tor.** A hardcoded onion acts as the rendezvous ("sala"), so the two sides never exchange addresses; offers and deal state are gossiped and merged, notes are sealed for the two parties.
 - **One 2-of-2 FROST box per job.** A DKG between the two apps yields an ordinary stagenet address whose spend key exists only as two shares. Funding and payout are CLSAG transactions co-signed by both.
-- **Priced in USD, fixed in XMR at funding.** Amounts are entered in USD; each stage's XMR is fixed with a reference price (CoinGecko, Kraken fallback) when it is locked, and both sides fund exactly that.
+- **Priced in USD, fixed in XMR at funding.** Amounts are entered in USD; each stage's XMR is fixed with a reference price (Kraken, Bitfinex, CoinGecko or CoinPaprika, over Tor; manual entry as a last resort) when it is locked, and both sides fund exactly that.
 
 Details: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) · [docs/PROTOCOL.md](docs/PROTOCOL.md).
 

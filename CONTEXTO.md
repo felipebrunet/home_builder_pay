@@ -12,7 +12,7 @@ Hablamos en español. UI rioplatense/chilena (“Poné”, “te toca”) por de
 |---|---|
 | `konstruado-core` | Dominio: persona, oferta, obra, partidas, contra, extra, recibo, fusión, notas cifradas. Sin UI ni Tor. |
 | `konstruado-net` | Encuentro: TCP local `17432`, gossip DHT, Tor propio + onion horneado. |
-| `konstruado-motor` | Lib compartida: `caja` (motor Monero), `cotizacion` (precio XMR: CoinGecko → Kraken, por Tor si hay), `persist`, `respaldo`, `i18n`. |
+| `konstruado-motor` | Lib compartida: `caja` (motor Monero), `cotizacion` (precio XMR: Kraken, Bitfinex, CoinGecko y CoinPaprika en paralelo, por Tor si hay; sin Tor solo opt-in; precio a mano), `persist`, `respaldo`, `i18n`. |
 | `konstruado` | Ventana Dioxus: pantallas, exportar, temas, idioma. Usa `konstruado-motor`. |
 | `konstruado-ffi` | UniFFI sobre `konstruado-motor` para Android Compose. |
 | `xmr-joint` | Semilla de 25 palabras, DKG 2-de-2, fondeo atómico y gasto con dos destinos. La caja lo llama. |

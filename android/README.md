@@ -261,8 +261,13 @@ se podan fantasmas de fondeos anteriores al arreglo. El nodo público a veces no
 ## Precios en dólares (0.2.10)
 
 **Publicar** pide el monto de la obra y la garantía por partida en **USD** y muestra
-«USD X ≈ Y XMR al precio actual». El precio sale de CoinGecko (si falla, Kraken XMRUSD)
-y se pide **por Orbot** cuando el SOCKS de Orbot está configurado; queda en caché con su hora.
+«USD X ≈ Y XMR al precio actual». El precio se pide a Kraken, Bitfinex, CoinGecko y
+CoinPaprika **a la vez** (8 s cada una, gana la primera con precio) y va **por Orbot** cuando
+el SOCKS de Orbot está configurado; queda en caché con su hora. El motor lo refresca en
+segundo plano en cualquier pantalla (antes solo con «Publicar» abierta). Si por Tor no responde
+ninguna, el panel del precio dice qué fuente falló y por qué, y ofrece **Probar sin Tor esta vez**
+(la API ve la IP) o **Escribir el precio a mano**. En **Cuenta → Precio de XMR** se puede permitir
+pedirlo sin Tor sin preguntar (apagado por defecto).
 El XMR de stagenet no vale nada: se usa el precio de **mainnet** como referencia y la app lo dice.
 
 El XMR de cada partida queda **fijo al proponer el encierre**: quien propone fija el precio
